@@ -1,0 +1,6 @@
+{
+  "name": "Atari Store Pro X",
+  "description": "النظام المتكامل لإدارة المبيعات والصيانة لأجهزة البلايستيشن والكونسول في مركز Atari Store Pro X",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
