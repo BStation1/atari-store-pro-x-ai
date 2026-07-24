@@ -86,7 +86,92 @@ export const authStore = {
 
   hasOwner(): boolean {
     const users = this.getUsers();
-    return users.some(u => u.roleId === "OWNER" && u.isActive);
+    return users.some(u => (u.roleId === "OWNER" || u.roleId === "ADMIN") && u.isActive);
+  },
+
+  async checkHasOwnerInSupabase(): Promise<boolean> {
+    try {
+      // 1. Try secure RPC function check_has_owner
+      const { data: rpcData, error: rpcErr } = await supabase.rpc("check_has_owner");
+      if (!rpcErr && typeof rpcData === "boolean") {
+        if (rpcData) {
+          this.syncUsersFromSupabase().catch(() => {});
+        }
+        return rpcData;
+      }
+
+      // 2. Direct profiles table count query fallback
+      const { data: profilesData, error: profilesErr } = await supabase
+        .from("profiles")
+        .select("id, role");
+
+      if (!profilesErr && profilesData && profilesData.length > 0) {
+        const hasOwnerInProfiles = profilesData.some(p => {
+          const r = String(p.role || "").toUpperCase();
+          return r === "OWNER" || r === "ADMIN";
+        });
+        if (hasOwnerInProfiles) {
+          this.syncUsersFromSupabase().catch(() => {});
+          return true;
+        }
+      }
+
+      // 3. Fallback: check local storage users
+      const localUsers = this.getUsers();
+      if (localUsers.some(u => (u.roleId === "OWNER" || u.roleId === "ADMIN") && u.isActive)) {
+        return true;
+      }
+
+      return false;
+    } catch (err) {
+      console.warn("⚠️ Error checking owner in Supabase:", err);
+      const localUsers = this.getUsers();
+      return localUsers.some(u => (u.roleId === "OWNER" || u.roleId === "ADMIN") && u.isActive);
+    }
+  },
+
+  async syncUsersFromSupabase(): Promise<AuthUser[]> {
+    try {
+      const { data: profiles, error } = await supabase.from("profiles").select("*");
+      if (!error && profiles && profiles.length > 0) {
+        const existingUsers = this.getUsers();
+        const now = new Date().toISOString();
+
+        profiles.forEach((p: any) => {
+          const pRole = String(p.role || "RECEPTION").toUpperCase();
+          const normRoleId: UserRole = (pRole === "OWNER" || pRole === "ADMIN") ? "OWNER" : (pRole as UserRole);
+          const existingIdx = existingUsers.findIndex(u => u.id === p.id || u.email.toLowerCase() === (p.email || "").toLowerCase());
+
+          const syncedUser: AuthUser = {
+            id: p.id,
+            fullName: p.full_name || p.email || "مستخدم",
+            name: p.full_name || p.email || "مستخدم",
+            username: (p.email || "user").split("@")[0],
+            email: p.email || "",
+            phone: p.phone || "",
+            roleId: normRoleId,
+            role: normRoleId.toLowerCase(),
+            permissions: ALL_PERMISSIONS,
+            isActive: p.is_active !== false,
+            createdAt: p.created_at || now,
+            updatedAt: p.updated_at || now,
+            avatarUrl: p.avatar_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80"
+          };
+
+          if (existingIdx !== -1) {
+            existingUsers[existingIdx] = { ...existingUsers[existingIdx], ...syncedUser };
+          } else {
+            existingUsers.push(syncedUser);
+          }
+        });
+
+        this.saveUsers(existingUsers);
+        return existingUsers;
+      }
+    } catch (err) {
+      console.warn("⚠️ Could not sync users from Supabase profiles:", err);
+    }
+    return this.getUsers();
   },
 
   async syncProfileToSupabase(user: AuthUser, authUserId?: string) {
@@ -94,12 +179,14 @@ export const authStore = {
       const targetId = authUserId || user.id;
       if (!targetId || targetId.startsWith("U-")) return; // Only sync valid UUIDs or auth users
 
+      const targetRole = user.roleId === "OWNER" ? "OWNER" : user.roleId === "ADMIN" ? "OWNER" : user.roleId === "TECHNICIAN" ? "ENGINEER" : "RECEPTION";
+
       await supabase.from("profiles").upsert(
         {
           id: targetId,
           email: user.email,
           full_name: user.fullName,
-          role: user.roleId === "OWNER" || user.roleId === "ADMIN" ? "ADMIN" : user.roleId === "TECHNICIAN" ? "TECHNICIAN" : "RECEPTION"
+          role: targetRole
         },
         { onConflict: "id" }
       );
@@ -115,7 +202,8 @@ export const authStore = {
     phone?: string;
     password: string;
   }): Promise<{ success: boolean; error?: string; user?: AuthUser }> {
-    if (this.hasOwner()) {
+    const ownerExists = await this.checkHasOwnerInSupabase();
+    if (ownerExists) {
       return { success: false, error: "يوجد صاحب نظام (OWNER) مسجل بالفعل بالنظام." };
     }
 

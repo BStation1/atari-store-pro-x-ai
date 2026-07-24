@@ -24,7 +24,15 @@ export default function Login({ onSuccess, onNavigateToSetup }: LoginProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const hasOwner = authStore.hasOwner();
+  const [hasOwner, setHasOwner] = useState<boolean>(true); // Default to true so setup banner doesn't flash
+
+  React.useEffect(() => {
+    let isMounted = true;
+    authStore.checkHasOwnerInSupabase().then(res => {
+      if (isMounted) setHasOwner(res);
+    });
+    return () => { isMounted = false; };
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

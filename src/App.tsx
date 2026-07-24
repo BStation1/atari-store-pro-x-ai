@@ -193,19 +193,65 @@ function MainApp() {
     return hasPermission(currentLoggedUser.roleId, currentLoggedUser.permissions, reqPerm);
   });
 
-  // Check if system has no owner
-  const hasOwner = authStore.hasOwner();
+  // Check if system has an owner directly from Supabase
+  const [hasOwner, setHasOwner] = useState<boolean>(true); // Default to true so setup screen NEVER flashes accidentally
+  const [isCheckingOwner, setIsCheckingOwner] = useState<boolean>(true);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function verifyOwnerInSupabase() {
+      try {
+        const ownerExists = await authStore.checkHasOwnerInSupabase();
+        if (isMounted) {
+          setHasOwner(ownerExists);
+        }
+      } catch (err) {
+        console.warn("⚠️ Error verifying owner in Supabase:", err);
+        if (isMounted) setHasOwner(true);
+      } finally {
+        if (isMounted) setIsCheckingOwner(false);
+      }
+    }
+
+    verifyOwnerInSupabase();
+
+    const handleAuthChanged = () => {
+      authStore.checkHasOwnerInSupabase().then(res => {
+        if (isMounted) setHasOwner(res);
+      });
+    };
+
+    window.addEventListener("atari_auth_changed", handleAuthChanged);
+    return () => {
+      isMounted = false;
+      window.removeEventListener("atari_auth_changed", handleAuthChanged);
+    };
+  }, []);
 
   // If viewing public tracking page, render directly without login wrapper
   if (currentView === "tracking") {
     return <TrackingPage initialQuery={navigationParams?.initialQuery} />;
   }
 
-  // If setup flow is requested or system has no owner and user is on setup
+  // Loading state while checking owner status
+  if (isCheckingOwner) {
+    return (
+      <div className="min-h-screen bg-[#070913] text-gray-100 flex items-center justify-center p-4 font-sans dir-rtl">
+        <div className="text-center space-y-4">
+          <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <p className="text-xs text-gray-400 font-bold">جاري التحقق من أمان وصلاحيات النظام...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // If setup flow is requested or system has no owner in Supabase
   if (currentView === "setup" || (!hasOwner && currentView !== "login")) {
     return (
       <InitialSetup
         onSuccess={() => {
+          setHasOwner(true);
           setCurrentView("dashboard");
         }}
         onCancel={() => {
