@@ -595,7 +595,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER STABLE SET search_path = public;
 
-CREATE OR REPLACE FUNCTION public.check_has_owner()
+CREATE OR REPLACE FUNCTION public.owner_exists()
 RETURNS BOOLEAN AS $$
 DECLARE
     v_count INT;
@@ -608,7 +608,20 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER STABLE SET search_path = public;
 
+GRANT EXECUTE ON FUNCTION public.owner_exists() TO anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.check_has_owner()
+RETURNS BOOLEAN AS $$
+BEGIN
+    RETURN public.owner_exists();
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER STABLE SET search_path = public;
+
 GRANT EXECUTE ON FUNCTION public.check_has_owner() TO anon, authenticated, service_role;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_single_owner_profile 
+ON public.profiles (role) 
+WHERE role = 'OWNER'::public.user_role_enum;
 
 -- =============================================================================
 -- 6. BUSINESS LOGIC ATOMIC TRANSACTIONS & PARTNER PROFIT ENGINE

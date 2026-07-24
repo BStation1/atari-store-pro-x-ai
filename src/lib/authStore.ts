@@ -89,45 +89,75 @@ export const authStore = {
     return users.some(u => (u.roleId === "OWNER" || u.roleId === "ADMIN") && u.isActive);
   },
 
-  async checkHasOwnerInSupabase(): Promise<boolean> {
+  async checkHasOwnerStatus(): Promise<{ hasOwner: boolean; error?: string }> {
     try {
-      // 1. Try secure RPC function check_has_owner
-      const { data: rpcData, error: rpcErr } = await supabase.rpc("check_has_owner");
-      if (!rpcErr && typeof rpcData === "boolean") {
-        if (rpcData) {
+      // 1. Primary: Try secure RPC function owner_exists
+      const { data: ownerData, error: ownerErr } = await supabase.rpc("owner_exists");
+      if (!ownerErr && typeof ownerData === "boolean") {
+        if (ownerData) {
           this.syncUsersFromSupabase().catch(() => {});
         }
-        return rpcData;
+        return { hasOwner: ownerData };
       }
 
-      // 2. Direct profiles table count query fallback
+      // 2. Secondary: Fallback to check_has_owner RPC
+      const { data: checkData, error: checkErr } = await supabase.rpc("check_has_owner");
+      if (!checkErr && typeof checkData === "boolean") {
+        if (checkData) {
+          this.syncUsersFromSupabase().catch(() => {});
+        }
+        return { hasOwner: checkData };
+      }
+
+      // 3. Fallback: Direct profiles table query
       const { data: profilesData, error: profilesErr } = await supabase
         .from("profiles")
         .select("id, role");
 
-      if (!profilesErr && profilesData && profilesData.length > 0) {
+      if (!profilesErr && profilesData) {
         const hasOwnerInProfiles = profilesData.some(p => {
           const r = String(p.role || "").toUpperCase();
           return r === "OWNER" || r === "ADMIN";
         });
         if (hasOwnerInProfiles) {
           this.syncUsersFromSupabase().catch(() => {});
-          return true;
+          return { hasOwner: true };
+        }
+        if (profilesData.length === 0) {
+          return { hasOwner: false };
         }
       }
 
-      // 3. Fallback: check local storage users
-      const localUsers = this.getUsers();
-      if (localUsers.some(u => (u.roleId === "OWNER" || u.roleId === "ADMIN") && u.isActive)) {
-        return true;
+      // 4. Handle errors gracefully - DO NOT default to false on network/connection failure
+      if (ownerErr || checkErr || profilesErr) {
+        console.warn("⚠️ Database query error during owner check:", ownerErr || checkErr || profilesErr);
+        const localUsers = this.getUsers();
+        if (localUsers.some(u => (u.roleId === "OWNER" || u.roleId === "ADMIN") && u.isActive)) {
+          return { hasOwner: true };
+        }
+        return {
+          hasOwner: true, // Default to true so setup screen is NEVER exposed accidentally on error
+          error: "تعذر الاتصال بقاعدة البيانات للتحقق من وجود المالك. يرجى إعادة المحاولة."
+        };
       }
 
-      return false;
-    } catch (err) {
-      console.warn("⚠️ Error checking owner in Supabase:", err);
+      return { hasOwner: false };
+    } catch (err: any) {
+      console.warn("⚠️ Unexpected exception checking owner status:", err);
       const localUsers = this.getUsers();
-      return localUsers.some(u => (u.roleId === "OWNER" || u.roleId === "ADMIN") && u.isActive);
+      if (localUsers.some(u => (u.roleId === "OWNER" || u.roleId === "ADMIN") && u.isActive)) {
+        return { hasOwner: true };
+      }
+      return {
+        hasOwner: true,
+        error: "حدث خطأ غير متوقع أثناء الاتصال بـ Supabase. يرجى التحقق من اتصال الإنترنت."
+      };
     }
+  },
+
+  async checkHasOwnerInSupabase(): Promise<boolean> {
+    const res = await this.checkHasOwnerStatus();
+    return res.hasOwner;
   },
 
   async syncUsersFromSupabase(): Promise<AuthUser[]> {
@@ -202,8 +232,8 @@ export const authStore = {
     phone?: string;
     password: string;
   }): Promise<{ success: boolean; error?: string; user?: AuthUser }> {
-    const ownerExists = await this.checkHasOwnerInSupabase();
-    if (ownerExists) {
+    const ownerStatus = await this.checkHasOwnerStatus();
+    if (ownerStatus.hasOwner && !ownerStatus.error) {
       return { success: false, error: "يوجد صاحب نظام (OWNER) مسجل بالفعل بالنظام." };
     }
 
@@ -248,8 +278,10 @@ export const authStore = {
     }
 
     const now = new Date().toISOString();
+    const finalProfileId = (authUserId && !authUserId.startsWith("U-")) ? authUserId : crypto.randomUUID();
+
     const ownerUser: AuthUser = {
-      id: authUserId || "U-OWNER-001",
+      id: finalProfileId,
       fullName: data.fullName,
       name: data.fullName,
       username: cleanUsername,
@@ -276,10 +308,12 @@ export const authStore = {
     }
     this.saveUsers(users);
 
-    // Sync to profiles table
-    if (authUserId) {
-      await this.syncProfileToSupabase(ownerUser, authUserId);
-    }
+    // Sync to profiles table directly
+    await this.syncProfileToSupabase(ownerUser, finalProfileId);
+
+    // Re-verify owner_exists status
+    const postCheck = await this.checkHasOwnerStatus();
+    console.log("✅ Verified owner_exists after owner creation:", postCheck);
 
     // Create session for initial owner
     this.createSession(ownerUser.id);
