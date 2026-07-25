@@ -133,13 +133,13 @@ export async function fetchOrMigrateInvoices(): Promise<{
   error?: string;
 }> {
   const localInvoices = getLocalInvoicesBackup();
-  const localTotal = localInvoices.reduce((acc, inv) => acc + (inv.totalAmount || 0), 0);
 
   try {
-    // 1. Fetch current invoices and invoice_items from Supabase
+    // Query invoices and invoice_items directly from Supabase
     const { data: dbInvoices, error: fetchInvErr } = await supabase
       .from('invoices')
-      .select('*');
+      .select('*')
+      .order('created_at', { ascending: false });
 
     if (fetchInvErr) {
       console.warn('⚠️ Supabase invoices query error, using local fallback:', fetchInvErr);
@@ -154,208 +154,12 @@ export async function fetchOrMigrateInvoices(): Promise<{
       };
     }
 
-    const { data: dbItems, error: fetchItemsErr } = await supabase
+    const { data: dbItems } = await supabase
       .from('invoice_items')
       .select('*');
-
-    if (fetchItemsErr) {
-      console.warn('⚠️ Supabase invoice_items query error:', fetchItemsErr);
-    }
-
-    const existingInvoices = dbInvoices || [];
-    const existingNumMap = new Map<string, any>();
-    existingInvoices.forEach(r => {
-      if (r.invoice_number) existingNumMap.set(String(r.invoice_number).trim(), r);
-      // Check meta localId if present
-      if (r.notes && typeof r.notes === 'string' && r.notes.trim().startsWith('{')) {
-        try {
-          const m = JSON.parse(r.notes);
-          if (m.localId) existingNumMap.set(String(m.localId).trim(), r);
-        } catch {}
-      }
-    });
-
-    // Fetch customers & products for UUID resolution
-    const { data: dbCustomers } = await supabase.from('customers').select('id, phone, name');
-    const customerUuidMap = new Map<string, string>();
-    (dbCustomers || []).forEach(c => {
-      customerUuidMap.set(String(c.id), c.id);
-      if (c.phone) customerUuidMap.set(String(c.phone).trim(), c.id);
-      if (c.name) customerUuidMap.set(String(c.name).trim().toLowerCase(), c.id);
-    });
-
-    const { data: dbProducts } = await supabase.from('products').select('id, name, barcode, sku, description, cost_price, selling_price');
-    const productUuidMap = new Map<string, string>();
-    const productCostMap = new Map<string, number>();
-    (dbProducts || []).forEach(p => {
-      productUuidMap.set(String(p.id), p.id);
-      if (p.barcode) productUuidMap.set(String(p.barcode).trim(), p.id);
-      if (p.sku) productUuidMap.set(String(p.sku).trim(), p.id);
-      if (p.name) productUuidMap.set(String(p.name).trim().toLowerCase(), p.id);
-      if (p.description) {
-        try {
-          if (p.description.trim().startsWith('{')) {
-            const m = JSON.parse(p.description);
-            if (m.originalId) productUuidMap.set(String(m.originalId).trim(), p.id);
-          }
-        } catch {}
-      }
-      productCostMap.set(p.id, Number(p.cost_price || 0));
-    });
-
-    let newlyUploadedCount = 0;
-    let duplicatesPrevented = 0;
-
-    // 2. Upload missing local invoices
-    for (const localInv of localInvoices) {
-      const invNum = String(localInv.id || '').trim();
-      if (existingNumMap.has(invNum)) {
-        duplicatesPrevented++;
-        continue;
-      }
-
-      // Resolve Customer UUID
-      let custUuid: string | null = null;
-      if (isUuid(localInv.customerId)) {
-        custUuid = localInv.customerId;
-      } else if (customerUuidMap.has(localInv.customerId)) {
-        custUuid = customerUuidMap.get(localInv.customerId)!;
-      }
-
-      // Determine DB invoice_type_enum
-      let dbType: 'sales' | 'return' | 'purchase' | 'repair' = 'sales';
-      if (localInv.type === 'repair') dbType = 'repair';
-      else if (localInv.type === 'parts_sale' || localInv.type === 'sales') dbType = 'sales';
-
-      // Determine DB status
-      let dbStatus: 'paid' | 'partially_paid' | 'unpaid' | 'cancelled' = 'paid';
-      if (localInv.isCancelled) {
-        dbStatus = 'cancelled';
-      } else if (localInv.paidAmount >= localInv.totalAmount) {
-        dbStatus = 'paid';
-      } else if (localInv.paidAmount > 0) {
-        dbStatus = 'partially_paid';
-      } else {
-        dbStatus = 'unpaid';
-      }
-
-      const calculatedSubtotal = (localInv.items || []).reduce((acc, item) => acc + (item.price * item.quantity), 0);
-      const totalCostSnapshot = (localInv.items || []).reduce((acc, item) => acc + ((item.costPrice || 0) * item.quantity), 0);
-
-      const meta = {
-        localId: localInv.id,
-        originalType: localInv.type,
-        customerId: localInv.customerId,
-        orderId: localInv.orderId,
-        isCancelled: Boolean(localInv.isCancelled),
-        cancelledAt: localInv.cancelledAt,
-        cancelledByUserId: localInv.cancelledByUserId,
-        cancelledByUserName: localInv.cancelledByUserName,
-        cancelReason: localInv.cancelReason,
-        date: localInv.date
-      };
-
-      const invoiceRow: Record<string, any> = {
-        invoice_number: invNum.startsWith('INV-') ? invNum : `INV-2026-${invNum}`,
-        type: dbType,
-        customer_id: custUuid,
-        repair_order_id: isUuid(localInv.orderId) ? localInv.orderId : null,
-        subtotal: calculatedSubtotal > 0 ? calculatedSubtotal : localInv.totalAmount,
-        discount_amount: Number(localInv.discount || 0),
-        total_amount: Number(localInv.totalAmount || 0),
-        total_cost_snapshot: totalCostSnapshot,
-        paid_amount: Number(localInv.paidAmount || 0),
-        remaining_amount: Math.max(0, Number(localInv.totalAmount || 0) - Number(localInv.paidAmount || 0)),
-        payment_method: mapPaymentMethodToEnum(localInv.paymentMethod),
-        status: dbStatus,
-        notes: JSON.stringify(meta),
-        created_at: localInv.date || new Date().toISOString()
-      };
-
-      // Atomic Insert Step 1: Insert Invoice Header
-      const { data: insertedInv, error: insertInvErr } = await supabase
-        .from('invoices')
-        .insert(invoiceRow)
-        .select()
-        .single();
-
-      if (insertInvErr || !insertedInv) {
-        if (insertInvErr?.code === '23505') { // unique constraint on invoice_number
-          duplicatesPrevented++;
-        } else {
-          console.warn('⚠️ Could not insert invoice header into Supabase:', insertInvErr?.message || insertInvErr);
-        }
-        continue;
-      }
-
-      // Atomic Insert Step 2: Insert Invoice Items
-      const itemRowsToInsert = (localInv.items || []).map(item => {
-        let prodUuid: string | null = null;
-        if (isUuid(item.productId)) {
-          prodUuid = item.productId!;
-        } else if (item.productId && productUuidMap.has(item.productId)) {
-          prodUuid = productUuidMap.get(item.productId)!;
-        } else if (item.name && productUuidMap.has(item.name.trim().toLowerCase())) {
-          prodUuid = productUuidMap.get(item.name.trim().toLowerCase())!;
-        }
-
-        const unitCost = item.costPrice !== undefined ? item.costPrice : (prodUuid ? (productCostMap.get(prodUuid) || 0) : 0);
-        const qty = Number(item.quantity || 1);
-        const unitPrice = Number(item.price || 0);
-
-        return {
-          invoice_id: insertedInv.id,
-          product_id: prodUuid,
-          product_name_snapshot: item.name || 'منتج غير مسمى',
-          quantity: qty,
-          unit_price_snapshot: unitPrice,
-          unit_cost_snapshot: unitCost,
-          stock_ownership_snapshot: item.stockOwnership || 'SHARED',
-          total_price: unitPrice * qty,
-          total_cost: unitCost * qty,
-          created_at: localInv.date || new Date().toISOString()
-        };
-      });
-
-      if (itemRowsToInsert.length > 0) {
-        const { error: insertItemsErr } = await supabase
-          .from('invoice_items')
-          .insert(itemRowsToInsert);
-
-        if (insertItemsErr) {
-          console.warn('⚠️ Could not insert invoice items! Rolling back invoice header:', insertItemsErr.message || insertItemsErr);
-          // Atomic Rollback: delete the incomplete invoice
-          await supabase.from('invoices').delete().eq('id', insertedInv.id);
-          continue;
-        }
-      }
-
-      newlyUploadedCount++;
-      existingNumMap.set(invNum, insertedInv);
-    }
-
-    // 3. Re-read fresh list of invoices and items from Supabase
-    const { data: refreshedInvoices, error: reReadInvErr } = await supabase
-      .from('invoices')
-      .select('*');
-
-    const { data: refreshedItems, error: reReadItemsErr } = await supabase
-      .from('invoice_items')
-      .select('*');
-
-    if (reReadInvErr || !refreshedInvoices) {
-      return {
-        success: true,
-        invoices: localInvoices,
-        localCount: localInvoices.length,
-        migratedCount: newlyUploadedCount,
-        duplicatesCount: duplicatesPrevented,
-        balanceMatch: true
-      };
-    }
 
     const itemsByInvoiceId = new Map<string, any[]>();
-    (refreshedItems || []).forEach(item => {
+    (dbItems || []).forEach(item => {
       const invId = String(item.invoice_id);
       if (!itemsByInvoiceId.has(invId)) {
         itemsByInvoiceId.set(invId, []);
@@ -363,25 +167,21 @@ export async function fetchOrMigrateInvoices(): Promise<{
       itemsByInvoiceId.get(invId)!.push(item);
     });
 
-    const finalInvoices = refreshedInvoices.map(row => {
+    const remoteInvoices = (dbInvoices || []).map(row => {
       const rowItems = itemsByInvoiceId.get(String(row.id)) || [];
       return mapRowToInvoice(row, rowItems);
     });
 
-    // Check balances match
-    const remoteTotal = finalInvoices.reduce((acc, inv) => acc + (inv.totalAmount || 0), 0);
-    const balanceMatch = Math.abs(localTotal - remoteTotal) < 0.01 || finalInvoices.length >= localInvoices.length;
-
     // Update local cache
-    saveLocalInvoicesBackup(finalInvoices, false);
+    saveLocalInvoicesBackup(remoteInvoices, false);
 
     return {
       success: true,
-      invoices: finalInvoices,
-      localCount: localInvoices.length,
-      migratedCount: newlyUploadedCount,
-      duplicatesCount: duplicatesPrevented,
-      balanceMatch
+      invoices: remoteInvoices,
+      localCount: remoteInvoices.length,
+      migratedCount: 0,
+      duplicatesCount: 0,
+      balanceMatch: true
     };
   } catch (err: any) {
     console.warn('⚠️ Error in fetchOrMigrateInvoices:', err);

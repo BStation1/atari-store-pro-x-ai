@@ -127,8 +127,7 @@ export async function fetchOrMigrateCategories(): Promise<{
       };
     }
 
-    if (data && data.length > 0) {
-      // Data already exists in Supabase
+    if (data) {
       const existingSupabaseCategories = data.map(mapRowToCategory);
       setLocalCategoriesBackup(existingSupabaseCategories, false);
       return {
@@ -136,25 +135,6 @@ export async function fetchOrMigrateCategories(): Promise<{
         localCount,
         uploadedCount: 0,
         totalSupabaseCount: existingSupabaseCategories.length,
-      };
-    }
-
-    // Supabase table is empty -> Upload local categories to Supabase
-    console.log(`🔄 Migrating ${localCategories.length} categories to Supabase...`);
-    const rowsToInsert = localCategories.map(c => mapCategoryToRow(c));
-
-    // Try upserting onConflict 'name'
-    const insertRes = await supabase
-      .from('categories')
-      .upsert(rowsToInsert, { onConflict: 'name' });
-
-    if (insertRes.error) {
-      console.warn('⚠️ Could not migrate categories to Supabase:', insertRes.error.message);
-      return {
-        categories: localCategories,
-        localCount,
-        uploadedCount: 0,
-        totalSupabaseCount: 0,
       };
     }
 
@@ -170,7 +150,7 @@ export async function fetchOrMigrateCategories(): Promise<{
     return {
       categories: finalCategories,
       localCount,
-      uploadedCount: rowsToInsert.length,
+      uploadedCount: 0,
       totalSupabaseCount: finalCategories.length,
     };
   } catch (err: any) {

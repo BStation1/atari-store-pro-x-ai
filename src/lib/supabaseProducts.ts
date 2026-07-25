@@ -5,83 +5,7 @@ import { getAuthenticatedUserRole } from './authPermissions';
 const PRODUCTS_STORAGE_KEY = 'atari_products';
 const CATEGORIES_STORAGE_KEY = 'atari_categories';
 
-const DEFAULT_PRODUCTS: Product[] = [
-  {
-    id: "P-001",
-    name: "ذراع تحكم PS5 DualSense - أبيض",
-    category: "اكسسوارات",
-    barcode: "0711719541028",
-    sku: "PS5-CTRL-WHT",
-    purchasePrice: 3100,
-    sellPrice: 3800,
-    quantity: 15,
-    minStock: 3,
-    location: "رف A1 - اكسسوارات بلاستيشن 5",
-    unit: "قطعة",
-    stockOwnership: "SHARED",
-    isActive: true
-  },
-  {
-    id: "P-002",
-    name: "ذراع تحكم PS5 DualSense - أسود مطفأ",
-    category: "اكسسوارات",
-    barcode: "0711719541035",
-    sku: "PS5-CTRL-BLK",
-    purchasePrice: 3100,
-    sellPrice: 3850,
-    quantity: 8,
-    minStock: 2,
-    location: "رف A1 - اكسسوارات بلاستيشن 5",
-    unit: "قطعة",
-    stockOwnership: "SHARED",
-    isActive: true
-  },
-  {
-    id: "P-003",
-    name: "سوكيت مدخل شاشة HDMI أصلية للـ PS5",
-    category: "قطع غيار صيانة",
-    barcode: "HDMI-PS5-ORIG",
-    sku: "PS5-PRT-HDMI",
-    purchasePrice: 180,
-    sellPrice: 450,
-    quantity: 45,
-    minStock: 10,
-    location: "درج 3 - قطع صيانة بلاستيشن 5",
-    unit: "قطعة",
-    stockOwnership: "SHARED",
-    isActive: true
-  },
-  {
-    id: "P-004",
-    name: "لعبة EA SPORTS FC 26 - PS5",
-    category: "ألعاب",
-    barcode: "5030932123456",
-    sku: "GAME-FC26-PS5",
-    purchasePrice: 2600,
-    sellPrice: 3200,
-    quantity: 20,
-    minStock: 4,
-    location: "أرفف الألعاب",
-    unit: "قطعة",
-    stockOwnership: "SHARED",
-    isActive: true
-  },
-  {
-    id: "P-005",
-    name: "أيسيه هارد HDMI PS5 (MN864739)",
-    category: "قطع غيار صيانة",
-    barcode: "MN864739",
-    sku: "PS5-IC-HDMI",
-    purchasePrice: 650,
-    sellPrice: 1000,
-    quantity: 12,
-    minStock: 5,
-    location: "مكتب المهندس - درج قطع غيار دقيقة",
-    unit: "قطعة",
-    stockOwnership: "SHARED",
-    isActive: true
-  }
-];
+const DEFAULT_PRODUCTS: Product[] = [];
 
 /**
  * Reads local products backup from localStorage.
@@ -95,7 +19,7 @@ export function getLocalProductsBackup(): Product[] {
   } catch (e) {
     console.error('Error reading local products backup:', e);
   }
-  return DEFAULT_PRODUCTS;
+  return [];
 }
 
 /**
@@ -299,8 +223,7 @@ export async function fetchOrMigrateProducts(): Promise<{
       };
     }
 
-    if (existingData && existingData.length > 0) {
-      // Products already exist in Supabase
+    if (existingData) {
       const existingProducts = existingData.map(mapRowToProduct);
       setLocalProductsBackup(existingProducts, false);
 
@@ -344,69 +267,13 @@ export async function fetchOrMigrateProducts(): Promise<{
       };
     }
 
-    // Supabase products table is empty -> Upload local products
-    console.log(`🔄 Migrating ${localProducts.length} products to Supabase...`);
-
-    let uploadedCount = 0;
-    let createdMovements = 0;
-
-    for (const prod of localProducts) {
-      const row = mapProductToRow(prod, categoryMap);
-
-      // Insert product
-      const { data: pData, error: pErr } = await supabase
-        .from('products')
-        .insert([row])
-        .select()
-        .single();
-
-      if (pErr) {
-        console.warn(`⚠️ Could not migrate product [${prod.name}]:`, pErr.message);
-        continue;
-      }
-
-      uploadedCount++;
-      const createdProd = mapRowToProduct(pData);
-
-      // Create OPENING_BALANCE movement if quantity > 0
-      if (createdProd.quantity > 0) {
-        const { error: mErr } = await supabase.from('inventory_movements').insert([
-          {
-            product_id: createdProd.id,
-            movement_type: 'ADJUSTMENT',
-            quantity_change: createdProd.quantity,
-            previous_quantity: 0,
-            new_quantity: createdProd.quantity,
-            cost_price_snapshot: createdProd.purchasePrice,
-            selling_price_snapshot: createdProd.sellPrice,
-            reference_id: 'OPENING_BALANCE',
-            notes: 'رصيد افتتاحي - OPENING_BALANCE',
-          },
-        ]);
-
-        if (!mErr) {
-          createdMovements++;
-        } else {
-          console.warn(`⚠️ Could not create OPENING_BALANCE movement for [${prod.name}]:`, mErr.message);
-        }
-      }
-    }
-
-    // Refreshed list from Supabase
-    const refreshed = await supabase
-      .from('products')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    const finalProducts = (refreshed.data || []).map(mapRowToProduct);
-    setLocalProductsBackup(finalProducts, false);
-
+    setLocalProductsBackup([], false);
     return {
-      products: finalProducts,
+      products: [],
       localCount,
-      uploadedCount,
-      totalSupabaseCount: finalProducts.length,
-      openingBalanceMovementsCreated: createdMovements,
+      uploadedCount: 0,
+      totalSupabaseCount: 0,
+      openingBalanceMovementsCreated: 0,
     };
   } catch (err: any) {
     console.warn('⚠️ Error in fetchOrMigrateProducts:', err);

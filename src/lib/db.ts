@@ -166,68 +166,7 @@ const DEFAULT_SETTINGS: SystemSettings = {
 
 const DEFAULT_CUSTOMERS: Customer[] = [];
 
-const DEFAULT_PRODUCTS: Product[] = [
-  {
-    id: "P-001",
-    name: "ذراع تحكم PS5 DualSense - أبيض",
-    category: "اكسسوارات",
-    barcode: "711719541318",
-    sku: "PS5-CTRL-WHT",
-    purchasePrice: 3200,
-    sellPrice: 3800,
-    quantity: 15,
-    minStock: 5,
-    location: "أرفف الواجهة - الصف الأول"
-  },
-  {
-    id: "P-002",
-    name: "باور سبلاي PS5 الأصلي 12V",
-    category: "قطع غيار صيانة",
-    barcode: "ADP-400DR",
-    sku: "PS5-PWR-SPY",
-    purchasePrice: 1800,
-    sellPrice: 2400,
-    quantity: 8,
-    minStock: 3,
-    location: "مخزن الصيانة - صندوق A"
-  },
-  {
-    id: "P-003",
-    name: "مروحة تبريد PS5 الداخلية",
-    category: "قطع غيار صيانة",
-    barcode: "NIDEC-17V",
-    sku: "PS5-COOL-FAN",
-    purchasePrice: 900,
-    sellPrice: 1300,
-    quantity: 4,
-    minStock: 3,
-    location: "مخزن الصيانة - صندوق B"
-  },
-  {
-    id: "P-004",
-    name: "لعبة EA SPORTS FC 26 - PS5",
-    category: "ألعاب",
-    barcode: "503093012423",
-    sku: "FC26-PS5",
-    purchasePrice: 2600,
-    sellPrice: 3200,
-    quantity: 20,
-    minStock: 4,
-    location: "أرفف الألعاب"
-  },
-  {
-    id: "P-005",
-    name: "أيسيه هارد HDMI PS5 (MN864739)",
-    category: "قطع غيار صيانة",
-    barcode: "MN864739",
-    sku: "PS5-IC-HDMI",
-    purchasePrice: 650,
-    sellPrice: 1000,
-    quantity: 12,
-    minStock: 5,
-    location: "مكتب المهندس - درج قطع غيار دقيقة"
-  }
-];
+const DEFAULT_PRODUCTS: Product[] = [];
 
 const DEFAULT_SUPPLIERS: Supplier[] = [];
 

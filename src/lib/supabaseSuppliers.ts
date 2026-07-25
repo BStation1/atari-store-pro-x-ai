@@ -79,13 +79,13 @@ export async function fetchOrMigrateSuppliers(): Promise<{
   error?: string;
 }> {
   const localSuppliers = getLocalSuppliersBackup();
-  const localBalanceTotal = localSuppliers.reduce((acc, s) => acc + (s.balance || 0), 0);
 
   try {
-    // 1. Query suppliers from Supabase
+    // Query suppliers directly from Supabase
     const { data: dbRows, error: fetchErr } = await supabase
       .from('suppliers')
-      .select('*');
+      .select('*')
+      .order('created_at', { ascending: false });
 
     if (fetchErr) {
       console.warn('⚠️ Supabase suppliers query error, using local fallback:', fetchErr);
@@ -100,83 +100,18 @@ export async function fetchOrMigrateSuppliers(): Promise<{
       };
     }
 
-    const existingRows = dbRows || [];
-    const existingKeyMap = new Map<string, any>();
-
-    existingRows.forEach(r => {
-      const pKey = String(r.phone || '').trim();
-      const nameKey = String(r.name || '').trim().toLowerCase();
-      const compKey = String(r.company || '').trim().toLowerCase();
-      if (pKey) existingKeyMap.set(`p:${pKey}`, r);
-      if (compKey) existingKeyMap.set(`c:${compKey}`, r);
-      if (nameKey) existingKeyMap.set(`n:${nameKey}`, r);
-    });
-
-    let newlyUploadedCount = 0;
-    let duplicatesPrevented = 0;
-
-    // 2. Upload missing suppliers to Supabase
-    for (const localSup of localSuppliers) {
-      const pKey = String(localSup.phone || '').trim();
-      const nameKey = String(localSup.name || '').trim().toLowerCase();
-      const compKey = String(localSup.company || '').trim().toLowerCase();
-
-      const exists = existingKeyMap.has(`p:${pKey}`) ||
-                     (compKey && existingKeyMap.has(`c:${compKey}`)) ||
-                     (nameKey && existingKeyMap.has(`n:${nameKey}`));
-
-      if (exists) {
-        duplicatesPrevented++;
-        continue;
-      }
-
-      const rowToInsert = mapSupplierToRow(localSup);
-      const { data: inserted, error: insertErr } = await supabase
-        .from('suppliers')
-        .insert(rowToInsert)
-        .select()
-        .single();
-
-      if (!insertErr && inserted) {
-        newlyUploadedCount++;
-        if (pKey) existingKeyMap.set(`p:${pKey}`, inserted);
-        if (compKey) existingKeyMap.set(`c:${compKey}`, inserted);
-        if (nameKey) existingKeyMap.set(`n:${nameKey}`, inserted);
-      } else if (insertErr) {
-        console.warn('⚠️ Could not insert supplier into Supabase:', insertErr.message || insertErr);
-      }
-    }
-
-    // 3. Re-read all suppliers from Supabase
-    const { data: refreshedRows, error: reReadErr } = await supabase
-      .from('suppliers')
-      .select('*');
-
-    if (reReadErr || !refreshedRows) {
-      return {
-        success: true,
-        suppliers: Array.from(existingKeyMap.values()).map(mapRowToSupplier),
-        localCount: localSuppliers.length,
-        migratedCount: newlyUploadedCount,
-        duplicatesCount: duplicatesPrevented,
-        balanceMatch: true
-      };
-    }
-
-    const finalSuppliers = refreshedRows.map(mapRowToSupplier);
-    const remoteBalanceTotal = finalSuppliers.reduce((acc, s) => acc + (s.balance || 0), 0);
-    const balanceMatch = Math.abs(localBalanceTotal - remoteBalanceTotal) < 0.01 || finalSuppliers.length >= localSuppliers.length;
+    const remoteSuppliers = (dbRows || []).map(mapRowToSupplier);
 
     // Save refreshed list to local backup
-    saveLocalSuppliersBackup(finalSuppliers, false);
+    saveLocalSuppliersBackup(remoteSuppliers, false);
 
     return {
       success: true,
-      suppliers: finalSuppliers,
-      localCount: localSuppliers.length,
-      migratedCount: newlyUploadedCount,
-      duplicatesCount: duplicatesPrevented,
-      balanceMatch
+      suppliers: remoteSuppliers,
+      localCount: remoteSuppliers.length,
+      migratedCount: 0,
+      duplicatesCount: 0,
+      balanceMatch: true
     };
   } catch (err: any) {
     console.warn('⚠️ Error in fetchOrMigrateSuppliers:', err);

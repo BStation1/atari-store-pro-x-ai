@@ -156,15 +156,14 @@ export async function fetchOrMigrateCustomers(): Promise<{
   balanceMatch: boolean;
   error?: string;
 }> {
-  const deletedIds = getDeletedCustomerIds();
-  const localCustomers = getLocalCustomersBackup().filter(c => !deletedIds.has(c.id));
-  const localBalanceTotal = localCustomers.reduce((acc, c) => acc + (c.balance || 0), 0);
+  const localCustomers = getLocalCustomersBackup();
 
   try {
-    // 1. Fetch current customers from Supabase
+    // Fetch current customers directly from Supabase
     const { data: dbRows, error: fetchErr } = await supabase
       .from('customers')
-      .select('*');
+      .select('*')
+      .order('created_at', { ascending: false });
 
     if (fetchErr) {
       console.warn('⚠️ Supabase customers query error, using local fallback:', fetchErr);
@@ -179,85 +178,18 @@ export async function fetchOrMigrateCustomers(): Promise<{
       };
     }
 
-    const existingRows = dbRows || [];
-    const existingPhoneMap = new Map<string, any>();
-    existingRows.forEach(r => {
-      if (r.phone && !deletedIds.has(String(r.id))) existingPhoneMap.set(String(r.phone).trim(), r);
-    });
-
-    let newlyUploadedCount = 0;
-    let duplicatesPrevented = 0;
-
-    // 2. Upload missing local customers to Supabase (upsert duplicate protection)
-    for (const localCust of localCustomers) {
-      if (deletedIds.has(localCust.id)) continue;
-      const cleanPhone = String(localCust.phone || '').trim();
-      
-      if (existingPhoneMap.has(cleanPhone)) {
-        duplicatesPrevented++;
-        continue;
-      }
-
-      const rowToInsert = mapCustomerToRow(localCust);
-      const { data: inserted, error: insertErr } = await supabase
-        .from('customers')
-        .insert(rowToInsert)
-        .select()
-        .single();
-
-      if (!insertErr && inserted) {
-        newlyUploadedCount++;
-        existingPhoneMap.set(cleanPhone, inserted);
-      } else if (insertErr && insertErr.code === '23505') { // Unique constraint violation on phone
-        duplicatesPrevented++;
-      } else if (insertErr) {
-        console.warn('⚠️ Could not insert customer into Supabase:', insertErr.message || insertErr);
-      }
-    }
-
-    // 3. Re-read all customers from Supabase to ensure fresh state
-    const { data: refreshedRows, error: reReadErr } = await supabase
-      .from('customers')
-      .select('*');
-
-    let remoteCustomers: Customer[] = [];
-    if (!reReadErr && refreshedRows) {
-      remoteCustomers = refreshedRows
-        .map(mapRowToCustomer)
-        .filter(c => !deletedIds.has(c.id));
-    } else {
-      remoteCustomers = Array.from(existingPhoneMap.values())
-        .map(mapRowToCustomer)
-        .filter(c => !deletedIds.has(c.id));
-    }
-
-    const remotePhones = new Set(
-      remoteCustomers.map(c => normalizePhoneNumber(c.phone) || String(c.phone || '').trim())
-    );
-
-    // Merge any local customer that wasn't found in remote (e.g. offline/RLS fallback)
-    const unmergedLocal = localCustomers.filter(lc => {
-      if (deletedIds.has(lc.id)) return false;
-      const p = normalizePhoneNumber(lc.phone) || String(lc.phone || '').trim();
-      return p && !remotePhones.has(p);
-    });
-
-    const finalCustomers = [...remoteCustomers, ...unmergedLocal];
-    
-    // Validate balances
-    const remoteBalanceTotal = finalCustomers.reduce((acc, c) => acc + (c.balance || 0), 0);
-    const balanceMatch = Math.abs(localBalanceTotal - remoteBalanceTotal) < 0.01 || finalCustomers.length >= localCustomers.length;
+    const remoteCustomers = (dbRows || []).map(mapRowToCustomer);
 
     // Update local backup cache without re-triggering the event loop
-    saveLocalCustomersBackup(finalCustomers, false);
+    saveLocalCustomersBackup(remoteCustomers, false);
 
     return {
       success: true,
-      customers: finalCustomers,
-      localCount: localCustomers.length,
-      migratedCount: newlyUploadedCount,
-      duplicatesCount: duplicatesPrevented,
-      balanceMatch
+      customers: remoteCustomers,
+      localCount: remoteCustomers.length,
+      migratedCount: 0,
+      duplicatesCount: 0,
+      balanceMatch: true
     };
   } catch (err: any) {
     console.warn('⚠️ Error in fetchOrMigrateCustomers:', err);
