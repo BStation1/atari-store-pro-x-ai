@@ -87,19 +87,19 @@ export default function CustomersList({
     setIsModalOpen(true);
   };
 
-  // Handle Delete / Archive Customer
+  // Handle Delete Customer
   const handleDeleteCustomer = async (cust: Customer, e: React.MouseEvent) => {
     e.stopPropagation();
     const confirmed = await dialog.confirm({
-      title: "حذف/أرشفة العميل",
-      message: `هل أنت متأكد من حذف أو أرشفة العميل "${cust.name}"؟`,
+      title: "حذف العميل",
+      message: `هل أنت متأكد من حذف العميل "${cust.name}" نهائياً من قاعدة البيانات؟`,
       variant: "danger",
       confirmText: "نعم، حذف"
     });
     if (confirmed) {
       try {
         const res = await deleteCustomer(cust.id);
-        await dialog.alert({ message: res.message, variant: "success" });
+        await dialog.alert({ message: res.message || "تم حذف العميل بنجاح", variant: "success" });
       } catch (err: any) {
         await dialog.alert({ message: err?.message || "حدث خطأ أثناء حذف العميل", variant: "error" });
       }

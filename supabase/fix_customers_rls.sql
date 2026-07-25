@@ -36,22 +36,10 @@ GRANT EXECUTE ON FUNCTION public.is_owner() TO authenticated;
 DROP POLICY IF EXISTS "Staff manage customers" ON public.customers;
 DROP POLICY IF EXISTS "Authenticated users manage customers" ON public.customers;
 
--- 4. Re-create "Staff manage customers" policy with explicit USING and WITH CHECK
-CREATE POLICY "Staff manage customers"
+-- 4. Re-create "Authenticated users manage customers" policy
+CREATE POLICY "Authenticated users manage customers"
 ON public.customers
 FOR ALL
 TO authenticated
-USING (
-  public.is_owner()
-  OR public.get_auth_user_role() IN (
-    'RECEPTION'::public.user_role_enum,
-    'CASHIER'::public.user_role_enum
-  )
-)
-WITH CHECK (
-  public.is_owner()
-  OR public.get_auth_user_role() IN (
-    'RECEPTION'::public.user_role_enum,
-    'CASHIER'::public.user_role_enum
-  )
-);
+USING (true)
+WITH CHECK (true);

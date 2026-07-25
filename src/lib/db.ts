@@ -668,6 +668,10 @@ export const db = {
       db.saveCustomers(list);
     }
   },
+  deleteCustomer: (id: string) => {
+    const list = db.getCustomers().filter(c => c.id !== id);
+    db.saveCustomers(list);
+  },
 
   // --- REPAIR ORDERS ---
   getRepairOrders: (): RepairOrder[] => {

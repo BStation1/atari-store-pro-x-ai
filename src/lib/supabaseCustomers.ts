@@ -5,6 +5,31 @@ import { db } from './db';
 import { getAuthenticatedUserRole } from './authPermissions';
 
 const CUSTOMERS_STORAGE_KEY = 'atari_customers';
+const DELETED_CUSTOMERS_KEY = 'atari_deleted_customer_ids';
+
+export function getDeletedCustomerIds(): Set<string> {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const stored = localStorage.getItem(DELETED_CUSTOMERS_KEY);
+      if (stored) return new Set(JSON.parse(stored));
+    }
+  } catch (e) {
+    console.error('Error reading deleted customer IDs:', e);
+  }
+  return new Set();
+}
+
+export function trackDeletedCustomerId(id: string): void {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const current = getDeletedCustomerIds();
+      current.add(id);
+      localStorage.setItem(DELETED_CUSTOMERS_KEY, JSON.stringify(Array.from(current)));
+    }
+  } catch (e) {
+    console.error('Error tracking deleted customer ID:', e);
+  }
+}
 
 export const DEFAULT_CUSTOMERS: Customer[] = [
   {
@@ -56,22 +81,28 @@ export const DEFAULT_CUSTOMERS: Customer[] = [
 ];
 
 export function getLocalCustomersBackup(): Customer[] {
+  const deletedIds = getDeletedCustomerIds();
   try {
     if (typeof localStorage !== 'undefined') {
       const stored = localStorage.getItem(CUSTOMERS_STORAGE_KEY);
-      if (stored) return JSON.parse(stored);
+      if (stored) {
+        const parsed: Customer[] = JSON.parse(stored);
+        return parsed.filter(c => !deletedIds.has(c.id));
+      }
     }
   } catch (e) {
     console.error('Error reading local customers backup:', e);
   }
-  return DEFAULT_CUSTOMERS;
+  return DEFAULT_CUSTOMERS.filter(c => !deletedIds.has(c.id));
 }
 
 export function saveLocalCustomersBackup(data: Customer[], dispatchEvent = true): void {
+  const deletedIds = getDeletedCustomerIds();
+  const cleanData = data.filter(c => !deletedIds.has(c.id));
   try {
     if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(CUSTOMERS_STORAGE_KEY, JSON.stringify(data));
-      try { db.saveCustomers(data); } catch (_) {}
+      localStorage.setItem(CUSTOMERS_STORAGE_KEY, JSON.stringify(cleanData));
+      try { db.saveCustomers(cleanData); } catch (_) {}
       if (dispatchEvent) {
         window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: CUSTOMERS_STORAGE_KEY } }));
       }
@@ -172,7 +203,8 @@ export async function fetchOrMigrateCustomers(): Promise<{
   balanceMatch: boolean;
   error?: string;
 }> {
-  const localCustomers = getLocalCustomersBackup();
+  const deletedIds = getDeletedCustomerIds();
+  const localCustomers = getLocalCustomersBackup().filter(c => !deletedIds.has(c.id));
   const localBalanceTotal = localCustomers.reduce((acc, c) => acc + (c.balance || 0), 0);
 
   try {
@@ -197,7 +229,7 @@ export async function fetchOrMigrateCustomers(): Promise<{
     const existingRows = dbRows || [];
     const existingPhoneMap = new Map<string, any>();
     existingRows.forEach(r => {
-      if (r.phone) existingPhoneMap.set(String(r.phone).trim(), r);
+      if (r.phone && !deletedIds.has(String(r.id))) existingPhoneMap.set(String(r.phone).trim(), r);
     });
 
     let newlyUploadedCount = 0;
@@ -205,6 +237,7 @@ export async function fetchOrMigrateCustomers(): Promise<{
 
     // 2. Upload missing local customers to Supabase (upsert duplicate protection)
     for (const localCust of localCustomers) {
+      if (deletedIds.has(localCust.id)) continue;
       const cleanPhone = String(localCust.phone || '').trim();
       
       if (existingPhoneMap.has(cleanPhone)) {
@@ -236,9 +269,13 @@ export async function fetchOrMigrateCustomers(): Promise<{
 
     let remoteCustomers: Customer[] = [];
     if (!reReadErr && refreshedRows) {
-      remoteCustomers = refreshedRows.map(mapRowToCustomer);
+      remoteCustomers = refreshedRows
+        .map(mapRowToCustomer)
+        .filter(c => !deletedIds.has(c.id));
     } else {
-      remoteCustomers = Array.from(existingPhoneMap.values()).map(mapRowToCustomer);
+      remoteCustomers = Array.from(existingPhoneMap.values())
+        .map(mapRowToCustomer)
+        .filter(c => !deletedIds.has(c.id));
     }
 
     const remotePhones = new Set(
@@ -247,6 +284,7 @@ export async function fetchOrMigrateCustomers(): Promise<{
 
     // Merge any local customer that wasn't found in remote (e.g. offline/RLS fallback)
     const unmergedLocal = localCustomers.filter(lc => {
+      if (deletedIds.has(lc.id)) return false;
       const p = normalizePhoneNumber(lc.phone) || String(lc.phone || '').trim();
       return p && !remotePhones.has(p);
     });
@@ -459,16 +497,21 @@ export async function updateCustomerInSupabase(
 }
 
 /**
- * Delete or Soft-Delete a customer in Supabase
+ * Delete a customer in Supabase
  */
 export async function deleteCustomerFromSupabase(
   id: string,
   currentUser?: User
 ): Promise<{ success: boolean; message: string }> {
-  // Centralized real-time permission check (Session -> RPC -> Profiles -> User object)
+  // Permission check
   const authCheck = await getAuthenticatedUserRole(currentUser);
-  if (!authCheck.isOwner) {
-    throw new Error('عذراً، تقتصر صلاحية حذف العملاء على مدير النظام فقط.');
+  const isAllowedRole =
+    authCheck.isOwner ||
+    ['ADMIN', 'MANAGER', 'RECEPTION', 'RECEPTIONIST', 'CASHIER'].includes(String(authCheck.role).toUpperCase()) ||
+    ['OWNER', 'ADMIN', 'MANAGER', 'RECEPTIONIST', 'RECEPTION', 'CASHIER'].includes(String(currentUser?.roleId).toUpperCase());
+
+  if (!isAllowedRole) {
+    throw new Error('عذراً، ليس لديك صلاحية حذف العملاء.');
   }
 
   // Check if customer is referenced in repair orders or invoices
@@ -484,58 +527,45 @@ export async function deleteCustomerFromSupabase(
     .eq('customer_id', id)
     .limit(1);
 
-  const isLinked = (linkedOrders && linkedOrders.length > 0) || (linkedInvoices && linkedInvoices.length > 0);
+  const localOrders = db.getRepairOrders ? db.getRepairOrders() : [];
+  const hasLocalOrders = localOrders.some((o: any) => o.customerId === id || o.customer_id === id);
+  const localInvoices = db.getInvoices ? db.getInvoices() : [];
+  const hasLocalInvoices = localInvoices.some((i: any) => i.customerId === id || i.customer_id === id);
+
+  const isLinked =
+    (linkedOrders && linkedOrders.length > 0) ||
+    (linkedInvoices && linkedInvoices.length > 0) ||
+    hasLocalOrders ||
+    hasLocalInvoices;
 
   if (isLinked) {
-    // Perform Soft Delete to protect relational integrity
-    const { data: existing } = await supabase
-      .from('customers')
-      .select('*')
-      .eq('id', id)
-      .single();
-
-    if (existing) {
-      const cust = mapRowToCustomer(existing);
-      cust.isActive = false;
-      cust.isArchived = true;
-      await updateCustomerInSupabase(cust, currentUser);
-      return {
-        success: true,
-        message: 'تم نقل العميل إلى الأرشيف وإلغاء تنشيطه للحفاظ على سجلات الفواتير والصيانة المرتبطة به (Soft Delete).'
-      };
-    }
+    throw new Error('لا يمكن حذف العميل لأنه مرتبط بسجلات صيانة أو فواتير مسجلة بالنظام.');
   }
 
-  // If not linked, hard delete
+  // Real Delete directly from customers table in Supabase
   const { error } = await supabase
     .from('customers')
     .delete()
     .eq('id', id);
 
   if (error) {
-    // If foreign key constraint blocks deletion, fallback to soft delete
-    const { data: existing } = await supabase
-      .from('customers')
-      .select('*')
-      .eq('id', id)
-      .single();
-
-    if (existing) {
-      const cust = mapRowToCustomer(existing);
-      cust.isActive = false;
-      cust.isArchived = true;
-      await updateCustomerInSupabase(cust, currentUser);
-      return {
-        success: true,
-        message: 'تعذر الحذف الفعلي لوجود ارتباطات متقدمة، تم أرشفة العميل بنجاح (Soft Delete).'
-      };
+    console.error('Delete customer error:', error);
+    if (error.code === '23503' || error.message.includes('foreign key constraint')) {
+      throw new Error('لا يمكن حذف العميل من قاعدة البيانات لأنه مرتبط بسجلات أخرى.');
     }
-    throw new Error(error.message);
+    throw new Error(`تعذر حذف العميل من قاعدة البيانات: ${error.message}`);
   }
 
-  // Update local backup
+  // Track deleted customer ID and update local backup
+  trackDeletedCustomerId(id);
+
   const localList = getLocalCustomersBackup().filter(c => c.id !== id);
   saveLocalCustomersBackup(localList);
+  try {
+    if ((db as any).deleteCustomer) {
+      (db as any).deleteCustomer(id);
+    }
+  } catch (_) {}
 
   return {
     success: true,
