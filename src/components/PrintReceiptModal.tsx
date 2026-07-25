@@ -7,6 +7,7 @@ import React, { useRef } from "react";
 import { Printer, X, Check, Share2 } from "lucide-react";
 import { RepairOrder, Customer, SystemSettings, Invoice, RepairStatus } from "../types";
 import { formatPhoneDisplay } from "../utils/phone";
+import { PhoneDisplay } from "./PhoneDisplay";
 import {
   getInvoiceCustomerName,
   getInvoiceCustomerPhone,
@@ -194,7 +195,7 @@ export default function PrintReceiptModal({
               <h4 className="text-lg font-bold text-black leading-none">{settings.companyName}</h4>
               <p className="text-[10px] text-gray-700 font-medium mt-1">مركز صيانة وبيع أجهزة الكونسول والألعاب</p>
               <p className="text-[10px] text-gray-600 mt-0.5">{settings.address}</p>
-              <p className="text-[10px] text-gray-600">هاتف: {formatPhoneDisplay(settings.phone)}</p>
+              <p className="text-[10px] text-gray-600">هاتف: <PhoneDisplay phone={settings.phone} className="text-[10px]" /></p>
             </div>
 
             {/* Receipt details */}
@@ -243,7 +244,7 @@ export default function PrintReceiptModal({
                     {displayPhone && (
                       <div className="flex justify-between">
                         <span>الهاتف:</span>
-                        <span>{formatPhoneDisplay(displayPhone)}</span>
+                        <PhoneDisplay phone={displayPhone} />
                       </div>
                     )}
                     <div className="flex justify-between">

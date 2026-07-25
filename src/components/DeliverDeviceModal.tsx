@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { RepairOrder, Customer, PaymentMethod, User, Invoice } from "../types";
 import { canDeliverDevice } from "../lib/authPermissions";
+import { PhoneDisplay } from "./PhoneDisplay";
 import { formatPhoneDisplay } from "../utils/phone";
 import { getCustomerNameHelper, getCustomerPhoneHelper, getCustomerBadgeHelper } from "../lib/customerDisplayHelper";
 
@@ -277,7 +278,7 @@ export default function DeliverDeviceModal({
                       {getCustomerBadgeHelper(order).label}
                     </span>
                   </div>
-                  <span className="font-mono text-gray-400 dir-ltr">{formatPhoneDisplay(getCustomerPhoneHelper(order, customer ? [customer] : []))}</span>
+                  <PhoneDisplay phone={getCustomerPhoneHelper(order, customer ? [customer] : [])} className="text-gray-400 font-mono" />
                 </div>
 
                 <div className="space-y-1.5 pt-1">

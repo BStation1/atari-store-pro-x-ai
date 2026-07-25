@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from "react";
+import { PhoneDisplay } from "./PhoneDisplay";
 import { supabase } from "../lib/supabaseClient";
 import { isUserOwnerSync } from "../lib/authPermissions";
 import {
@@ -537,7 +538,10 @@ export default function UsersList() {
                   {/* Details */}
                   <div className="space-y-1 text-xs text-gray-400 border-t border-[#2a2d42]/60 pt-3 font-mono">
                     <p className="truncate">البريد: {emp.email || "غير مسجل"}</p>
-                    <p>الهاتف: {emp.phone || "غير مسجل"}</p>
+                    <div className="flex items-center gap-1">
+                      <span>الهاتف:</span>
+                      <PhoneDisplay phone={emp.phone} />
+                    </div>
                     <p className="text-[10px] text-gray-500 pt-1">
                       آخر دخول: {emp.lastLoginAt ? new Date(emp.lastLoginAt).toLocaleString("ar-EG") : "لم يسجل بعد"}
                     </p>

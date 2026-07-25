@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from "react";
+import { PhoneDisplay } from "./PhoneDisplay";
 import {
   Layers,
   Search,
@@ -883,7 +884,7 @@ export default function Inventory() {
                 <div className="space-y-1 text-xs">
                   <div className="flex justify-between">
                     <span className="text-gray-400">رقم الهاتف:</span>
-                    <span className="text-gray-200 font-mono" style={{ direction: "ltr" }}>{s.phone || "غير مسجل"}</span>
+                    <PhoneDisplay phone={s.phone} className="text-gray-200 font-mono" />
                   </div>
                   <div className="flex justify-between pt-2 border-t border-[#2a2d42]/40">
                     <span className="text-gray-400 font-bold">الحساب المستحق:</span>

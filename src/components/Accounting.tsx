@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from "react";
+import { formatPhoneDisplay } from "../utils/phone";
 import {
   FileText,
   DollarSign,
@@ -653,7 +654,7 @@ export default function Accounting({ openInvoiceModal = false }: AccountingProps
                       <option value="">-- اختر عميلاً مسجلاً --</option>
                       {customers.map(cust => (
                         <option key={cust.id} value={cust.id}>
-                          {cust.name} ({cust.phone})
+                          {cust.name} ({formatPhoneDisplay(cust.phone)})
                         </option>
                       ))}
                     </select>

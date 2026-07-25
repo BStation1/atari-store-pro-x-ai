@@ -44,10 +44,10 @@ export function validatePhoneNumber(phone: string): boolean {
  */
 export function formatPhoneDisplay(phone: string): string {
   if (!phone || typeof phone !== "string") return "";
-  const normalized = normalizePhoneNumber(phone);
+  const clean = phone.trim();
+  const normalized = normalizePhoneNumber(clean);
   if (normalized.startsWith("201") && normalized.length === 12) {
-    const mobile = normalized.substring(1); // 01xxxxxxxxx
-    return `0${mobile.substring(1, 4)} ${mobile.substring(4, 7)} ${mobile.substring(7)}`;
+    return `0${normalized.substring(2)}`;
   }
-  return phone || "";
+  return clean;
 }

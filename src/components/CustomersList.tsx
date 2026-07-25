@@ -24,6 +24,7 @@ import {
 import { useDialog } from "../context/DialogContext";
 import { useCustomers, useRepairOrders, useInvoices } from "../hooks/useData";
 import { Customer, CustomerType, RepairOrder, Invoice } from "../types";
+import { PhoneDisplay } from "./PhoneDisplay";
 import { formatPhoneDisplay, normalizePhoneNumber } from "../utils/phone";
 
 interface CustomersListProps {
@@ -326,7 +327,9 @@ export default function CustomersList({
                     className="hover:bg-white/5 transition-all-custom cursor-pointer"
                   >
                     <td className="py-3.5 px-4 font-bold text-white">{cust.name}</td>
-                    <td className="py-3.5 px-4 font-mono text-gray-300">{formatPhoneDisplay(cust.phone)}</td>
+                    <td className="py-3.5 px-4 font-mono text-gray-300">
+                      <PhoneDisplay phone={cust.phone} />
+                    </td>
                     <td className="py-3.5 px-4">
                       {cust.type === "VIP" && (
                         <span className="bg-purple-500/10 text-purple-400 border border-purple-500/20 px-2 py-0.5 rounded text-[10px] font-bold">
@@ -512,9 +515,7 @@ export default function CustomersList({
                   <Phone className="w-5 h-5 text-indigo-400" />
                   <div>
                     <span className="text-[10px] text-gray-400 block">الهاتف</span>
-                    <span className="text-xs font-bold text-white font-mono">
-                      {formatPhoneDisplay(activeCustomer.phone)}
-                    </span>
+                    <PhoneDisplay phone={activeCustomer.phone} className="text-xs font-bold text-white font-mono" />
                   </div>
                 </div>
 

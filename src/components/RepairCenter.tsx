@@ -30,6 +30,7 @@ import {
 import { useRepairOrders, useCustomers, useProducts, useSettings, useInvoices, useCurrentUser } from "../hooks/useData";
 import { RepairOrder, RepairDevice, RepairStatus, DeviceType, PaymentMethod, WorkOwnershipType, User as UserType } from "../types";
 import { getCustomerNameHelper, getCustomerPhoneHelper, getCustomerBadgeHelper } from "../lib/customerDisplayHelper";
+import { PhoneDisplay } from "./PhoneDisplay";
 import PrintReceiptModal from "./PrintReceiptModal";
 import DeliverDeviceModal from "./DeliverDeviceModal";
 import ReopenOrderModal from "./ReopenOrderModal";
@@ -769,6 +770,7 @@ ${trackingLink}
                   <div className="flex items-center gap-2 mt-1 flex-wrap">
                     <span className="text-xs text-gray-400">العميل:</span>
                     <span className="font-bold text-white text-xs">{getCustomerNameHelper(selectedOrder, customers)}</span>
+                    <PhoneDisplay phone={getCustomerPhoneHelper(selectedOrder, customers)} className="text-xs text-gray-400 font-mono" />
                     <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
                       getCustomerBadgeHelper(selectedOrder).type === 'REGISTERED' 
                         ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' 

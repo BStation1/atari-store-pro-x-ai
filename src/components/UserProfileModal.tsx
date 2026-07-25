@@ -4,6 +4,7 @@
  */
 
 import React, { useState } from "react";
+import { PhoneDisplay } from "./PhoneDisplay";
 import { User as UserIcon, X, KeyRound, LogOut, ShieldCheck, Mail, Phone, Calendar, Clock, CheckCircle2, AlertCircle } from "lucide-react";
 import { authStore, AuthUser } from "../lib/authStore";
 import { ROLE_LABELS_AR } from "../lib/authPermissions";
@@ -142,7 +143,7 @@ export default function UserProfileModal({
                     <Phone className="w-3.5 h-3.5 text-gray-500" />
                     رقم الهاتف:
                   </span>
-                  <span className="text-white font-mono dir-ltr">{user.phone || "غير مسجل"}</span>
+                  <PhoneDisplay phone={user.phone} className="text-white font-mono" />
                 </div>
 
                 <div className="flex items-center justify-between text-xs">

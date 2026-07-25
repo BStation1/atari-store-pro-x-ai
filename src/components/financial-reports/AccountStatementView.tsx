@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { formatPhoneDisplay } from '../../utils/phone';
 import {
   FileText,
   Printer,
@@ -173,7 +174,7 @@ export default function AccountStatementView({
               <option value="">جميع العملاء</option>
               {customers.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.name} ({c.phone || c.id})
+                  {c.name} ({formatPhoneDisplay(c.phone) || c.id})
                 </option>
               ))}
             </select>

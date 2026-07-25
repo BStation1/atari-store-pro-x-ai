@@ -49,6 +49,7 @@ import {
 } from "../hooks/useData";
 import { Customer, CustomerType, DeviceType, RepairStatus, RepairDevice, RepairOrder, WorkOwnershipType, WarrantyDurationOption } from "../types";
 import { normalizePhoneNumber, formatPhoneDisplay } from "../utils/phone";
+import { PhoneDisplay } from "./PhoneDisplay";
 import { getCustomerNameHelper, getCustomerPhoneHelper } from "../lib/customerDisplayHelper";
 import PrintReceiptModal from "./PrintReceiptModal";
 
@@ -968,7 +969,9 @@ ${trackingLink}`;
                     <div>
                       <span className="text-[10px] text-indigo-400 font-bold block">العميل المسجل المحدد:</span>
                       <h4 className="text-sm font-bold text-white mt-0.5">{selectedCustomer.name}</h4>
-                      <p className="text-xs text-gray-300 font-mono mt-1">{formatPhoneDisplay(selectedCustomer.phone)}</p>
+                      <div className="mt-1">
+                        <PhoneDisplay phone={selectedCustomer.phone} className="text-xs text-gray-300 font-mono" />
+                      </div>
                     </div>
                     <button
                       type="button"
@@ -1005,9 +1008,7 @@ ${trackingLink}`;
                         >
                           <div>
                             <span className="font-bold text-white block">{cust.name}</span>
-                            <span className="text-[10px] text-gray-500 font-mono mt-0.5 inline-block">
-                              {formatPhoneDisplay(cust.phone)}
-                            </span>
+                            <PhoneDisplay phone={cust.phone} className="text-[10px] text-gray-500 font-mono mt-0.5 block" />
                           </div>
                           <span className="bg-indigo-500/10 text-indigo-400 text-[10px] px-2.5 py-1 rounded-md border border-indigo-500/20 font-bold">
                             {cust.type === "VIP" ? "VIP" : "اختر العميل"}
@@ -1122,9 +1123,7 @@ ${trackingLink}`;
               <div className="flex justify-between items-start">
                 <div>
                   <h4 className="text-white font-bold text-sm">{selectedCustomer.name}</h4>
-                  <span className="text-[10px] text-gray-400 font-mono block mt-1">
-                    {formatPhoneDisplay(selectedCustomer.phone)}
-                  </span>
+                  <PhoneDisplay phone={selectedCustomer.phone} className="text-[10px] text-gray-400 font-mono block mt-1" />
                 </div>
                 <span className="bg-indigo-500/10 text-indigo-400 text-[10px] px-2 py-0.5 rounded-md border border-indigo-500/20 font-bold">
                   {selectedCustomer.type === "VIP" && "VIP المميز"}

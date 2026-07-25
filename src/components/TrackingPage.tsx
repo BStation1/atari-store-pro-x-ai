@@ -34,6 +34,7 @@ import { useRepairOrders, useCustomers, useSettings } from "../hooks/useData";
 import { RepairStatus, RepairOrder, Customer } from "../types";
 
 import { getCustomerNameHelper, getCustomerPhoneHelper, getCustomerBadgeHelper } from "../lib/customerDisplayHelper";
+import { PhoneDisplay } from "./PhoneDisplay";
 
 interface TrackingPageProps {
   initialQuery?: string;
@@ -619,7 +620,7 @@ export default function TrackingPage({ initialQuery }: TrackingPageProps) {
               <span>•</span>
               <span>{settings.address}</span>
               <span>•</span>
-              <span>هاتف: {settings.phone}</span>
+              <span>هاتف: <PhoneDisplay phone={settings.phone} /></span>
             </div>
           </div>
         </div>

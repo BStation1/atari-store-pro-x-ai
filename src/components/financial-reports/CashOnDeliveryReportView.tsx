@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { PhoneDisplay } from '../PhoneDisplay';
 import {
   Truck,
   CheckCircle2,
@@ -293,7 +294,9 @@ export default function CashOnDeliveryReportView({
                     <tr key={inv.id} className="hover:bg-white/5 transition">
                       <td className="py-3 px-4 font-mono text-indigo-300 font-bold">{inv.id}</td>
                       <td className="py-3 px-4 font-bold text-white">{name}</td>
-                      <td className="py-3 px-4 font-mono text-gray-300">{phone || '-'}</td>
+                      <td className="py-3 px-4 font-mono text-gray-300">
+                        <PhoneDisplay phone={phone} fallback="-" />
+                      </td>
                       <td className="py-3 px-4">
                         <span
                           className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
