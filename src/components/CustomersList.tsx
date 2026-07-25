@@ -175,7 +175,7 @@ export default function CustomersList({
   // Calculate stats
   const vipCount = customers.filter(c => c.type === CustomerType.VIP).length;
   const shopCount = customers.filter(c => c.type === CustomerType.Shop).length;
-  const totalBalance = customers.reduce((sum, c) => sum + (c.balance || 0), 0) + 1850; // base from mock + actual
+  const totalBalance = customers.reduce((sum, c) => sum + (c.balance || 0), 0);
 
   // Customer transactions calculations inside the Drawer
   const getCustomerRepairs = (custID: string): RepairOrder[] => {
@@ -228,7 +228,7 @@ export default function CustomersList({
           </div>
           <div>
             <p className="text-gray-400 text-[11px]">إجمالي العملاء المسجلين</p>
-            <h4 className="text-lg font-bold text-white mt-0.5">{customers.length + 1250}</h4>
+            <h4 className="text-lg font-bold text-white mt-0.5">{customers.length}</h4>
           </div>
         </div>
 
@@ -238,7 +238,7 @@ export default function CustomersList({
           </div>
           <div>
             <p className="text-gray-400 text-[11px]">شركاء وتجار صيانة (مراكز خارجية)</p>
-            <h4 className="text-lg font-bold text-white mt-0.5">{shopCount + 18} مركزاً</h4>
+            <h4 className="text-lg font-bold text-white mt-0.5">{shopCount} مركزاً</h4>
           </div>
         </div>
 
