@@ -65,6 +65,24 @@ export function saveLocalCustomersBackup(data: Customer[], dispatchEvent = true)
   }
 }
 
+/**
+ * Centralized mapping between UI CustomerType and Supabase customer_type_enum
+ */
+export const CUSTOMER_TYPE_TO_DB: Record<CustomerType, 'REGULAR' | 'VIP' | 'WHOLESALE'> = {
+  [CustomerType.Individual]: 'REGULAR',
+  [CustomerType.VIP]: 'VIP',
+  [CustomerType.Wholesale]: 'WHOLESALE',
+  [CustomerType.Shop]: 'WHOLESALE',
+  [CustomerType.Guest]: 'REGULAR',
+};
+
+export const DB_TO_CUSTOMER_TYPE: Record<string, CustomerType> = {
+  REGULAR: CustomerType.Individual,
+  VIP: CustomerType.VIP,
+  WHOLESALE: CustomerType.Wholesale,
+  SHOP: CustomerType.Shop,
+};
+
 export function mapRowToCustomer(row: Record<string, any>): Customer {
   let meta: Record<string, any> = {};
   if (row.notes) {
@@ -82,12 +100,8 @@ export function mapRowToCustomer(row: Record<string, any>): Customer {
   let custType: CustomerType = CustomerType.Individual;
   if (meta.type && Object.values(CustomerType).includes(meta.type)) {
     custType = meta.type as CustomerType;
-  } else if (row.customer_type === 'VIP') {
-    custType = CustomerType.VIP;
-  } else if (row.customer_type === 'WHOLESALE') {
-    custType = CustomerType.Wholesale;
-  } else if (row.customer_type === 'SHOP') {
-    custType = CustomerType.Shop;
+  } else if (row.customer_type && DB_TO_CUSTOMER_TYPE[row.customer_type]) {
+    custType = DB_TO_CUSTOMER_TYPE[row.customer_type];
   }
 
   const cleanNotes = meta.notes !== undefined ? meta.notes : (typeof row.notes === 'string' && !row.notes.startsWith('{') ? row.notes : '');
@@ -109,13 +123,11 @@ export function mapRowToCustomer(row: Record<string, any>): Customer {
 }
 
 export function mapCustomerToRow(c: Partial<Customer>): Record<string, any> {
-  let enumType = 'REGULAR';
-  if (c.type === CustomerType.VIP) enumType = 'VIP';
-  else if (c.type === CustomerType.Wholesale) enumType = 'WHOLESALE';
-  else if (c.type === CustomerType.Shop) enumType = 'SHOP';
+  const uiType = c.type || CustomerType.Individual;
+  const enumType = CUSTOMER_TYPE_TO_DB[uiType] || 'REGULAR';
 
   const meta = {
-    type: c.type || CustomerType.Individual,
+    type: uiType,
     notes: c.notes || '',
     isActive: c.isActive !== false,
     isArchived: Boolean(c.isArchived),
