@@ -564,7 +564,7 @@ ${trackingLink}`;
     window.open(url, "_blank");
   };
 
-  const handleSaveOrder = () => {
+  const handleSaveOrder = async () => {
     setValidationError(null);
     setSuccessMsg(null);
 
@@ -643,32 +643,41 @@ ${trackingLink}`;
     const totalFinal = completeDevices.reduce((sum, d) => sum + (d.finalRepairPrice || d.estimatedCost || 0), 0);
     const allQuickFaults = completeDevices.flatMap(d => d.selectedQuickFaults || []);
 
-    const savedOrder = addRepairOrder({
-      customerId: isGuest ? undefined : selectedCustomer!.id,
-      customerType: isGuest ? "GUEST" : "REGISTERED",
-      guestCustomerName: isGuest ? guestName.trim() : undefined,
-      guestCustomerPhone: isGuest ? guestPhone.trim() : undefined,
-      guestCustomerAltPhone: isGuest ? (guestAltPhone.trim() || undefined) : undefined,
-      guestCustomerNote: isGuest ? (guestNote.trim() || undefined) : undefined,
-      customerNameSnapshot: isGuest ? guestName.trim() : selectedCustomer!.name,
-      customerPhoneSnapshot: isGuest ? guestPhone.trim() : selectedCustomer!.phone,
-      devices: completeDevices,
-      selectedQuickFaults: allQuickFaults,
-      suggestedRepairPrice: totalSuggested,
-      finalRepairPrice: totalFinal,
-      totalEstimatedCost: totalFinal, // backwards compatibility fallback
-      advancePayment: Number(advancePayment) || 0,
-      status: RepairStatus.Received,
-      isPaid: false,
-      notes: orderNotes,
-      warrantyOption,
-      warrantyDays: calculatedWarrantyDays,
-      isWarrantyClaim,
-      parentOrderId: isWarrantyClaim ? parentOrderId : undefined,
-      workOwnershipType,
-      workOwnerPartnerId: workOwnershipType === WorkOwnershipType.PARTNER_2_PRIVATE ? "P-002" : workOwnershipType === WorkOwnershipType.PARTNER_1_PRIVATE ? "P-001" : undefined,
-      partnerDeductionRate: Number(partnerDeductionRate) || 0
-    });
+    let savedOrder: RepairOrder;
+    try {
+      savedOrder = await addRepairOrder({
+        customerId: isGuest ? undefined : selectedCustomer!.id,
+        customerType: isGuest ? "GUEST" : "REGISTERED",
+        guestCustomerName: isGuest ? guestName.trim() : undefined,
+        guestCustomerPhone: isGuest ? guestPhone.trim() : undefined,
+        guestCustomerAltPhone: isGuest ? (guestAltPhone.trim() || undefined) : undefined,
+        guestCustomerNote: isGuest ? (guestNote.trim() || undefined) : undefined,
+        customerNameSnapshot: isGuest ? guestName.trim() : selectedCustomer!.name,
+        customerPhoneSnapshot: isGuest ? guestPhone.trim() : selectedCustomer!.phone,
+        devices: completeDevices,
+        selectedQuickFaults: allQuickFaults,
+        suggestedRepairPrice: totalSuggested,
+        finalRepairPrice: totalFinal,
+        totalEstimatedCost: totalFinal, // backwards compatibility fallback
+        advancePayment: Number(advancePayment) || 0,
+        status: RepairStatus.Received,
+        isPaid: false,
+        notes: orderNotes,
+        warrantyOption,
+        warrantyDays: calculatedWarrantyDays,
+        isWarrantyClaim,
+        parentOrderId: isWarrantyClaim ? parentOrderId : undefined,
+        workOwnershipType,
+        workOwnerPartnerId: workOwnershipType === WorkOwnershipType.PARTNER_2_PRIVATE ? "P-002" : workOwnershipType === WorkOwnershipType.PARTNER_1_PRIVATE ? "P-001" : undefined,
+        partnerDeductionRate: Number(partnerDeductionRate) || 0
+      });
+    } catch (err: any) {
+      console.error("❌ Error adding repair order to Supabase:", err);
+      setIsSubmitting(false);
+      setValidationError(`⚠️ فشل حفظ أمر الصيانة في قاعدة البيانات Supabase: ${err?.message || "خطأ غير معروف"}`);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
 
     setIsSubmitting(false);
 

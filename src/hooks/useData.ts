@@ -41,6 +41,13 @@ import {
   getLocalInvoicesBackup
 } from "../lib/supabaseInvoices";
 import {
+  fetchOrMigrateRepairOrders,
+  addRepairOrderToSupabase,
+  updateRepairOrderInSupabase,
+  deleteRepairOrderFromSupabase,
+  getLocalRepairOrdersBackup
+} from "../lib/supabaseRepairOrders";
+import {
   Customer,
   RepairOrder,
   Product,
@@ -157,40 +164,95 @@ export function useCustomers() {
 
 export function useRepairOrders() {
   const trigger = useDbTrigger();
-  const [orders, setOrders] = useState<RepairOrder[]>([]);
+  const [orders, setOrders] = useState<RepairOrder[]>(getLocalRepairOrdersBackup());
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setOrders(db.getRepairOrders());
+    let active = true;
+
+    fetchOrMigrateRepairOrders()
+      .then(res => {
+        if (active) {
+          setOrders(res.orders);
+          setLoading(false);
+          if (!res.success && res.error) {
+            setError(res.error);
+          } else {
+            setError(null);
+          }
+        }
+      })
+      .catch(err => {
+        if (active) {
+          console.warn("⚠️ Error fetching repair orders from Supabase:", err);
+          setError(err?.message || "تعذر الاتصال بـ Supabase لقراءة أوامر الصيانة");
+          setOrders(getLocalRepairOrdersBackup());
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
   }, [trigger]);
 
-  const addRepairOrder = (order: Omit<RepairOrder, "id" | "receivedDate" | "trackingToken">) => {
-    return db.addRepairOrder(order);
+  const addRepairOrder = async (
+    order: Omit<RepairOrder, "id" | "receivedDate" | "trackingToken">,
+    currentUser?: User
+  ) => {
+    const created = await addRepairOrderToSupabase(order, currentUser);
+    setOrders(prev => [created, ...prev.filter(o => o.id !== created.id)]);
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_orders' } }));
+    return created;
   };
 
-  const updateRepairOrder = (order: RepairOrder) => {
-    db.updateRepairOrder(order);
+  const updateRepairOrder = async (order: RepairOrder, currentUser?: User) => {
+    const updated = await updateRepairOrderInSupabase(order, currentUser);
+    setOrders(prev => prev.map(o => o.id === updated.id ? updated : o));
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_orders' } }));
+    return updated;
   };
 
-  const deleteRepairOrder = (id: string) => {
-    return db.deleteRepairOrder(id);
+  const deleteRepairOrder = async (id: string, currentUser?: User) => {
+    const res = await deleteRepairOrderFromSupabase(id, currentUser);
+    if (res.success) {
+      setOrders(prev => prev.filter(o => o.id !== id));
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_orders' } }));
+    }
+    return res;
   };
 
-  const deliverRepairOrder = (params: {
+  const deliverRepairOrder = async (params: {
     orderId: string;
     paymentNow: number;
     paymentMethod: PaymentMethod | string;
     deliveryNotes?: string;
     currentUser: User;
   }) => {
-    return db.deliverRepairOrder(params);
+    const res = db.deliverRepairOrder(params);
+    if (res.success && res.order) {
+      await updateRepairOrderInSupabase(res.order, params.currentUser).catch(err => {
+        console.warn("Could not sync delivery status to Supabase:", err);
+      });
+    }
+    return res;
   };
 
-  const reopenRepairOrder = (orderId: string, currentUser: User, reason: string) => {
-    return db.reopenRepairOrder(orderId, currentUser, reason);
+  const reopenRepairOrder = async (orderId: string, currentUser: User, reason: string) => {
+    const res = db.reopenRepairOrder(orderId, currentUser, reason);
+    if (res.success && res.order) {
+      await updateRepairOrderInSupabase(res.order, currentUser).catch(err => {
+        console.warn("Could not sync reopen status to Supabase:", err);
+      });
+    }
+    return res;
   };
 
   return {
     orders,
+    loading,
+    error,
     addRepairOrder,
     updateRepairOrder,
     deleteRepairOrder,

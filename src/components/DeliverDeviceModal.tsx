@@ -35,7 +35,7 @@ interface DeliverDeviceModalProps {
     paymentNow: number;
     paymentMethod: PaymentMethod | string;
     deliveryNotes: string;
-  }) => { success: boolean; error?: string; order?: RepairOrder; invoice?: Invoice };
+  }) => { success: boolean; error?: string; order?: RepairOrder; invoice?: Invoice } | Promise<{ success: boolean; error?: string; order?: RepairOrder; invoice?: Invoice }>;
   onOpenReceiptPrint: (order: RepairOrder, invoice?: Invoice) => void;
 }
 
@@ -79,7 +79,7 @@ export default function DeliverDeviceModal({
 
   const remainingAfterPayment = Math.max(0, remainingDue - (Number(paymentNow) || 0));
 
-  const handleDeliverSubmit = (e: React.FormEvent) => {
+  const handleDeliverSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
 
@@ -107,7 +107,7 @@ export default function DeliverDeviceModal({
     setIsSubmitting(true);
 
     try {
-      const res = onConfirmDelivery({
+      const res = await onConfirmDelivery({
         paymentNow: Number(paymentNow) || 0,
         paymentMethod,
         deliveryNotes

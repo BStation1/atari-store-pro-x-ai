@@ -16,7 +16,7 @@ interface ReopenOrderModalProps {
   order: RepairOrder;
   customer?: Customer;
   currentUser: User;
-  onConfirmReopen: (orderId: string, reason: string) => { success: boolean; error?: string; order?: RepairOrder };
+  onConfirmReopen: (orderId: string, reason: string) => { success: boolean; error?: string; order?: RepairOrder } | Promise<{ success: boolean; error?: string; order?: RepairOrder }>;
 }
 
 export default function ReopenOrderModal({
@@ -53,7 +53,7 @@ export default function ReopenOrderModal({
     setIsSubmitting(true);
 
     try {
-      const res = onConfirmReopen(order.id, reopenReason.trim());
+      const res = await onConfirmReopen(order.id, reopenReason.trim());
       if (res.success) {
         await dialog.alert({
           message: `تمت إعادة فتح أمر الصيانة [${order.id}] بنجاح! يمكنك الآن تعديل بياناته ثم إعادة تسليمه.`,

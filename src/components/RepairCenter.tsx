@@ -80,7 +80,7 @@ export default function RepairCenter({
     });
 
     if (confirmed) {
-      const res = deleteRepairOrder(orderId);
+      const res = await deleteRepairOrder(orderId, currentLoggedUser || undefined);
       if (res.success) {
         if (selectedOrder?.id === orderId) {
           setSelectedOrder(null);
@@ -591,8 +591,8 @@ ${trackingLink}
           customer={customers.find(c => c.id === selectedOrder.customerId)}
           currentUser={currentUserForAction}
           invoices={invoices}
-          onConfirmDelivery={params => {
-            const res = deliverRepairOrder({
+          onConfirmDelivery={async params => {
+            const res = await deliverRepairOrder({
               ...params,
               orderId: selectedOrder.id,
               currentUser: currentUserForAction
@@ -618,8 +618,8 @@ ${trackingLink}
           order={selectedOrder}
           customer={customers.find(c => c.id === selectedOrder.customerId)}
           currentUser={currentUserForAction}
-          onConfirmReopen={(orderId, reason) => {
-            const res = reopenRepairOrder(orderId, currentUserForAction, reason);
+          onConfirmReopen={async (orderId, reason) => {
+            const res = await reopenRepairOrder(orderId, currentUserForAction, reason);
             if (res.success && res.order) {
               setSelectedOrder(res.order);
             }
