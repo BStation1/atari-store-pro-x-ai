@@ -1,13 +1,28 @@
 import { createClient } from '@supabase/supabase-js';
 
 // Access Supabase credentials from Vite environment variables safely
-const env = ((import.meta as unknown) as { env: Record<string, string | undefined> }).env || {};
-const supabaseUrl = env.VITE_SUPABASE_URL || env.VITE_SUPABASE_PROJECT_URL || '';
-const supabaseKey = env.VITE_SUPABASE_PUBLISHABLE_KEY || env.VITE_SUPABASE_ANON_KEY || '';
+const metaEnv = ((import.meta as any).env || {}) as Record<string, string | undefined>;
 
-if (!supabaseUrl || !supabaseKey) {
+const supabaseUrl =
+  metaEnv.VITE_SUPABASE_URL ||
+  metaEnv.VITE_SUPABASE_PROJECT_URL ||
+  '';
+
+const supabaseKey =
+  metaEnv.VITE_SUPABASE_PUBLISHABLE_KEY ||
+  metaEnv.VITE_SUPABASE_ANON_KEY ||
+  '';
+
+export const isSupabaseConfigured = Boolean(
+  supabaseUrl &&
+  supabaseKey &&
+  supabaseUrl !== 'https://placeholder.supabase.co' &&
+  !supabaseUrl.includes('placeholder')
+);
+
+if (!isSupabaseConfigured) {
   console.warn(
-    '⚠️ Supabase credentials missing! Please configure VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in environment variables.'
+    '⚠️ Supabase credentials missing! Please configure VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in Vercel Environment Variables.'
   );
 }
 

@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { db } from "./lib/db";
 import { authStore } from "./lib/authStore";
+import { isSupabaseConfigured } from "./lib/supabaseClient";
 import { hasPermission, getViewRequiredPermission, ROLE_LABELS_AR } from "./lib/authPermissions";
 import { useCurrentUser, useSettings, useProducts, useRepairOrders } from "./hooks/useData";
 
@@ -205,11 +206,21 @@ function MainApp() {
     setAuthError(null);
 
     try {
+      if (!isSupabaseConfigured) {
+        // If Supabase environment variables are missing, fallback to local operational mode without crash
+        setHasOwner(true);
+        setIsAuthChecking(false);
+        return;
+      }
+
       // 1. Verify Supabase Auth session first
       const sessionRes = await authStore.validateAndSyncSession();
 
       if (sessionRes.error) {
-        setAuthError(sessionRes.error);
+        const cleanErr = (sessionRes.error.includes('fetch') || sessionRes.error.includes('TypeError'))
+          ? "تعذر الاتصال بقاعدة البيانات Supabase. يرجى التحقق من إعدادات VITE_SUPABASE_URL و VITE_SUPABASE_PUBLISHABLE_KEY في Vercel ثم إعادة النشر (Redeploy)."
+          : sessionRes.error;
+        setAuthError(cleanErr);
         setIsAuthChecking(false);
         return;
       }
@@ -223,7 +234,12 @@ function MainApp() {
       }
     } catch (err: any) {
       console.warn("⚠️ Error verifying auth and owner in Supabase:", err);
-      setAuthError(err?.message || "حدث خطأ أثناء الاتصال بخادم المصادقة.");
+      const raw = String(err?.message || err || '');
+      if (raw.includes('fetch') || raw.includes('TypeError')) {
+        setAuthError("تعذر الاتصال بقاعدة البيانات Supabase (TypeError: Failed to fetch). يرجى التأكد من ضبط VITE_SUPABASE_URL و VITE_SUPABASE_PUBLISHABLE_KEY في إعدادات Vercel ثم إعادة النشر.");
+      } else {
+        setAuthError(err?.message || "حدث خطأ أثناء الاتصال بخادم المصادقة.");
+      }
     } finally {
       setIsAuthChecking(false);
     }
@@ -514,6 +530,17 @@ function MainApp() {
 
       {/* 3. Main Content Container Panel */}
       <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
+        {!isSupabaseConfigured && (
+          <div className="bg-amber-950/80 border-b border-amber-500/30 text-amber-200 text-xs py-2.5 px-6 flex items-center justify-between font-sans shadow-md dir-rtl">
+            <div className="flex items-center gap-2.5">
+              <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>
+                <strong>تنبيه إعدادات Supabase مفقودة:</strong> لم يتم العثور على <code className="bg-black/40 px-1.5 py-0.5 rounded text-amber-300 font-mono">VITE_SUPABASE_URL</code> أو <code className="bg-black/40 px-1.5 py-0.5 rounded text-amber-300 font-mono">VITE_SUPABASE_PUBLISHABLE_KEY</code>. يرجى إضافتها في Vercel Project Settings → Environment Variables ثم إجراء <strong>Redeploy</strong>.
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Top Header navbar */}
         <header className="bg-[#11131e]/50 border-b border-[#2a2d42]/50 px-6 py-4 flex items-center justify-between backdrop-blur-md sticky top-0 z-30">
           <div className="flex items-center gap-4">
