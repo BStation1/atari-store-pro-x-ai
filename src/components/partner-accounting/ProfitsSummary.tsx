@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import { RepairOrder, WorkOwnershipType, Invoice } from '../../types';
 import { formatDateISO, roundMoney } from '../../lib/finalReportsEngine';
-import { useRepairPartUsages, useInvoices } from '../../hooks/useData';
+import { useRepairPartUsages, useInvoices, useProducts } from '../../hooks/useData';
 
 interface ProfitsSummaryProps {
   orders: RepairOrder[];
@@ -40,7 +40,22 @@ export interface WithdrawnItemDetail {
   customerName: string;
   date: string;
   ownership: WorkOwnershipType;
+  partyLabel: 'SHOP' | 'AHMED' | 'ABDO';
+  partyNameArabic: string;
   sourceType: 'REPAIR_ORDER' | 'DIRECT_INVOICE';
+}
+
+export interface AggregatedItem {
+  partName: string;
+  totalQuantity: number;
+  totalCost: number;
+  minUnitCost: number;
+  maxUnitCost: number;
+  avgUnitCost: number;
+  shopQty: number;
+  ahmedQty: number;
+  abdoQty: number;
+  records: WithdrawnItemDetail[];
 }
 
 export default function ProfitsSummary({
@@ -49,6 +64,7 @@ export default function ProfitsSummary({
 }: ProfitsSummaryProps) {
   const { partUsages } = useRepairPartUsages();
   const { invoices } = useInvoices();
+  const { products } = useProducts();
 
   // Current Date Helper Values
   const now = new Date();
@@ -65,6 +81,7 @@ export default function ProfitsSummary({
   // UI Modals & Expanders
   const [isWithdrawnModalOpen, setIsWithdrawnModalOpen] = useState(false);
   const [modalSearchQuery, setModalSearchQuery] = useState('');
+  const [selectedItemForDetail, setSelectedItemForDetail] = useState<AggregatedItem | null>(null);
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
 
   // Parse Month/Year for display
@@ -200,85 +217,170 @@ export default function ProfitsSummary({
     };
   });
 
-  // 2. Extract All Withdrawn Inventory Items across filtered orders & invoices
-  const withdrawnItemsList: WithdrawnItemDetail[] = [];
+  // 2. Extract ALL Raw Withdrawn Inventory Items across repair orders and direct sales invoices
+  const allWithdrawalTransactions: WithdrawnItemDetail[] = [];
 
-  // A. From Repair Orders
-  filteredOrders.forEach((o) => {
-    const orderNum = (o as any).orderNumber || o.id;
-    const customerName = o.customerNameSnapshot || o.guestCustomerName || 'عميل نقدي';
-    const date = formatDateISO(o.receivedDate);
-    const ownership = o.jobType || o.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
+  // A. From Repair Part Usages (linked to repair orders)
+  partUsages.forEach((pu, puIdx) => {
+    if (pu.accountingStatus === 'RETURNED' || pu.accountingStatus === 'REVERSED') return;
 
-    const orderParts = partUsages.filter(
-      (pu) => pu.repairOrderId === o.id && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
-    );
+    const parentOrder = orders.find((o) => o.id === pu.repairOrderId);
+    const dateStr = pu.createdAt || parentOrder?.receivedDate;
+    if (!isDateInFilterRange(dateStr)) return;
 
-    if (orderParts.length > 0) {
-      orderParts.forEach((pu) => {
-        const qty = Number(pu.quantity) || 1;
-        const uCost = Number(pu.unitCost) || 0;
-        const tCost = Number(pu.totalCost) || qty * uCost;
-        withdrawnItemsList.push({
-          id: pu.id || `${o.id}-${pu.partName}`,
-          partName: pu.partName || 'قطع غيار صيانة',
-          quantity: qty,
-          unitCost: uCost,
-          totalCost: tCost,
-          refNum: `أمر #${orderNum}`,
-          customerName,
-          date,
-          ownership,
-          sourceType: 'REPAIR_ORDER'
-        });
-      });
-    } else {
-      const devicePartsCost = o.devices?.reduce((sum, d) => sum + (Number(d.partsCost) || 0), 0) || 0;
-      if (devicePartsCost > 0) {
-        withdrawnItemsList.push({
-          id: `${o.id}-devparts`,
-          partName: 'قطع غيار صيانة مسجلة بأجهزة الأوردر',
-          quantity: 1,
-          unitCost: devicePartsCost,
-          totalCost: devicePartsCost,
-          refNum: `أمر #${orderNum}`,
-          customerName,
-          date,
-          ownership,
-          sourceType: 'REPAIR_ORDER'
-        });
-      }
+    // Real Item Name from Supabase (partName, or product name lookup)
+    const matchedProduct = products.find((prod) => prod.id === pu.inventoryItemId || prod.sku === pu.sku);
+    const realPartName = (
+      pu.partName ||
+      matchedProduct?.name ||
+      matchedProduct?.nameAr ||
+      pu.sku ||
+      ''
+    ).trim();
+
+    if (!realPartName) return; // Skip records with no real name
+
+    // Determine responsible party
+    let ownership = pu.ownershipType;
+    if (!ownership && parentOrder) {
+      ownership = parentOrder.jobType || parentOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
     }
+    if (!ownership) ownership = WorkOwnershipType.CUSTOMER_SHARED;
+
+    let partyLabel: 'SHOP' | 'AHMED' | 'ABDO' = 'SHOP';
+    if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE || pu.responsiblePartnerId === 'P-001') {
+      partyLabel = 'AHMED';
+    } else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE || pu.responsiblePartnerId === 'P-002') {
+      partyLabel = 'ABDO';
+    }
+
+    const qty = Number(pu.quantity) || 1;
+    const uCost = Number(pu.unitCost) || 0;
+    const tCost = Number(pu.totalCost) || qty * uCost;
+
+    const orderNum = (parentOrder as any)?.orderNumber || pu.repairOrderId || 'صيانة';
+    const customerName = parentOrder?.customerNameSnapshot || parentOrder?.guestCustomerName || 'عميل صيانة';
+
+    allWithdrawalTransactions.push({
+      id: pu.id || `pu-${pu.repairOrderId}-${realPartName}-${puIdx}`,
+      partName: realPartName,
+      quantity: qty,
+      unitCost: uCost,
+      totalCost: tCost,
+      refNum: `أمر صيانة #${orderNum}`,
+      customerName,
+      date: formatDateISO(dateStr),
+      ownership,
+      partyLabel,
+      partyNameArabic: partyLabel === 'AHMED' ? 'أحمد' : partyLabel === 'ABDO' ? 'عبده' : 'المحل',
+      sourceType: 'REPAIR_ORDER'
+    });
   });
 
-  // B. From Direct Sales Invoices (if applicable)
+  // B. From Direct Sales Invoices (Prevent duplication: exclude invoices linked to repair orders)
   invoices.forEach((inv) => {
-    if (!isDateInFilterRange(inv.createdAt)) return;
-    const invOwnership = WorkOwnershipType.CUSTOMER_SHARED;
-    if (!matchesPartyFilter(invOwnership)) return;
+    if (inv.isCancelled) return;
+    if (inv.orderId || inv.type === 'repair') return; // Deduplication rule
+
+    const dateStr = inv.date || inv.createdAt;
+    if (!isDateInFilterRange(dateStr)) return;
 
     if (inv.items && inv.items.length > 0) {
       inv.items.forEach((item, idx) => {
-        const qty = Number(item.quantity) || 1;
-        const uCost = Number((item as any).costPrice) || Number(item.unitPrice) * 0.7; // fallback
-        const tCost = uCost * qty;
-        if (tCost > 0) {
-          withdrawnItemsList.push({
-            id: `inv-${inv.id}-${idx}`,
-            partName: item.productName || item.description || 'بضاعة مبيعات',
-            quantity: qty,
-            unitCost: uCost,
-            totalCost: tCost,
-            refNum: `فاتورة #${inv.invoiceNumber || inv.id}`,
-            customerName: inv.customerName || 'عميل مبيعات',
-            date: formatDateISO(inv.createdAt),
-            ownership: invOwnership,
-            sourceType: 'DIRECT_INVOICE'
-          });
+        const realPartName = (
+          item.name ||
+          (item as any).productName ||
+          (item as any).description ||
+          ''
+        ).trim();
+
+        if (!realPartName) return;
+
+        const stockOwnership = item.stockOwnership;
+        let partyLabel: 'SHOP' | 'AHMED' | 'ABDO' = 'SHOP';
+        let ownership = WorkOwnershipType.CUSTOMER_SHARED;
+
+        if (stockOwnership === 'AHMED') {
+          partyLabel = 'AHMED';
+          ownership = WorkOwnershipType.PARTNER_1_PRIVATE;
+        } else if (stockOwnership === 'ABDO') {
+          partyLabel = 'ABDO';
+          ownership = WorkOwnershipType.PARTNER_2_PRIVATE;
         }
+
+        const qty = Number(item.quantity) || 1;
+        const uCost = Number((item as any).costPrice) || (Number((item as any).price || item.unitPrice) * 0.7);
+        const tCost = qty * uCost;
+
+        const invNum = (inv as any).invoiceNumber || inv.id;
+        const customerName = (inv as any).customerNameSnapshot || inv.guestCustomerName || (inv as any).customerName || 'عميل مبيعات';
+
+        allWithdrawalTransactions.push({
+          id: `inv-${inv.id}-${idx}`,
+          partName: realPartName,
+          quantity: qty,
+          unitCost: uCost,
+          totalCost: tCost,
+          refNum: `فاتورة مبيعات #${invNum}`,
+          customerName,
+          date: formatDateISO(dateStr),
+          ownership,
+          partyLabel,
+          partyNameArabic: partyLabel === 'AHMED' ? 'أحمد' : partyLabel === 'ABDO' ? 'عبده' : 'المحل',
+          sourceType: 'DIRECT_INVOICE'
+        });
       });
     }
   });
+
+  // Filter raw withdrawal transactions by selected party
+  const withdrawnItemsList = allWithdrawalTransactions.filter((tx) => {
+    if (partyFilter === 'ALL') return true;
+    return tx.partyLabel === partyFilter;
+  });
+
+  // Group by real Item Name (اسم الصنف)
+  const aggregatedItemsMap = new Map<string, AggregatedItem>();
+
+  withdrawnItemsList.forEach((tx) => {
+    const key = tx.partName;
+    let aggregated = aggregatedItemsMap.get(key);
+    if (!aggregated) {
+      aggregated = {
+        partName: key,
+        totalQuantity: 0,
+        totalCost: 0,
+        minUnitCost: tx.unitCost,
+        maxUnitCost: tx.unitCost,
+        avgUnitCost: 0,
+        shopQty: 0,
+        ahmedQty: 0,
+        abdoQty: 0,
+        records: []
+      };
+      aggregatedItemsMap.set(key, aggregated);
+    }
+
+    aggregated.totalQuantity += tx.quantity;
+    aggregated.totalCost += tx.totalCost;
+    aggregated.minUnitCost = Math.min(aggregated.minUnitCost, tx.unitCost);
+    aggregated.maxUnitCost = Math.max(aggregated.maxUnitCost, tx.unitCost);
+
+    if (tx.partyLabel === 'SHOP') aggregated.shopQty += tx.quantity;
+    if (tx.partyLabel === 'AHMED') aggregated.ahmedQty += tx.quantity;
+    if (tx.partyLabel === 'ABDO') aggregated.abdoQty += tx.quantity;
+
+    aggregated.records.push(tx);
+  });
+
+  const aggregatedItemsList = Array.from(aggregatedItemsMap.values()).map((item) => {
+    item.avgUnitCost = item.totalQuantity > 0 ? roundMoney(item.totalCost / item.totalQuantity) : 0;
+    item.records.sort((a, b) => b.date.localeCompare(a.date));
+    return item;
+  });
+
+  // Sort aggregated items by total quantity descending
+  aggregatedItemsList.sort((a, b) => b.totalQuantity - a.totalQuantity);
 
   // Withdrawn Inventory Aggregations
   const totalWithdrawnQty = withdrawnItemsList.reduce((sum, i) => sum + i.quantity, 0);
@@ -848,10 +950,10 @@ export default function ProfitsSummary({
         </div>
       </div>
 
-      {/* MODAL: DETAILED WITHDRAWN INVENTORY REPORT (Requirement 3) */}
+      {/* MODAL: AGGREGATED WITHDRAWN INVENTORY REPORT */}
       {isWithdrawnModalOpen && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 dir-rtl text-right overflow-y-auto">
-          <div className="bg-[#11131e] border border-[#2a2d42] rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+          <div className="bg-[#11131e] border border-[#2a2d42] rounded-2xl w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
             {/* Modal Header */}
             <div className="p-4 border-b border-[#2a2d42] flex items-center justify-between bg-[#141724]">
               <div className="flex items-center gap-2.5">
@@ -860,118 +962,312 @@ export default function ProfitsSummary({
                 </div>
                 <div>
                   <h3 className="text-base font-black text-white flex items-center gap-2">
-                    تقرير البضاعة المسحوبة بالتفصيل
-                    <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                    تقرير البضاعة المسحوبة التجميعي حسب نوع الصنف
+                    <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30">
                       {partyFilter === 'ALL' ? 'جميع الأطراف' : partyFilter === 'SHOP' ? 'شغل المحل' : partyFilter === 'AHMED' ? 'شغل أحمد' : 'شغل عبده'}
                     </span>
                   </h3>
                   <p className="text-xs text-gray-400">
-                    قائمة تفصيلية بكافة البضائع والقطع المسحوبة من المخزن بناءً على الفلاتر المحددة
+                    تقرير تجميعي يظهر كل صنف مسحوب مرة واحدة فقط مع مجموع الكميات المسحوبة والتكلفة الإجمالية
                   </p>
                 </div>
               </div>
 
               <button
-                onClick={() => setIsWithdrawnModalOpen(false)}
+                onClick={() => {
+                  setIsWithdrawnModalOpen(false);
+                  setSelectedItemForDetail(null);
+                }}
                 className="p-2 text-gray-400 hover:text-white bg-[#1a1d2d] hover:bg-[#25293e] rounded-xl transition cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Modal Search Bar */}
-            <div className="p-4 border-b border-[#2a2d42] bg-[#161928] flex items-center gap-3">
-              <div className="relative flex-1">
+            {/* Modal Search Bar & Party Filter Indicator */}
+            <div className="p-4 border-b border-[#2a2d42] bg-[#161928] flex flex-wrap items-center justify-between gap-3">
+              <div className="relative flex-1 min-w-[240px]">
                 <Search className="w-4 h-4 text-gray-400 absolute right-3 top-3" />
                 <input
                   type="text"
-                  placeholder="ابحث باسم المنتج، رقم الأوردر، أو اسم العميل..."
+                  placeholder="ابحث باسم الصنف، أو رقم الأوردر/الفاتورة..."
                   value={modalSearchQuery}
                   onChange={(e) => setModalSearchQuery(e.target.value)}
                   className="w-full bg-[#11131e] border border-[#2a2d42] text-white text-xs pr-9 pl-4 py-2.5 rounded-xl outline-none focus:border-rose-500/50"
                 />
               </div>
-              <span className="text-xs font-bold text-gray-400">
-                النتائج: <strong className="text-rose-400">{modalFilteredItems.length}</strong> صنف
-              </span>
+
+              <div className="flex items-center gap-2 text-xs font-bold text-gray-300">
+                <span>الطرف المختار:</span>
+                <div className="flex bg-[#11131e] p-1 rounded-xl border border-[#2a2d42]">
+                  <button
+                    onClick={() => setPartyFilter('ALL')}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                      partyFilter === 'ALL' ? 'bg-rose-600 text-white' : 'text-gray-400 hover:text-white'
+                    }`}
+                  >
+                    الكل
+                  </button>
+                  <button
+                    onClick={() => setPartyFilter('SHOP')}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                      partyFilter === 'SHOP' ? 'bg-purple-600 text-white' : 'text-gray-400 hover:text-white'
+                    }`}
+                  >
+                    المحل
+                  </button>
+                  <button
+                    onClick={() => setPartyFilter('AHMED')}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                      partyFilter === 'AHMED' ? 'bg-cyan-600 text-white' : 'text-gray-400 hover:text-white'
+                    }`}
+                  >
+                    أحمد
+                  </button>
+                  <button
+                    onClick={() => setPartyFilter('ABDO')}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                      partyFilter === 'ABDO' ? 'bg-amber-600 text-white' : 'text-gray-400 hover:text-white'
+                    }`}
+                  >
+                    عبده
+                  </button>
+                </div>
+              </div>
             </div>
 
-            {/* Modal Table Content */}
+            {/* Modal Primary Aggregated Table Content */}
             <div className="overflow-y-auto flex-1 p-4">
-              <table className="w-full text-xs text-right text-gray-300 border-collapse">
-                <thead className="bg-[#181b2a] text-gray-400 font-semibold border-b border-[#2a2d42] sticky top-0">
-                  <tr>
-                    <th className="p-3">اسم المنتج / قطعة الغيار</th>
-                    <th className="p-3 text-center">الكمية المسحوبة</th>
-                    <th className="p-3">سعر التكلفة للوحدة</th>
-                    <th className="p-3 text-rose-400 font-bold">إجمالي تكلفة الصنف</th>
-                    <th className="p-3">رقم الفاتورة / أمر الصيانة</th>
-                    <th className="p-3">اسم العميل</th>
-                    <th className="p-3">التاريخ</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#1f2937]">
-                  {modalFilteredItems.length > 0 ? (
-                    modalFilteredItems.map((item, idx) => (
-                      <tr key={item.id || idx} className="hover:bg-[#161927] transition">
-                        <td className="p-3 font-bold text-white flex items-center gap-2">
-                          <Box className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-                          <span>{item.partName}</span>
-                        </td>
-                        <td className="p-3 font-extrabold text-cyan-300 text-center text-sm">
-                          {item.quantity}
-                        </td>
-                        <td className="p-3 text-gray-300">
-                          {item.unitCost.toLocaleString('ar-EG')} {currencySymbol}
-                        </td>
-                        <td className="p-3 font-black text-rose-300 text-sm">
-                          {item.totalCost.toLocaleString('ar-EG')} {currencySymbol}
-                        </td>
-                        <td className="p-3 font-mono font-bold text-indigo-300">
-                          {item.refNum}
-                        </td>
-                        <td className="p-3 font-semibold text-white">
-                          {item.customerName}
-                        </td>
-                        <td className="p-3 text-gray-400 whitespace-nowrap">
-                          {item.date}
-                        </td>
+              {(() => {
+                const filteredAggregated = aggregatedItemsList.filter((item) => {
+                  if (!modalSearchQuery.trim()) return true;
+                  const query = modalSearchQuery.toLowerCase();
+                  return (
+                    item.partName.toLowerCase().includes(query) ||
+                    item.records.some(
+                      (r) =>
+                        r.refNum.toLowerCase().includes(query) ||
+                        r.customerName.toLowerCase().includes(query)
+                    )
+                  );
+                });
+
+                return (
+                  <table className="w-full text-xs text-right text-gray-300 border-collapse">
+                    <thead className="bg-[#181b2a] text-gray-400 font-semibold border-b border-[#2a2d42] sticky top-0">
+                      <tr>
+                        <th className="p-3">اسم الصنف</th>
+                        <th className="p-3 text-center">إجمالي الكمية المسحوبة</th>
+                        <th className="p-3">سعر التكلفة للوحدة</th>
+                        <th className="p-3 text-rose-400 font-bold">إجمالي تكلفة الصنف</th>
+                        <th className="p-3 text-center">التفاصيل والحركات</th>
                       </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={7} className="p-8 text-center text-gray-500">
-                        لا توجد بضاعة مسحوبة مطابقة للبحث أو الفلتر المختار
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                    </thead>
+                    <tbody className="divide-y divide-[#1f2937]">
+                      {filteredAggregated.length > 0 ? (
+                        filteredAggregated.map((item, idx) => {
+                          const hasMultipleCosts = item.minUnitCost !== item.maxUnitCost;
+                          return (
+                            <tr key={idx} className="hover:bg-[#161927] transition">
+                              <td className="p-3 font-bold text-white flex items-center gap-2">
+                                <Box className="w-4 h-4 text-rose-400 shrink-0" />
+                                <span className="text-sm">{item.partName}</span>
+                              </td>
+                              <td className="p-3 font-extrabold text-cyan-300 text-center text-sm">
+                                {item.totalQuantity} قطعة
+                              </td>
+                              <td className="p-3 text-gray-300">
+                                {hasMultipleCosts ? (
+                                  <span className="text-amber-300 font-medium">
+                                    {item.minUnitCost.toLocaleString('ar-EG')} - {item.maxUnitCost.toLocaleString('ar-EG')} {currencySymbol} (متوسط: {item.avgUnitCost.toLocaleString('ar-EG')})
+                                  </span>
+                                ) : (
+                                  <span>
+                                    {item.minUnitCost.toLocaleString('ar-EG')} {currencySymbol}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="p-3 font-black text-rose-300 text-sm">
+                                {item.totalCost.toLocaleString('ar-EG')} {currencySymbol}
+                              </td>
+                              <td className="p-3 text-center">
+                                <button
+                                  onClick={() => setSelectedItemForDetail(item)}
+                                  className="px-3 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 rounded-xl font-bold transition flex items-center gap-1.5 mx-auto cursor-pointer"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                  <span>عرض الحركات ({item.records.length})</span>
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      ) : (
+                        <tr>
+                          <td colSpan={5} className="p-8 text-center text-gray-500">
+                            لا توجد أصناف بضاعة مسحوبة مطابقة للبحث أو الفلتر المختار
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                );
+              })()}
             </div>
 
             {/* Modal Footer Summary */}
             <div className="p-4 border-t-2 border-[#2a2d42] bg-[#141724] flex flex-wrap items-center justify-between gap-4">
               <div className="flex items-center gap-4">
                 <div className="bg-[#1a1d2d] border border-[#2a2d42] px-3.5 py-2 rounded-xl">
-                  <span className="text-[10px] text-gray-400 font-bold block">إجمالي عدد القطع:</span>
+                  <span className="text-[10px] text-gray-400 font-bold block">إجمالي عدد الأصناف:</span>
+                  <span className="text-sm font-black text-white">
+                    {aggregatedItemsList.length} صنف
+                  </span>
+                </div>
+
+                <div className="bg-[#1a1d2d] border border-cyan-500/30 px-3.5 py-2 rounded-xl">
+                  <span className="text-[10px] text-cyan-300 font-bold block">إجمالي عدد القطع:</span>
                   <span className="text-sm font-black text-cyan-300">
-                    {modalFilteredItems.reduce((sum, i) => sum + i.quantity, 0)} قطعة
+                    {totalWithdrawnQty} قطعة
                   </span>
                 </div>
 
                 <div className="bg-[#1a1d2d] border border-rose-500/30 px-3.5 py-2 rounded-xl">
                   <span className="text-[10px] text-rose-300 font-bold block">إجمالي تكلفة البضاعة:</span>
                   <span className="text-sm font-black text-rose-400">
-                    {roundMoney(modalFilteredItems.reduce((sum, i) => sum + i.totalCost, 0)).toLocaleString('ar-EG')} {currencySymbol}
+                    {totalWithdrawnCost.toLocaleString('ar-EG')} {currencySymbol}
                   </span>
                 </div>
               </div>
 
               <button
-                onClick={() => setIsWithdrawnModalOpen(false)}
+                onClick={() => {
+                  setIsWithdrawnModalOpen(false);
+                  setSelectedItemForDetail(null);
+                }}
                 className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl transition cursor-pointer"
               >
                 إغلاق التقرير
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SUB-MODAL: ITEM DRILL-DOWN TRANSACTIONS DETAIL */}
+      {selectedItemForDetail && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[60] flex items-center justify-center p-4 dir-rtl text-right overflow-y-auto">
+          <div className="bg-[#11131e] border border-rose-500/40 rounded-2xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            {/* Header */}
+            <div className="p-4 border-b border-[#2a2d42] flex items-center justify-between bg-[#161828]">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-rose-500/20 border border-rose-500/40 rounded-xl text-rose-400">
+                  <Box className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white flex items-center gap-2">
+                    تفاصيل حركات الصنف: <span className="text-rose-400">{selectedItemForDetail.partName}</span>
+                  </h3>
+                  <p className="text-xs text-gray-400">
+                    السجلات الفردية والفواتير التي تم سحب هذا الصنف لحسابها
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setSelectedItemForDetail(null)}
+                className="p-2 text-gray-400 hover:text-white bg-[#1a1d2d] hover:bg-[#25293e] rounded-xl transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Summary badges */}
+            <div className="p-3 bg-[#161928] border-b border-[#2a2d42] flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-3">
+                <span className="bg-[#11131e] border border-[#2a2d42] px-3 py-1.5 rounded-xl text-gray-300 font-bold">
+                  إجمالي الكمية: <strong className="text-cyan-300">{selectedItemForDetail.totalQuantity} قطعة</strong>
+                </span>
+                <span className="bg-[#11131e] border border-[#2a2d42] px-3 py-1.5 rounded-xl text-gray-300 font-bold">
+                  إجمالي التكلفة: <strong className="text-rose-400">{selectedItemForDetail.totalCost.toLocaleString('ar-EG')} {currencySymbol}</strong>
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2 font-bold">
+                <span className="text-gray-400">توزيع الأطراف:</span>
+                <span className="px-2 py-0.5 rounded-lg bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                  المحل: {selectedItemForDetail.shopQty}
+                </span>
+                <span className="px-2 py-0.5 rounded-lg bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                  أحمد: {selectedItemForDetail.ahmedQty}
+                </span>
+                <span className="px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                  عبده: {selectedItemForDetail.abdoQty}
+                </span>
+              </div>
+            </div>
+
+            {/* Transactions Table */}
+            <div className="overflow-y-auto flex-1 p-4">
+              <table className="w-full text-xs text-right text-gray-300 border-collapse">
+                <thead className="bg-[#181b2a] text-gray-400 font-semibold border-b border-[#2a2d42] sticky top-0">
+                  <tr>
+                    <th className="p-3">رقم العملية / الفاتورة</th>
+                    <th className="p-3">العميل</th>
+                    <th className="p-3 text-center">الطرف المسؤول</th>
+                    <th className="p-3 text-center">الكمية</th>
+                    <th className="p-3">سعر التكلفة للوحدة</th>
+                    <th className="p-3 text-rose-400 font-bold">إجمالي التكلفة</th>
+                    <th className="p-3">التاريخ</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#1f2937]">
+                  {selectedItemForDetail.records.map((rec, rIdx) => (
+                    <tr key={rec.id || rIdx} className="hover:bg-[#161927] transition">
+                      <td className="p-3 font-mono font-bold text-indigo-300">
+                        {rec.refNum}
+                      </td>
+                      <td className="p-3 font-semibold text-white">
+                        {rec.customerName}
+                      </td>
+                      <td className="p-3 text-center">
+                        <span
+                          className={`px-2.5 py-1 rounded-full text-[11px] font-extrabold border ${
+                            rec.partyLabel === 'AHMED'
+                              ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30'
+                              : rec.partyLabel === 'ABDO'
+                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                              : 'bg-purple-500/20 text-purple-300 border-purple-500/30'
+                          }`}
+                        >
+                          {rec.partyNameArabic}
+                        </span>
+                      </td>
+                      <td className="p-3 font-extrabold text-cyan-300 text-center text-sm">
+                        {rec.quantity}
+                      </td>
+                      <td className="p-3 text-gray-300">
+                        {rec.unitCost.toLocaleString('ar-EG')} {currencySymbol}
+                      </td>
+                      <td className="p-3 font-black text-rose-300 text-sm">
+                        {rec.totalCost.toLocaleString('ar-EG')} {currencySymbol}
+                      </td>
+                      <td className="p-3 text-gray-400 whitespace-nowrap">
+                        {rec.date}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Sub-modal footer */}
+            <div className="p-4 border-t border-[#2a2d42] bg-[#141724] flex items-center justify-end">
+              <button
+                onClick={() => setSelectedItemForDetail(null)}
+                className="px-5 py-2 bg-[#25293e] hover:bg-[#323752] text-white font-bold text-xs rounded-xl transition cursor-pointer"
+              >
+                رجوع للقائمة التجميعية
               </button>
             </div>
           </div>
