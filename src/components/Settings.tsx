@@ -758,7 +758,7 @@ export default function SettingsView() {
             }`}
           >
             <ShieldAlert className="w-4 h-4 text-red-500 animate-pulse" />
-            <span>إدارة بيانات النظام</span>
+            <span>حذف البيانات التجريبية وبدء نظام جديد</span>
             {(activeTab === "data-management" || activeTab === "system-reset") && <span className="absolute bottom-0 right-0 left-0 h-0.5 bg-red-500"></span>}
           </button>
         )}

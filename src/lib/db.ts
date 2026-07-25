@@ -2749,7 +2749,8 @@ export const db = {
           supabase.from('customers').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
           supabase.from('suppliers').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
           supabase.from('activity_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-          supabase.from('audit_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000')
+          supabase.from('audit_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
+          supabase.from('products').update({ quantity: 0 }).neq('id', '00000000-0000-0000-0000-000000000000')
         ]);
         error = null;
         data = {
@@ -2757,7 +2758,7 @@ export const db = {
           duration_ms: 15,
           deleted_counts: { invoices: 0, repair_orders: 0, expenses: 0 },
           retained_tables: [
-            { name: "Products", status: "محفوظة بالكامل بنفس أسعار وكميات المخزون" },
+            { name: "Products", status: "محفوظة بالكامل مع الاحتفاظ بالأسعار والبار كود وتصفير كمية المخزون (quantity = 0)" },
             { name: "Categories", status: "محفوظة بالكامل" },
             { name: "System Settings", status: "محفوظة بالكامل" }
           ]
@@ -2772,6 +2773,15 @@ export const db = {
       }
 
       if (data && data.success) {
+        // Zero out quantities in local products cache
+        try {
+          const localProds = db.getProducts();
+          if (Array.isArray(localProds) && localProds.length > 0) {
+            const zeroedProds = localProds.map(p => ({ ...p, quantity: 0 }));
+            db.saveProducts(zeroedProds);
+          }
+        } catch (_) {}
+
         // Synchronize client local state cache
         setStorageItem(KEYS.INVOICES, []);
         setStorageItem(KEYS.REPAIR_ORDERS, []);
@@ -2815,7 +2825,7 @@ export const db = {
         const retainedTablesList = Array.isArray(data.retained_tables)
           ? data.retained_tables.map((t: any) => ({ name: t.name, countOrStatus: t.status }))
           : [
-              { name: "الأصناف والمنتجات (Products)", countOrStatus: "محفوظة بالكامل بنفس أسعار وكميات المخزون" },
+              { name: "الأصناف والمنتجات (Products)", countOrStatus: "محفوظة بالكامل مع الاحتفاظ بالأسعار والبار كود وتصفير كمية المخزون (quantity = 0)" },
               { name: "الأقسام والتصنيفات (Categories)", countOrStatus: "محفوظة بالكامل" },
               { name: "إعدادات النظام (System Settings)", countOrStatus: "محفوظة بالكامل" },
               { name: "المستخدمون (Profiles/Users)", countOrStatus: "محفوظة بالكامل" },

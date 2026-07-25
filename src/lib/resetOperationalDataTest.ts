@@ -171,16 +171,16 @@ export async function runResetOperationalDataTestSuite(): Promise<ResetTestSuite
       invFinalCount === 0
     );
 
-    // Step 9: Verify Product Quantities Unchanged
+    // Step 9: Verify Product Stock Quantity Zeroed
     const { data: prodDataAfter } = await supabase.from('products').select('id, name, quantity').limit(1);
     const prodAfterQty = prodDataAfter && prodDataAfter[0] ? prodDataAfter[0].quantity : null;
 
     assertTest(
       9,
-      "تأكيد عدم تغيير كميات المنتجات والمخزون",
-      `الكمية متطابقة (${prodBeforeQty})`,
+      "تأكيد تصفير كميات المخزون للأصناف إلى 0 مع بقاء الصنف والأسعار",
+      "الكمية تساوي 0",
       `الكمية الحالية (${prodAfterQty})`,
-      prodBeforeQty === prodAfterQty
+      prodAfterQty === 0
     );
 
     // Step 10: Verify Security Log Created for Success

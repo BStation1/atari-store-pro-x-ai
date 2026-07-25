@@ -135,9 +135,12 @@ BEGIN
     DELETE FROM public.repair_orders;
     GET DIAGNOSTICS v_cnt_repair_orders = ROW_COUNT;
 
-    -- Table 11: inventory_movements (Only movements deleted, products/quantities retained)
+    -- Table 11: inventory_movements (All inventory movements deleted)
     DELETE FROM public.inventory_movements;
     GET DIAGNOSTICS v_cnt_inventory_movements = ROW_COUNT;
+
+    -- Zero out product stock quantities while preserving names, prices, barcodes, skus, categories
+    UPDATE public.products SET quantity = 0;
 
     -- Table 12: expenses
     DELETE FROM public.expenses;
@@ -197,7 +200,7 @@ BEGIN
     );
 
     v_retained_tables := jsonb_build_array(
-        jsonb_build_object('name', 'products', 'status', 'محفوظة بالكامل بنفس أسعار وكميات المخزون'),
+        jsonb_build_object('name', 'products', 'status', 'محفوظة بالكامل مع الاحتفاظ بالأسعار والبار كود وتصفير كمية المخزون (quantity = 0)'),
         jsonb_build_object('name', 'categories', 'status', 'محفوظة بالكامل'),
         jsonb_build_object('name', 'store_settings', 'status', 'محفوظة بالكامل'),
         jsonb_build_object('name', 'profiles', 'status', 'محفوظة بالكامل بنفس الصلاحيات والأدوار'),
