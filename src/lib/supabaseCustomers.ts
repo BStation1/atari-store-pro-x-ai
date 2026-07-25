@@ -31,54 +31,7 @@ export function trackDeletedCustomerId(id: string): void {
   }
 }
 
-export const DEFAULT_CUSTOMERS: Customer[] = [
-  {
-    id: "C-001",
-    name: "محمد عبد الرحمن",
-    phone: "201012345678",
-    type: CustomerType.Individual,
-    email: "m.abdo@gmail.com",
-    notes: "عميل قديم لديه أكثر من جهاز",
-    createdAt: "2026-05-01T10:00:00Z",
-    balance: 0,
-    isActive: true,
-    isArchived: false
-  },
-  {
-    id: "C-002",
-    name: "محل ألعاب التحرير",
-    phone: "201144556677",
-    type: CustomerType.Shop,
-    email: "tahrir.games@gmail.com",
-    notes: "محل صيانة خارجي يرسل أجهزة بالجملة",
-    createdAt: "2026-05-05T12:00:00Z",
-    balance: 1500,
-    isActive: true,
-    isArchived: false
-  },
-  {
-    id: "C-003",
-    name: "كابتن حازم إمام",
-    phone: "201200001111",
-    type: CustomerType.VIP,
-    email: "hazem10@vip.com",
-    notes: "صيانة مستعجلة، يفضل الاتصال مباشرة",
-    createdAt: "2026-05-10T09:30:00Z",
-    balance: 0,
-    isActive: true,
-    isArchived: false
-  },
-  {
-    id: "C-004",
-    name: "أحمد حسن",
-    phone: "201599887766",
-    type: CustomerType.Individual,
-    createdAt: "2026-05-12T14:15:00Z",
-    balance: 350,
-    isActive: true,
-    isArchived: false
-  }
-];
+export const DEFAULT_CUSTOMERS: Customer[] = [];
 
 export function getLocalCustomersBackup(): Customer[] {
   const deletedIds = getDeletedCustomerIds();
@@ -93,7 +46,7 @@ export function getLocalCustomersBackup(): Customer[] {
   } catch (e) {
     console.error('Error reading local customers backup:', e);
   }
-  return DEFAULT_CUSTOMERS.filter(c => !deletedIds.has(c.id));
+  return [];
 }
 
 export function saveLocalCustomersBackup(data: Customer[], dispatchEvent = true): void {

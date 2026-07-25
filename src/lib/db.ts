@@ -164,46 +164,7 @@ const DEFAULT_SETTINGS: SystemSettings = {
   currency: "ج.م."
 };
 
-const DEFAULT_CUSTOMERS: Customer[] = [
-  {
-    id: "C-001",
-    name: "محمد عبد الرحمن",
-    phone: "201012345678",
-    type: CustomerType.Individual,
-    email: "m.abdo@gmail.com",
-    notes: "عميل قديم لديه أكثر من جهاز",
-    createdAt: "2026-05-01T10:00:00Z",
-    balance: 0
-  },
-  {
-    id: "C-002",
-    name: "محل ألعاب التحرير",
-    phone: "201144556677",
-    type: CustomerType.Shop,
-    email: "tahrir.games@gmail.com",
-    notes: "محل صيانة خارجي يرسل أجهزة بالجملة",
-    createdAt: "2026-05-05T12:00:00Z",
-    balance: 1500
-  },
-  {
-    id: "C-003",
-    name: "كابتن حازم إمام",
-    phone: "201200001111",
-    type: CustomerType.VIP,
-    email: "hazem10@vip.com",
-    notes: "صيانة مستعجلة، يفضل الاتصال مباشرة",
-    createdAt: "2026-05-10T09:30:00Z",
-    balance: 0
-  },
-  {
-    id: "C-004",
-    name: "أحمد حسن",
-    phone: "201599887766",
-    type: CustomerType.Individual,
-    createdAt: "2026-05-12T14:15:00Z",
-    balance: 350
-  }
-];
+const DEFAULT_CUSTOMERS: Customer[] = [];
 
 const DEFAULT_PRODUCTS: Product[] = [
   {
@@ -268,178 +229,15 @@ const DEFAULT_PRODUCTS: Product[] = [
   }
 ];
 
-const DEFAULT_SUPPLIERS: Supplier[] = [
-  {
-    id: "S-001",
-    name: "تكنو كونسول للاستيراد",
-    phone: "201088889999",
-    company: "تكنو كونسول",
-    balance: 4500
-  },
-  {
-    id: "S-002",
-    name: "إيجيبت جيم ستور",
-    phone: "201177778888",
-    company: "جيم ستور لقطع الغيار",
-    balance: 0
-  }
-];
+const DEFAULT_SUPPLIERS: Supplier[] = [];
 
-const DEFAULT_REPAIR_ORDERS: RepairOrder[] = [
-  {
-    id: "ATR-10004",
-    customerId: "C-001",
-    devices: [
-      {
-        id: "D-201",
-        type: DeviceType.PS5,
-        model: "CFI-1216A (اصدار هارد ديسك)",
-        serialNumber: "03-27452819-5487216",
-        color: "أبيض/أسود",
-        accessories: "سلك الباور، ذراع أصلي",
-        issue: "الجهاز يفصل باور بعد 10 دقائق من اللعب وتظهر رسالة حرارة مرتفعة",
-        technicianNotes: "يحتاج تنظيف شامل وتغيير المعدن السائل Liquid Metal ومعالجة المشتت الحراري",
-        internalNotes: "عميل مهم، يرجى تلميع غلاف الجهاز الخارجي مجاناً",
-        estimatedCost: 1500,
-        partsCost: 350,
-        laborCost: 1150,
-        status: RepairStatus.Diagnosing,
-        technicianId: "U-102"
-      }
-    ],
-    totalEstimatedCost: 1500,
-    advancePayment: 200,
-    status: RepairStatus.Diagnosing,
-    receivedDate: "2026-07-20T10:00:00Z",
-    isPaid: false,
-    trackingToken: "TRK-10004-XYZ"
-  },
-  {
-    id: "ATR-10003",
-    customerId: "C-002",
-    devices: [
-      {
-        id: "D-202",
-        type: DeviceType.Xbox_Series_X,
-        model: "X-101",
-        serialNumber: "XB-847291-MX",
-        color: "أسود مطفأ",
-        accessories: "جهاز فقط بدون ملحقات",
-        issue: "تلف سوكيت الـ HDMI تماماً ويحتاج لتغيير",
-        technicianNotes: "تم فك الجهاز واستبدال مدخل HDMI وتجربة العرض بدقة 4K",
-        estimatedCost: 1200,
-        partsCost: 300,
-        laborCost: 900,
-        status: RepairStatus.Repairing,
-        technicianId: "U-102"
-      }
-    ],
-    totalEstimatedCost: 1200,
-    advancePayment: 0,
-    status: RepairStatus.Repairing,
-    receivedDate: "2026-07-20T09:15:00Z",
-    isPaid: false,
-    trackingToken: "TRK-10003-ABC"
-  },
-  {
-    id: "ATR-10002",
-    customerId: "C-003",
-    devices: [
-      {
-        id: "D-203",
-        type: DeviceType.Nintendo_Switch,
-        model: "Switch OLED",
-        serialNumber: "XTW10294812",
-        color: "نيون أحمر/أزرق",
-        accessories: "العلبة كاملة مع الشاحن والمنصة",
-        issue: "الانجراف Drift في العصا اليسرى واليمنى وتلف كليب التثبيت للشاشة",
-        technicianNotes: "تم استبدال عصا الانالوج اليمين واليسار بأصلية جديدة وتجربة الحساسية",
-        estimatedCost: 1800,
-        partsCost: 800,
-        laborCost: 1000,
-        status: RepairStatus.Ready,
-        technicianId: "U-102",
-        warrantyDays: 30
-      }
-    ],
-    totalEstimatedCost: 1800,
-    advancePayment: 500,
-    status: RepairStatus.Ready,
-    receivedDate: "2026-07-19T14:00:00Z",
-    isPaid: false,
-    trackingToken: "TRK-10002-OLED"
-  },
-  {
-    id: "ATR-10001",
-    customerId: "C-004",
-    devices: [
-      {
-        id: "D-204",
-        type: DeviceType.PS4_Pro,
-        model: "CUH-7216B",
-        serialNumber: "02-274531-984",
-        color: "أسود",
-        accessories: "كابل كهرباء وهارديسك خارجي",
-        issue: "صوت المروحة عالي جداً مع شاشة زرقاء متكررة أثناء التشغيل",
-        technicianNotes: "بانتظار وصول الهارد ديسك الداخلي 1 تيرا أو موافقة العميل على نوع SSD",
-        estimatedCost: 2500,
-        partsCost: 1900,
-        laborCost: 600,
-        status: RepairStatus.WaitingParts,
-        technicianId: "U-102"
-      }
-    ],
-    totalEstimatedCost: 2500,
-    advancePayment: 1000,
-    status: RepairStatus.WaitingParts,
-    receivedDate: "2026-07-19T11:00:00Z",
-    isPaid: false,
-    trackingToken: "TRK-10001-SSD"
-  },
-  {
-    id: "ATR-10000",
-    customerId: "C-001",
-    devices: [
-      {
-        id: "D-205",
-        type: DeviceType.Controller_PS5,
-        model: "DualSense V2",
-        serialNumber: "CTRL-12948-WW",
-        color: "بنفسجي",
-        accessories: "بدون أي شيء",
-        issue: "زر الـ L2 لا يستجيب بمرونة والأنالوج ينحرف لليمين",
-        technicianNotes: "تم استبدال السبرنج الداخلي لزر L2 واستبدال مقاومة الأنالوج وتنظيف البوردة",
-        estimatedCost: 500,
-        partsCost: 150,
-        laborCost: 350,
-        status: RepairStatus.Delivered,
-        technicianId: "U-102"
-      }
-    ],
-    totalEstimatedCost: 500,
-    advancePayment: 0,
-    status: RepairStatus.Delivered,
-    receivedDate: "2026-07-18T16:30:00Z",
-    isPaid: true,
-    completionDate: "2026-07-19T12:00:00Z",
-    trackingToken: "TRK-10000-DELI"
-  }
-];
+const DEFAULT_REPAIR_ORDERS: RepairOrder[] = [];
 
 const DEFAULT_INVOICES: Invoice[] = [];
 
 const DEFAULT_EXPENSES: Expense[] = [];
 
-const DEFAULT_LOGS: ActivityLog[] = [
-  {
-    id: "L-001",
-    userId: "U-101",
-    userName: "أحمد محمد",
-    action: "تسجيل دخول",
-    details: "تم تسجيل الدخول للنظام بنجاح كمدير عام",
-    timestamp: "2026-07-20T08:00:00Z"
-  }
-];
+const DEFAULT_LOGS: ActivityLog[] = [];
 
 const DEFAULT_CATEGORIES: ProductCategory[] = [
   { id: "CAT-001", name: "قطع غيار صيانة", sortOrder: 1, isActive: true },
@@ -545,64 +343,12 @@ const DEFAULT_PARTNERS: Partner[] = [
   }
 ];
 
-const DEFAULT_PARTNER_LEDGER: PartnerLedgerEntry[] = [
-  {
-    id: "LEG-1001",
-    partnerId: "P-001",
-    transactionDate: "2026-07-01T00:00:00Z",
-    transactionType: "OPENING_BALANCE",
-    sourceType: "SYSTEM",
-    sourceId: "SYS-INIT",
-    debit: 0,
-    credit: 0,
-    amount: 0,
-    balanceAfter: 0,
-    currency: "ج.م.",
-    descriptionArabic: "الرصيد الافتتاحي للشريك الأول",
-    createdByUserId: "U-101",
-    createdAt: "2026-07-01T00:00:00Z",
-    updatedAt: "2026-07-01T00:00:00Z"
-  },
-  {
-    id: "LEG-1002",
-    partnerId: "P-002",
-    transactionDate: "2026-07-01T00:00:00Z",
-    transactionType: "OPENING_BALANCE",
-    sourceType: "SYSTEM",
-    sourceId: "SYS-INIT",
-    debit: 0,
-    credit: 0,
-    amount: 0,
-    balanceAfter: 0,
-    currency: "ج.م.",
-    descriptionArabic: "الرصيد الافتتاحي للشريك الثاني (عبده)",
-    createdByUserId: "U-101",
-    createdAt: "2026-07-01T00:00:00Z",
-    updatedAt: "2026-07-01T00:00:00Z"
-  }
-];
+const DEFAULT_PARTNER_LEDGER: PartnerLedgerEntry[] = [];
 
 const DEFAULT_PARTNER_SETTLEMENTS: PartnerSettlement[] = [];
 const DEFAULT_PARTNER_SETTLEMENT_PAYMENTS: PartnerSettlementPayment[] = [];
 const DEFAULT_PARTNER_TRANSACTIONS: PartnerTransaction[] = [];
-const DEFAULT_REPAIR_PART_USAGES: RepairPartUsage[] = [
-  {
-    id: "PU-1001",
-    repairOrderId: "ATR-10000",
-    inventoryItemId: "P-101",
-    partName: "PS5 HDMI Port OEM",
-    sku: "PS5-HDMI-PORT",
-    quantity: 1,
-    unitCost: 150,
-    totalCost: 150,
-    ownershipType: WorkOwnershipType.CUSTOMER_SHARED,
-    responsiblePartnerId: "P-001",
-    accountingStatus: "CONSUMED",
-    createdAt: "2026-07-18T16:30:00Z",
-    employeeName: "كريم صالح",
-    warehouse: "المستودع الرئيسي"
-  }
-];
+const DEFAULT_REPAIR_PART_USAGES: RepairPartUsage[] = [];
 const DEFAULT_SETTLEMENT_AUDIT_LOGS: SettlementAuditLog[] = [];
 
 // In-memory fallback for non-browser environments (e.g. Node tests)
@@ -2719,43 +2465,61 @@ export const db = {
     retainedTables?: { name: string; countOrStatus: string }[];
   }> => {
     const forceFailure = options?.forceFailure || false;
+    const startTime = Date.now();
+
     try {
+      // 1. MUST NOT clear React state or local storage yet!
+
+      // 2. Execute RPC reset_operational_data in Supabase
       let rpcRes = await supabase.rpc('reset_operational_data', { force_failure: forceFailure });
 
       // Fallback for zero-argument signature if schema cache complains
-      if (rpcRes.error && (rpcRes.error.message?.includes('schema cache') || rpcRes.error.code === 'PGRST202')) {
+      if (rpcRes.error && (rpcRes.error.message?.includes('schema cache') || rpcRes.error.code === 'PGRST202' || rpcRes.error.code === '42883')) {
         rpcRes = await supabase.rpc('reset_operational_data');
       }
 
       let data = rpcRes.data;
       let error = rpcRes.error;
 
-      // Fallback: If RPC is not present in remote PostgREST schema cache, perform direct Supabase reset
-      if (error && (error.message?.includes('schema cache') || error.code === 'PGRST202')) {
-        console.warn("RPC reset_operational_data missing from schema cache, executing direct database wipe...");
-        await Promise.allSettled([
-          supabase.from('invoice_accounting_ledger').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-          supabase.from('partner_settlement_payments').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-          supabase.from('partner_settlements').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-          supabase.from('partner_transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-          supabase.from('settlement_audit_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-          supabase.from('partner_ledger').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-          supabase.from('invoice_items').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-          supabase.from('repair_part_usages').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-          supabase.from('repair_orders').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-          supabase.from('inventory_movements').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-          supabase.from('expenses').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-          supabase.from('invoices').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-          supabase.from('customers').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-          supabase.from('suppliers').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-          supabase.from('activity_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-          supabase.from('audit_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-          supabase.from('products').update({ quantity: 0 }).neq('id', '00000000-0000-0000-0000-000000000000')
-        ]);
+      // Fallback: If RPC is not present or failed due to missing function on Supabase, attempt strict table deletion
+      if (error && (error.message?.includes('schema cache') || error.code === 'PGRST202' || error.code === '42883' || error.message?.includes('function') || error.message?.includes('does not exist'))) {
+        console.warn("RPC reset_operational_data missing or unexecutable, executing direct Supabase table deletion with strict error checking...");
+        
+        const delLedger = await supabase.from('invoice_accounting_ledger').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        const delPartPay = await supabase.from('partner_settlement_payments').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        const delPartSet = await supabase.from('partner_settlements').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        const delPartTx = await supabase.from('partner_transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        const delSetAudit = await supabase.from('settlement_audit_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        const delPartLedger = await supabase.from('partner_ledger').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        const delItems = await supabase.from('invoice_items').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        const delPartUsages = await supabase.from('repair_part_usages').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        const delOrders = await supabase.from('repair_orders').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        const delMovements = await supabase.from('inventory_movements').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        const delExpenses = await supabase.from('expenses').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        const delInvoices = await supabase.from('invoices').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        const delCust = await supabase.from('customers').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        const delSup = await supabase.from('suppliers').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        const delActLogs = await supabase.from('activity_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        const delAudit = await supabase.from('audit_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        const updateProds = await supabase.from('products').update({ quantity: 0 }).neq('id', '00000000-0000-0000-0000-000000000000');
+
+        const anyError = delLedger.error || delPartPay.error || delPartSet.error || delPartTx.error || 
+                         delSetAudit.error || delPartLedger.error || delItems.error || delPartUsages.error || 
+                         delOrders.error || delMovements.error || delExpenses.error || delInvoices.error || 
+                         delCust.error || delSup.error || delActLogs.error || delAudit.error || updateProds.error;
+
+        if (anyError) {
+          console.error("❌ Direct table deletion failed on Supabase:", anyError);
+          return {
+            success: false,
+            error: `فشلت عملية الحذف المباشر في Supabase: ${anyError.message}`
+          };
+        }
+
         error = null;
         data = {
           success: true,
-          duration_ms: 15,
+          duration_ms: Date.now() - startTime,
           deleted_counts: { invoices: 0, repair_orders: 0, expenses: 0 },
           retained_tables: [
             { name: "Products", status: "محفوظة بالكامل مع الاحتفاظ بالأسعار والبار كود وتصفير كمية المخزون (quantity = 0)" },
@@ -2766,88 +2530,138 @@ export const db = {
       }
 
       if (error) {
+        console.error("❌ Supabase reset_operational_data RPC error:", error);
         return {
           success: false,
-          error: error.message || "فشلت عملية تصفير البيانات داخل قاعدة البيانات."
+          error: `فشلت عملية تصفير البيانات داخل Supabase: ${error.message || "خطأ غير معروف"}`
         };
       }
 
-      if (data && data.success) {
-        // Zero out quantities in local products cache
-        try {
-          const localProds = db.getProducts();
-          if (Array.isArray(localProds) && localProds.length > 0) {
-            const zeroedProds = localProds.map(p => ({ ...p, quantity: 0 }));
-            db.saveProducts(zeroedProds);
-          }
-        } catch (_) {}
-
-        // Synchronize client local state cache
-        setStorageItem(KEYS.INVOICES, []);
-        setStorageItem(KEYS.REPAIR_ORDERS, []);
-        setStorageItem(KEYS.EXPENSES, []);
-        setStorageItem(KEYS.CUSTOMERS, []);
-        setStorageItem(KEYS.SUPPLIERS, []);
-        setStorageItem(KEYS.PARTNER_LEDGER, []);
-        setStorageItem(KEYS.PARTNER_SETTLEMENTS, []);
-        setStorageItem(KEYS.PARTNER_SETTLEMENT_PAYMENTS, []);
-        setStorageItem(KEYS.PARTNER_TRANSACTIONS, []);
-        setStorageItem(KEYS.REPAIR_PART_USAGES, []);
-        setStorageItem(KEYS.SETTLEMENT_AUDIT_LOGS, []);
-        setStorageItem(KEYS.ACTIVITY_LOGS, []);
-        setStorageItem(KEYS.AUDIT_LOGS, []);
-        setStorageItem(KEYS.READ_NOTIFICATIONS, []);
-        setStorageItem("atari_inventory_movements", []);
-        setStorageItem("atari_journal_entries", []);
-        setStorageItem("atari_cod_orders", []);
-        setStorageItem("atari_guest_customers", []);
-        setStorageItem("atari_error_logs_v1", []);
-        setStorageItem("error_logger_v1", []);
-        setStorageItem("atari_system_health_logs", []);
-
-        window.dispatchEvent(new Event("atari_db_changed"));
-
-        const deletedCountsObj = data.deleted_counts || {};
-        const resetTablesList = [
-          { name: "الفواتير (Invoices)", count: Number(deletedCountsObj.invoices || 0) },
-          { name: "عناصر الفواتير (Invoice Items)", count: Number(deletedCountsObj.invoice_items || 0) },
-          { name: "دفتر الأرباح والتسويات (Accounting Ledger)", count: Number(deletedCountsObj.invoice_accounting_ledger || 0) },
-          { name: "أوامر الصيانة (Repair Orders)", count: Number(deletedCountsObj.repair_orders || 0) },
-          { name: "قطع غيار الصيانة (Repair Part Usages)", count: Number(deletedCountsObj.repair_part_usages || 0) },
-          { name: "حركات المخزون (Inventory Movements)", count: Number(deletedCountsObj.inventory_movements || 0) },
-          { name: "سجلات دفتر الشركاء (Partner Ledger)", count: Number(deletedCountsObj.partner_ledger || 0) },
-          { name: "مصروفات الورشة (Expenses)", count: Number(deletedCountsObj.expenses || 0) },
-          { name: "سجلات العملاء (Customers)", count: Number(deletedCountsObj.customers || 0) },
-          { name: "سجلات الموردين (Suppliers)", count: Number(deletedCountsObj.suppliers || 0) },
-          { name: "سجلات الأنشطة والتدقيق (Audit Logs)", count: Number(deletedCountsObj.audit_logs || 0) + Number(deletedCountsObj.activity_logs || 0) }
-        ];
-
-        const retainedTablesList = Array.isArray(data.retained_tables)
-          ? data.retained_tables.map((t: any) => ({ name: t.name, countOrStatus: t.status }))
-          : [
-              { name: "الأصناف والمنتجات (Products)", countOrStatus: "محفوظة بالكامل مع الاحتفاظ بالأسعار والبار كود وتصفير كمية المخزون (quantity = 0)" },
-              { name: "الأقسام والتصنيفات (Categories)", countOrStatus: "محفوظة بالكامل" },
-              { name: "إعدادات النظام (System Settings)", countOrStatus: "محفوظة بالكامل" },
-              { name: "المستخدمون (Profiles/Users)", countOrStatus: "محفوظة بالكامل" },
-              { name: "سجل أمان التصفير (Security Log)", countOrStatus: "مسجل بصورة غير قابلة للبيانات الحسابية" }
-            ];
-
+      if (!data || !data.success) {
+        console.error("❌ Supabase reset_operational_data returned non-success result:", data);
         return {
-          success: true,
-          executionTimeMs: data.duration_ms || 0,
-          resetTables: resetTablesList,
-          retainedTables: retainedTablesList
+          success: false,
+          error: "فشلت دالة تصفير البيانات داخل Supabase ولم تُرجع نتيجة ناجحة."
         };
       }
+
+      // 3. MANDATORY POST-RESET VERIFICATION DIRECTLY FROM SUPABASE!
+      const [
+        { count: custCount, error: custCntErr },
+        { count: orderCount, error: orderCntErr },
+        { count: invCount, error: invCntErr },
+        { count: supCount, error: supCntErr },
+        { count: expCount, error: expCntErr },
+        { count: movCount, error: movCntErr },
+        { count: nonZeroProdCount, error: prodCntErr }
+      ] = await Promise.all([
+        supabase.from('customers').select('id', { count: 'exact', head: true }),
+        supabase.from('repair_orders').select('id', { count: 'exact', head: true }),
+        supabase.from('invoices').select('id', { count: 'exact', head: true }),
+        supabase.from('suppliers').select('id', { count: 'exact', head: true }),
+        supabase.from('expenses').select('id', { count: 'exact', head: true }),
+        supabase.from('inventory_movements').select('id', { count: 'exact', head: true }),
+        supabase.from('products').select('id', { count: 'exact', head: true }).gt('quantity', 0)
+      ]);
+
+      if (custCntErr || orderCntErr || invCntErr || supCntErr || expCntErr || movCntErr || prodCntErr) {
+        const vErr = custCntErr || orderCntErr || invCntErr || supCntErr || expCntErr || movCntErr || prodCntErr;
+        console.error("❌ Failed to verify database counts after reset:", vErr);
+        return {
+          success: false,
+          error: `فشل التحقق من نتائج التصفير في Supabase: ${vErr?.message}`
+        };
+      }
+
+      const verificationFailed =
+        (custCount ?? 0) > 0 ||
+        (orderCount ?? 0) > 0 ||
+        (invCount ?? 0) > 0 ||
+        (supCount ?? 0) > 0 ||
+        (expCount ?? 0) > 0 ||
+        (movCount ?? 0) > 0 ||
+        (nonZeroProdCount ?? 0) > 0;
+
+      if (verificationFailed) {
+        const details = `العملاء: ${custCount}, الصيانة: ${orderCount}, الفواتير: ${invCount}, الموردين: ${supCount}, المصروفات: ${expCount}, حركات المخزون: ${movCount}, منتجات غير مصفّرة: ${nonZeroProdCount}`;
+        console.error("❌ Supabase reset verification failed. Counts remaining in DB:", details);
+        return {
+          success: false,
+          error: `فشل التحقق من التصفير: ما زالت توجد سجلات بقاعدة البيانات (${details})`
+        };
+      }
+
+      // 4. VERIFICATION PASSED! NOW WE SAFELY CLEAR LOCAL CACHE!
+      try {
+        const localProds = db.getProducts();
+        if (Array.isArray(localProds) && localProds.length > 0) {
+          const zeroedProds = localProds.map(p => ({ ...p, quantity: 0 }));
+          db.saveProducts(zeroedProds);
+        }
+      } catch (_) {}
+
+      // Synchronize client local state cache
+      setStorageItem(KEYS.INVOICES, []);
+      setStorageItem(KEYS.REPAIR_ORDERS, []);
+      setStorageItem(KEYS.EXPENSES, []);
+      setStorageItem(KEYS.CUSTOMERS, []);
+      setStorageItem(KEYS.SUPPLIERS, []);
+      setStorageItem(KEYS.PARTNER_LEDGER, []);
+      setStorageItem(KEYS.PARTNER_SETTLEMENTS, []);
+      setStorageItem(KEYS.PARTNER_SETTLEMENT_PAYMENTS, []);
+      setStorageItem(KEYS.PARTNER_TRANSACTIONS, []);
+      setStorageItem(KEYS.REPAIR_PART_USAGES, []);
+      setStorageItem(KEYS.SETTLEMENT_AUDIT_LOGS, []);
+      setStorageItem(KEYS.ACTIVITY_LOGS, []);
+      setStorageItem(KEYS.AUDIT_LOGS, []);
+      setStorageItem(KEYS.READ_NOTIFICATIONS, []);
+      setStorageItem("atari_inventory_movements", []);
+      setStorageItem("atari_journal_entries", []);
+      setStorageItem("atari_cod_orders", []);
+      setStorageItem("atari_guest_customers", []);
+      setStorageItem("atari_deleted_customer_ids", []);
+      setStorageItem("atari_error_logs_v1", []);
+      setStorageItem("error_logger_v1", []);
+      setStorageItem("atari_system_health_logs", []);
+
+      window.dispatchEvent(new Event("atari_db_changed"));
+
+      const deletedCountsObj = data.deleted_counts || {};
+      const resetTablesList = [
+        { name: "الفواتير (Invoices)", count: Number(deletedCountsObj.invoices || 0) },
+        { name: "عناصر الفواتير (Invoice Items)", count: Number(deletedCountsObj.invoice_items || 0) },
+        { name: "دفتر الأرباح والتسويات (Accounting Ledger)", count: Number(deletedCountsObj.invoice_accounting_ledger || 0) },
+        { name: "أوامر الصيانة (Repair Orders)", count: Number(deletedCountsObj.repair_orders || 0) },
+        { name: "قطع غيار الصيانة (Repair Part Usages)", count: Number(deletedCountsObj.repair_part_usages || 0) },
+        { name: "حركات المخزون (Inventory Movements)", count: Number(deletedCountsObj.inventory_movements || 0) },
+        { name: "سجلات دفتر الشركاء (Partner Ledger)", count: Number(deletedCountsObj.partner_ledger || 0) },
+        { name: "مصروفات الورشة (Expenses)", count: Number(deletedCountsObj.expenses || 0) },
+        { name: "سجلات العملاء (Customers)", count: Number(deletedCountsObj.customers || 0) },
+        { name: "سجلات الموردين (Suppliers)", count: Number(deletedCountsObj.suppliers || 0) },
+        { name: "سجلات الأنشطة والتدقيق (Audit Logs)", count: Number(deletedCountsObj.audit_logs || 0) + Number(deletedCountsObj.activity_logs || 0) }
+      ];
+
+      const retainedTablesList = Array.isArray(data.retained_tables)
+        ? data.retained_tables.map((t: any) => ({ name: t.name, countOrStatus: t.status }))
+        : [
+            { name: "الأصناف والمنتجات (Products)", countOrStatus: "محفوظة بالكامل مع الاحتفاظ بالأسعار والبار كود وتصفير كمية المخزون (quantity = 0)" },
+            { name: "الأقسام والتصنيفات (Categories)", countOrStatus: "محفوظة بالكامل" },
+            { name: "إعدادات النظام (System Settings)", countOrStatus: "محفوظة بالكامل" },
+            { name: "المستخدمون (Profiles/Users)", countOrStatus: "محفوظة بالكامل" },
+            { name: "سجل أمان التصفير (Security Log)", countOrStatus: "مسجل بصورة غير قابلة للبيانات الحسابية" }
+          ];
 
       return {
-        success: false,
-        error: data?.message || "فشلت عملية تصفير بيانات التشغيل."
+        success: true,
+        executionTimeMs: data.duration_ms || (Date.now() - startTime),
+        resetTables: resetTablesList,
+        retainedTables: retainedTablesList
       };
     } catch (err: any) {
+      console.error("❌ Unexpected error during executeFullOperationalResetAsync:", err);
       return {
         success: false,
-        error: `حدث خطأ غير متوقع أثناء الاتصال بقاعدة البيانات: ${err.message || String(err)}`
+        error: `حدث خطأ غير متوقع أثناء تصفير قاعدة البيانات: ${err.message || String(err)}`
       };
     }
   },

@@ -4,28 +4,7 @@ import { getAuthenticatedUserRole } from './authPermissions';
 
 const SUPPLIERS_STORAGE_KEY = 'atari_suppliers';
 
-export const DEFAULT_SUPPLIERS: Supplier[] = [
-  {
-    id: "S-001",
-    name: "تكنو كونسول للاستيراد",
-    phone: "201088889999",
-    company: "تكنو كونسول",
-    balance: 4500,
-    isActive: true,
-    isArchived: false,
-    createdAt: "2026-05-01T10:00:00Z"
-  },
-  {
-    id: "S-002",
-    name: "إيجيبت جيم ستور",
-    phone: "201177778888",
-    company: "جيم ستور لقطع الغيار",
-    balance: 0,
-    isActive: true,
-    isArchived: false,
-    createdAt: "2026-05-05T12:00:00Z"
-  }
-];
+export const DEFAULT_SUPPLIERS: Supplier[] = [];
 
 export function getLocalSuppliersBackup(): Supplier[] {
   try {
@@ -36,7 +15,7 @@ export function getLocalSuppliersBackup(): Supplier[] {
   } catch (e) {
     console.error('Error reading local suppliers backup:', e);
   }
-  return DEFAULT_SUPPLIERS;
+  return [];
 }
 
 export function saveLocalSuppliersBackup(data: Supplier[], dispatchEvent = true): void {
