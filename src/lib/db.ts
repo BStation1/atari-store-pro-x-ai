@@ -1090,14 +1090,17 @@ export const db = {
     authStore.saveUsers(data as any[]);
     setStorageItem(KEYS.USERS, data);
   },
-  getCurrentUser: (): User => {
+  getCurrentUser: (): User | null => {
     const active = authStore.getCurrentUser();
     if (active) return active as any;
-    return getStorageItem<User>(KEYS.CURRENT_USER, DEFAULT_USERS[0]);
+    return null;
   },
-  setCurrentUser: (user: User) => {
-    setStorageItem(KEYS.CURRENT_USER, user);
-    window.dispatchEvent(new Event("atari_auth_changed"));
+  setCurrentUser: (user: User | null) => {
+    if (!user) {
+      authStore.clearSession();
+    } else {
+      authStore.setActiveUser(user as any);
+    }
   },
 
   // --- SYSTEM SETTINGS ---
@@ -3061,7 +3064,6 @@ export const db = {
     if (!localStorage.getItem(KEYS.USERS)) setStorageItem(KEYS.USERS, DEFAULT_USERS);
     if (!localStorage.getItem(KEYS.SETTINGS)) setStorageItem(KEYS.SETTINGS, DEFAULT_SETTINGS);
     if (!localStorage.getItem(KEYS.ACTIVITY_LOGS)) setStorageItem(KEYS.ACTIVITY_LOGS, DEFAULT_LOGS);
-    if (!localStorage.getItem(KEYS.CURRENT_USER)) setStorageItem(KEYS.CURRENT_USER, DEFAULT_USERS[0]);
     if (!localStorage.getItem(KEYS.CATEGORIES)) setStorageItem(KEYS.CATEGORIES, DEFAULT_CATEGORIES);
     if (!localStorage.getItem(KEYS.DEVICE_TYPES)) setStorageItem(KEYS.DEVICE_TYPES, DEFAULT_DEVICE_TYPES);
     if (!localStorage.getItem(KEYS.DEVICE_MODELS)) setStorageItem(KEYS.DEVICE_MODELS, DEFAULT_DEVICE_MODELS);

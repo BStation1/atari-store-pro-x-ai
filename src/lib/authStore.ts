@@ -322,6 +322,26 @@ export const authStore = {
     return { success: true, user: ownerUser };
   },
 
+  setActiveUser(user: AuthUser) {
+    if (typeof window === "undefined") return;
+    localStorage.setItem("atari_active_user_session", JSON.stringify(user));
+    localStorage.setItem(CURRENT_SESSION_KEY, JSON.stringify({
+      sessionId: `SESS-${user.id}`,
+      userId: user.id,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+    }));
+    window.dispatchEvent(new Event("atari_auth_changed"));
+  },
+
+  clearSession() {
+    if (typeof window === "undefined") return;
+    localStorage.removeItem("atari_active_user_session");
+    localStorage.removeItem(CURRENT_SESSION_KEY);
+    localStorage.removeItem("atari_current_user");
+    window.dispatchEvent(new Event("atari_auth_changed"));
+  },
+
   getSessions(): UserSession[] {
     if (typeof window === "undefined") return [];
     try {
@@ -362,36 +382,109 @@ export const authStore = {
   getCurrentSession(): UserSession | null {
     if (typeof window === "undefined") return null;
     try {
+      const activeUser = this.getCurrentUser();
+      if (!activeUser) return null;
       const data = localStorage.getItem(CURRENT_SESSION_KEY);
       if (!data) return null;
-      const session: UserSession = JSON.parse(data);
-
-      // Check session expiry
-      if (new Date(session.expiresAt).getTime() < new Date().getTime()) {
-        this.logout();
-        return null;
-      }
-
-      return session;
+      return JSON.parse(data);
     } catch {
       return null;
     }
   },
 
   getCurrentUser(): AuthUser | null {
-    const session = this.getCurrentSession();
-    if (!session) return null;
-
-    const users = this.getUsers();
-    const user = users.find(u => u.id === session.userId);
-
-    // If user was disabled or removed, terminate session
-    if (!user || !user.isActive) {
-      this.logout();
+    if (typeof window === "undefined") return null;
+    try {
+      const activeUserStr = localStorage.getItem("atari_active_user_session");
+      if (!activeUserStr) return null;
+      const user: AuthUser = JSON.parse(activeUserStr);
+      if (!user || !user.id || user.isActive === false) return null;
+      return user;
+    } catch {
       return null;
     }
+  },
 
-    return user;
+  async validateAndSyncSession(): Promise<{ user: AuthUser | null; error?: string }> {
+    try {
+      // 1. Get real Supabase Auth session
+      const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
+
+      if (sessionErr) {
+        console.warn("⚠️ Error getting Supabase Auth session:", sessionErr);
+        this.clearSession();
+        return { user: null, error: "تعذر التحقق من جلسة المستخدم: " + sessionErr.message };
+      }
+
+      if (!session || !session.user) {
+        this.clearSession();
+        return { user: null };
+      }
+
+      // 2. Query user profile from profiles table in Supabase
+      const { data: profile, error: profileErr } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", session.user.id)
+        .maybeSingle();
+
+      if (profileErr) {
+        console.warn("⚠️ Error fetching user profile from Supabase:", profileErr);
+        this.clearSession();
+        return { user: null, error: "خطأ أثناء قراءة ملف المستخدم من قاعدة البيانات: " + profileErr.message };
+      }
+
+      if (!profile) {
+        console.warn("⚠️ Profile not found for session user:", session.user.id);
+        this.clearSession();
+        return { user: null, error: "لم يتم العثور على الملف الشخصي للمستخدم في قاعدة البيانات." };
+      }
+
+      if (profile.is_active === false) {
+        console.warn("⚠️ Account is disabled:", session.user.id);
+        await supabase.auth.signOut().catch(() => {});
+        this.clearSession();
+        return { user: null, error: "حساب المستخدم معطل حالياً. يرجى التواصل مع مسؤول النظام." };
+      }
+
+      // Map profile to AuthUser
+      const roleUpper = String(profile.role || "RECEPTION").toUpperCase();
+      const roleId: UserRole = (roleUpper === "OWNER" || roleUpper === "ADMIN") ? "OWNER" : (roleUpper as UserRole);
+
+      const activeUser: AuthUser = {
+        id: session.user.id,
+        fullName: profile.full_name || session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "مستخدم",
+        name: profile.full_name || session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "مستخدم",
+        username: (session.user.email || "user").split("@")[0],
+        email: session.user.email || profile.email || "",
+        phone: profile.phone || "",
+        roleId: roleId,
+        role: roleId.toLowerCase(),
+        permissions: ALL_PERMISSIONS,
+        isActive: true,
+        createdAt: profile.created_at || new Date().toISOString(),
+        updatedAt: profile.updated_at || new Date().toISOString(),
+        avatarUrl: profile.avatar_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80"
+      };
+
+      this.setActiveUser(activeUser);
+
+      // Keep local users list updated
+      const users = this.getUsers();
+      const idx = users.findIndex(u => u.id === activeUser.id || u.email.toLowerCase() === activeUser.email.toLowerCase());
+      if (idx !== -1) {
+        users[idx] = activeUser;
+      } else {
+        users.push(activeUser);
+      }
+      this.saveUsers(users);
+
+      return { user: activeUser };
+    } catch (err: any) {
+      console.warn("⚠️ Exception during validateAndSyncSession:", err);
+      this.clearSession();
+      return { user: null, error: err?.message || "حدث خطأ غير متوقع أثناء الاتصال بالخادم." };
+    }
   },
 
   async login(
@@ -400,113 +493,50 @@ export const authStore = {
     rememberMe: boolean = true
   ): Promise<{ success: boolean; error?: string; user?: AuthUser; mustChangePassword?: boolean }> {
     const cleanIdentifier = usernameOrEmail.trim().toLowerCase();
-    const users = this.getUsers();
-
-    // Check local target user
-    let localUser = users.find(
-      u => u.username.toLowerCase() === cleanIdentifier || u.email.toLowerCase() === cleanIdentifier
-    );
 
     // Determine target email for Supabase Auth
     let targetEmail = cleanIdentifier;
     if (!targetEmail.includes("@")) {
-      targetEmail = localUser?.email || `${cleanIdentifier}@atari.com`;
+      const users = this.getUsers();
+      const localMatch = users.find(
+        u => u.username.toLowerCase() === cleanIdentifier || u.email.toLowerCase() === cleanIdentifier
+      );
+      targetEmail = localMatch?.email || `${cleanIdentifier}@atari.com`;
     }
 
-    let authUserId: string | undefined;
-
-    // 1. Authenticate with Supabase Auth
     try {
-      let { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
         email: targetEmail,
         password: password
       });
 
-      // If user not in Supabase Auth yet but exists locally or email provided, try auto-signup to register user in auth.users
-      if (authError && (authError.message.includes("Invalid login credentials") || authError.message.includes("User not found"))) {
-        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-          email: targetEmail,
-          password: password,
-          options: {
-            data: {
-              full_name: localUser?.fullName || usernameOrEmail,
-              username: localUser?.username || cleanIdentifier,
-              role: localUser?.roleId || "TECHNICIAN"
-            }
-          }
-        });
-
-        if (!signUpError && signUpData?.user) {
-          authUserId = signUpData.user.id;
-          // Re-try login
-          const retry = await supabase.auth.signInWithPassword({
-            email: targetEmail,
-            password: password
-          });
-          if (retry.data?.session) {
-            authData = retry.data;
-            authError = null;
-          }
-        }
+      if (authError) {
+        console.warn("⚠️ Supabase login error:", authError.message);
+        this.logLoginAttempt(usernameOrEmail, false, authError.message);
+        return { success: false, error: "اسم المستخدم أو كلمة المرور غير صحيحة" };
       }
 
-      if (authData?.session && authData?.user) {
-        authUserId = authData.user.id;
+      if (!authData || !authData.session || !authData.user) {
+        return { success: false, error: "فشل إنشاء الجلسة في Supabase." };
       }
-    } catch (err) {
-      console.warn("⚠️ Supabase Auth login error:", err);
-    }
 
-    // Fallback: If local user exists and password matches local hash
-    if (!localUser && authUserId) {
-      // Create local profile from Supabase user
-      const now = new Date().toISOString();
-      localUser = {
-        id: authUserId,
-        fullName: usernameOrEmail,
-        name: usernameOrEmail,
-        username: cleanIdentifier,
-        email: targetEmail,
-        roleId: "ADMIN",
-        role: "admin",
-        permissions: ALL_PERMISSIONS,
-        isActive: true,
-        createdAt: now,
-        updatedAt: now
+      // Sync and validate profile
+      const syncRes = await this.validateAndSyncSession();
+      if (syncRes.error || !syncRes.user) {
+        return { success: false, error: syncRes.error || "تعذر قراءة ملف المستخدم المعتمد." };
+      }
+
+      this.logLoginAttempt(usernameOrEmail, true, "تسجيل دخول ناجح مع Supabase Auth");
+
+      return {
+        success: true,
+        user: syncRes.user,
+        mustChangePassword: syncRes.user.mustChangePassword
       };
-      users.push(localUser);
-      this.saveUsers(users);
-    } else if (localUser && authUserId) {
-      // Update local user ID with Supabase auth UUID
-      localUser.id = authUserId;
-      this.saveUsers(users);
+    } catch (err: any) {
+      console.warn("⚠️ Supabase Auth login exception:", err);
+      return { success: false, error: err?.message || "حدث خطأ أثناء الاتصال بمصادقة Supabase." };
     }
-
-    if (!localUser) {
-      this.logLoginAttempt(usernameOrEmail, false, "اسم المستخدم أو كلمة المرور غير صحيحة");
-      return { success: false, error: "اسم المستخدم أو كلمة المرور غير صحيحة" };
-    }
-
-    // Successful login reset attempts & set last login date
-    localUser.failedLoginAttempts = 0;
-    localUser.lockedUntil = undefined;
-    localUser.lastLoginAt = new Date().toISOString();
-    localUser.updatedAt = new Date().toISOString();
-    this.saveUsers(users);
-
-    // Sync profile to Supabase
-    if (authUserId) {
-      await this.syncProfileToSupabase(localUser, authUserId);
-    }
-
-    this.createSession(localUser.id);
-    this.logLoginAttempt(usernameOrEmail, true, "تسجيل دخول ناجح مع Supabase Auth");
-
-    return {
-      success: true,
-      user: localUser,
-      mustChangePassword: localUser.mustChangePassword
-    };
   },
 
   async logout() {
@@ -516,8 +546,7 @@ export const authStore = {
     } catch (err) {
       console.warn("⚠️ Error signing out from Supabase:", err);
     }
-    localStorage.removeItem(CURRENT_SESSION_KEY);
-    window.dispatchEvent(new Event("atari_auth_changed"));
+    this.clearSession();
   },
 
   logoutAllSessions(userId: string) {
@@ -603,53 +632,10 @@ export const authStore = {
 // Listen to Supabase Auth state changes automatically for real-time session verification
 if (typeof window !== "undefined") {
   supabase.auth.onAuthStateChange(async (event, session) => {
-    if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || session?.user) {
-      if (session?.user) {
-        const authUser = session.user;
-        const users = authStore.getUsers();
-        let localUser = users.find(
-          u => u.id === authUser.id || u.email.toLowerCase() === authUser.email?.toLowerCase()
-        );
-
-        if (!localUser) {
-          const now = new Date().toISOString();
-          const roleFromMetaData = authUser.user_metadata?.role || "ADMIN";
-          localUser = {
-            id: authUser.id,
-            fullName: authUser.user_metadata?.full_name || authUser.email?.split("@")[0] || "مستخدم",
-            name: authUser.user_metadata?.full_name || authUser.email?.split("@")[0] || "مستخدم",
-            username: authUser.user_metadata?.username || authUser.email?.split("@")[0] || "user",
-            email: authUser.email || "",
-            roleId: roleFromMetaData,
-            role: roleFromMetaData.toLowerCase(),
-            permissions: ALL_PERMISSIONS,
-            isActive: true,
-            createdAt: now,
-            updatedAt: now,
-            avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80"
-          };
-          users.push(localUser);
-          authStore.saveUsers(users);
-        } else if (localUser.id !== authUser.id) {
-          localUser.id = authUser.id;
-          authStore.saveUsers(users);
-        }
-
-        // Sync local current session if not active
-        const currentSession = authStore.getCurrentSession();
-        if (!currentSession || currentSession.userId !== authUser.id) {
-          authStore.createSession(authUser.id);
-        }
-
-        // Keep profile in sync
-        authStore.syncProfileToSupabase(localUser, authUser.id);
-      }
-    } else if (event === "SIGNED_OUT" || !session) {
-      const currentSession = authStore.getCurrentSession();
-      if (currentSession) {
-        localStorage.removeItem("atari_current_session_v2");
-        window.dispatchEvent(new Event("atari_auth_changed"));
-      }
+    if (event === "SIGNED_OUT" || !session) {
+      authStore.clearSession();
+    } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || session?.user) {
+      await authStore.validateAndSyncSession();
     }
   });
 }

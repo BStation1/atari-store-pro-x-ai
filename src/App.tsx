@@ -26,7 +26,9 @@ import {
   LogOut,
   ShieldCheck,
   ChevronDown,
-  KeyRound
+  KeyRound,
+  AlertCircle,
+  RefreshCw
 } from "lucide-react";
 import { db } from "./lib/db";
 import { authStore } from "./lib/authStore";
@@ -193,33 +195,51 @@ function MainApp() {
     return hasPermission(currentLoggedUser.roleId, currentLoggedUser.permissions, reqPerm);
   });
 
-  // Check if system has an owner directly from Supabase
+  // Check if system has an owner & verify session from Supabase
   const [hasOwner, setHasOwner] = useState<boolean>(true); // Default to true so setup screen NEVER flashes accidentally
-  const [isCheckingOwner, setIsCheckingOwner] = useState<boolean>(true);
+  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  const checkAuthAndOwner = async () => {
+    setIsAuthChecking(true);
+    setAuthError(null);
+
+    try {
+      // 1. Verify Supabase Auth session first
+      const sessionRes = await authStore.validateAndSyncSession();
+
+      if (sessionRes.error) {
+        setAuthError(sessionRes.error);
+        setIsAuthChecking(false);
+        return;
+      }
+
+      // 2. If no user session exists, check if system has an owner in Supabase
+      if (!sessionRes.user) {
+        const ownerExists = await authStore.checkHasOwnerInSupabase();
+        setHasOwner(ownerExists);
+      } else {
+        setHasOwner(true);
+      }
+    } catch (err: any) {
+      console.warn("⚠️ Error verifying auth and owner in Supabase:", err);
+      setAuthError(err?.message || "حدث خطأ أثناء الاتصال بخادم المصادقة.");
+    } finally {
+      setIsAuthChecking(false);
+    }
+  };
 
   useEffect(() => {
     let isMounted = true;
 
-    async function verifyOwnerInSupabase() {
-      try {
-        const ownerExists = await authStore.checkHasOwnerInSupabase();
-        if (isMounted) {
-          setHasOwner(ownerExists);
-        }
-      } catch (err) {
-        console.warn("⚠️ Error verifying owner in Supabase:", err);
-        if (isMounted) setHasOwner(true);
-      } finally {
-        if (isMounted) setIsCheckingOwner(false);
-      }
-    }
-
-    verifyOwnerInSupabase();
+    checkAuthAndOwner();
 
     const handleAuthChanged = () => {
-      authStore.checkHasOwnerInSupabase().then(res => {
-        if (isMounted) setHasOwner(res);
-      });
+      if (isMounted) {
+        authStore.checkHasOwnerInSupabase().then(res => {
+          if (isMounted) setHasOwner(res);
+        });
+      }
     };
 
     window.addEventListener("atari_auth_changed", handleAuthChanged);
@@ -234,20 +254,42 @@ function MainApp() {
     return <TrackingPage initialQuery={navigationParams?.initialQuery} />;
   }
 
-  // Loading state while checking owner status
-  if (isCheckingOwner) {
+  // Loading state while verifying session & owner status
+  if (isAuthChecking) {
     return (
       <div className="min-h-screen bg-[#070913] text-gray-100 flex items-center justify-center p-4 font-sans dir-rtl">
         <div className="text-center space-y-4">
           <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="text-xs text-gray-400 font-bold">جاري التحقق من أمان وصلاحيات النظام...</p>
+          <p className="text-xs text-gray-400 font-bold">جاري التحقق من جلسة الدخول وصلاحيات النظام...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Error state during session verification
+  if (authError) {
+    return (
+      <div className="min-h-screen bg-[#070913] text-gray-100 flex items-center justify-center p-4 font-sans dir-rtl">
+        <div className="bg-[#11131e] border border-red-500/30 p-6 max-w-md w-full rounded-3xl shadow-2xl text-center space-y-4">
+          <div className="w-12 h-12 bg-red-500/10 border border-red-500/20 rounded-2xl flex items-center justify-center mx-auto text-red-400">
+            <AlertCircle className="w-6 h-6 text-red-400" />
+          </div>
+          <h2 className="text-base font-bold text-white">خطأ في التحقق من المصادقة</h2>
+          <p className="text-xs text-red-300 leading-relaxed">{authError}</p>
+          <button
+            onClick={() => checkAuthAndOwner()}
+            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-xl text-xs transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer"
+          >
+            <RefreshCw className="w-4 h-4" />
+            <span>إعادة المحاولة</span>
+          </button>
         </div>
       </div>
     );
   }
 
   // If setup flow is requested or system has no owner in Supabase
-  if (currentView === "setup" || (!hasOwner && currentView !== "login")) {
+  if (currentView === "setup" || (!hasOwner && !currentLoggedUser && currentView !== "login")) {
     return (
       <InitialSetup
         onSuccess={() => {
