@@ -188,7 +188,7 @@ export async function fetchOrMigrateRepairOrders(): Promise<{ success: boolean; 
       return {
         success: false,
         error: `فشل جلب أوامر الصيانة من Supabase: ${error.message}`,
-        orders: getLocalRepairOrdersBackup()
+        orders: []
       };
     }
 
@@ -206,7 +206,7 @@ export async function fetchOrMigrateRepairOrders(): Promise<{ success: boolean; 
     return {
       success: false,
       error: err?.message || 'تعذر الاتصال بـ Supabase لقراءة أوامر الصيانة',
-      orders: getLocalRepairOrdersBackup()
+      orders: []
     };
   }
 }
@@ -218,6 +218,77 @@ export async function addRepairOrderToSupabase(
   orderData: Omit<RepairOrder, "id" | "receivedDate" | "trackingToken">,
   currentUser?: User
 ): Promise<RepairOrder> {
+  let targetCustomerId: string | null = isUuid(orderData.customerId) ? orderData.customerId! : null;
+
+  // If customer ID is missing or not a valid UUID (e.g. Guest customer or empty)
+  if (!targetCustomerId) {
+    const phoneToSearch = orderData.guestCustomerPhone || orderData.customerPhoneSnapshot || "";
+    const nameToSearch = orderData.guestCustomerName || orderData.customerNameSnapshot || "عميل غير مسجل";
+
+    // 1. Try to find existing customer by phone in Supabase
+    if (phoneToSearch) {
+      try {
+        const { data: existingCust } = await supabase
+          .from('customers')
+          .select('id')
+          .eq('phone', phoneToSearch)
+          .maybeSingle();
+        if (existingCust?.id) {
+          targetCustomerId = existingCust.id;
+        }
+      } catch (e) {
+        console.warn("Could not search customer by phone in Supabase:", e);
+      }
+    }
+
+    // 2. If not found, attempt to insert a new customer into Supabase customers table
+    if (!targetCustomerId) {
+      try {
+        const newCustPayload = {
+          name: nameToSearch,
+          phone: phoneToSearch || "00000000000",
+          customer_type: 'REGULAR',
+          notes: orderData.guestCustomerNote || 'عميل ينشأ تلقائياً لأمر الصيانة',
+          created_at: new Date().toISOString()
+        };
+
+        const { data: createdCust, error: custErr } = await supabase
+          .from('customers')
+          .insert(newCustPayload)
+          .select('id')
+          .single();
+
+        if (createdCust?.id) {
+          targetCustomerId = createdCust.id;
+        } else {
+          console.warn("⚠️ Could not insert guest customer in Supabase:", custErr);
+        }
+      } catch (e) {
+        console.warn("⚠️ Exception inserting guest customer in Supabase:", e);
+      }
+    }
+
+    // 3. Fallback: query any existing customer in Supabase if creation failed
+    if (!targetCustomerId) {
+      try {
+        const { data: fallbackCust } = await supabase
+          .from('customers')
+          .select('id')
+          .limit(1)
+          .maybeSingle();
+        if (fallbackCust?.id) {
+          targetCustomerId = fallbackCust.id;
+        }
+      } catch (e) {
+        console.warn("Could not fetch fallback customer from Supabase:", e);
+      }
+    }
+  }
+
+  if (!targetCustomerId) {
+    throw new Error('تعذر ربط أمر الصيانة بعميل في قاعدة البيانات Supabase. يرجى اختيار عميل مسجل أو إدخال بيانات العميل الزائر.');
+  }
+
   const localList = getLocalRepairOrdersBackup();
   let maxNum = 10000;
 
@@ -263,6 +334,7 @@ export async function addRepairOrderToSupabase(
   const fullOrderObj: RepairOrder = {
     ...orderData,
     id: generatedId,
+    customerId: targetCustomerId,
     receivedDate: nowIso,
     trackingToken: generatedToken,
     jobType: resolvedOwnership,
@@ -270,10 +342,14 @@ export async function addRepairOrderToSupabase(
   };
 
   const firstDevice = orderData.devices?.[0];
+  const reportedIssueStr = firstDevice?.issue || 
+    (Array.isArray(orderData.selectedQuickFaults) && orderData.selectedQuickFaults.length > 0 ? orderData.selectedQuickFaults.join(' - ') : null) || 
+    orderData.notes || 
+    'فحص ومعاينة الكشف العام';
 
   const payload: Record<string, any> = {
     order_number: generatedId,
-    customer_id: isUuid(orderData.customerId) ? orderData.customerId : null,
+    customer_id: targetCustomerId,
     status: mapUiStatusToDbStatus(orderData.status),
     created_by_user_id: isUuid(currentUser?.id) ? currentUser?.id : null,
     tracking_token: generatedToken,
@@ -281,9 +357,10 @@ export async function addRepairOrderToSupabase(
     updated_at: nowIso,
     estimated_cost: Number(orderData.totalEstimatedCost || orderData.finalRepairPrice || 0),
     final_cost: Number(orderData.finalRepairPrice || orderData.totalEstimatedCost || 0),
-    device_type: firstDevice?.type || null,
-    device_model: firstDevice?.model || null,
-    serial_number: firstDevice?.serialNumber || null,
+    device_type: firstDevice?.type || 'أجهزة ألعاب',
+    device_model: firstDevice?.model || 'موديل قياسي',
+    serial_number: firstDevice?.serialNumber || '',
+    reported_issue: reportedIssueStr,
     notes: JSON.stringify(fullOrderObj)
   };
 

@@ -187,7 +187,7 @@ export function useRepairOrders() {
         if (active) {
           console.warn("⚠️ Error fetching repair orders from Supabase:", err);
           setError(err?.message || "تعذر الاتصال بـ Supabase لقراءة أوامر الصيانة");
-          setOrders(getLocalRepairOrdersBackup());
+          setOrders([]);
           setLoading(false);
         }
       });
