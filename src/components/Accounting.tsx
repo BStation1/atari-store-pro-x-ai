@@ -62,8 +62,8 @@ export default function Accounting({ openInvoiceModal = false }: AccountingProps
     createdAt: new Date().toISOString()
   };
 
-  // Tabs: Profits Summary vs Invoices vs Expenses
-  const [activeTab, setActiveTab] = useState<"profits_summary" | "invoices" | "expenses">("profits_summary");
+  // Tabs: Invoices vs Expenses
+  const [activeTab, setActiveTab] = useState<"invoices" | "expenses">("invoices");
 
   // Receipt Modal State
   const [receiptInvoice, setReceiptInvoice] = useState<Invoice | undefined>(undefined);
@@ -90,13 +90,22 @@ export default function Accounting({ openInvoiceModal = false }: AccountingProps
 
   const { addCustomer } = useCustomers();
 
-  // Calculate totals
-  const totalInvoicesAmount = invoices.reduce((sum, inv) => sum + inv.paidAmount, 0);
-  const totalExpensesAmount = expenses.reduce((sum, exp) => sum + exp.amount, 0);
+  // Calculate General Accounting totals
+  const totalInvoicesAmount = invoices.reduce((sum, inv) => sum + (inv.paidAmount || 0), 0);
+  const totalExpensesAmount = expenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
   
-  // Total in Vault Cashbox (calculated strictly from actual transactions)
+  // COGS calculation from repair orders and invoice items
+  const totalCogs = orders.reduce((sum, o) => {
+    const devicePartsCost = o.devices?.reduce((pSum, d) => pSum + (Number(d.partsCost) || 0), 0) || 0;
+    return sum + devicePartsCost;
+  }, 0);
+
+  // Debts / Receivables from customers
+  const totalCustomerDebts = customers.reduce((sum, c) => sum + (c.balance > 0 ? c.balance : 0), 0);
+
+  // Total in Vault Cashbox & Overall Net Profit
   const totalCashbox = totalInvoicesAmount - totalExpensesAmount;
-  const netProfit = totalInvoicesAmount - totalExpensesAmount;
+  const netProfit = totalInvoicesAmount - totalExpensesAmount - totalCogs;
 
   const handleSaveExpense = (e: React.FormEvent) => {
     e.preventDefault();
@@ -297,51 +306,54 @@ export default function Accounting({ openInvoiceModal = false }: AccountingProps
         </div>
       </div>
 
-      {/* Financial KPIs row */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-[#11131e] border border-[#2a2d42] p-5 rounded-xl">
-          <span className="text-[11px] text-gray-400 block">رصيد الخزينة الحالي (الصندوق)</span>
-          <h3 className="text-2xl font-bold text-emerald-400 mt-2">{totalCashbox.toLocaleString()} ج.م</h3>
-          <span className="text-[9px] text-gray-500 mt-2 block font-mono">شامل الرصيد الأساسي + الفواتير</span>
+      {/* Financial KPIs row (المحاسبة العامة: الخزنة، الإيرادات، تكلفة البضاعة، المصروفات، صافي الربح، المديونيات) */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="bg-[#11131e] border border-[#2a2d42] p-4 rounded-xl">
+          <span className="text-[11px] text-gray-400 block font-bold">1. الخزنة (رصيد الصندوق)</span>
+          <h3 className="text-xl font-bold text-emerald-400 mt-1">{totalCashbox.toLocaleString()} ج.م</h3>
+          <span className="text-[9px] text-gray-500 block mt-1 font-mono">الفواتير المحصلة - المصروفات</span>
         </div>
 
-        <div className="bg-[#11131e] border border-[#2a2d42] p-5 rounded-xl">
-          <span className="text-[11px] text-gray-400 block">إجمالي إيرادات المبيعات والصيانة</span>
-          <h3 className="text-2xl font-bold text-white mt-2">{totalInvoicesAmount.toLocaleString()} ج.م</h3>
-          <span className="text-[9px] text-green-400 mt-2 block font-medium">عدد الفواتير المصدرة: {invoices.length}</span>
+        <div className="bg-[#11131e] border border-[#2a2d42] p-4 rounded-xl">
+          <span className="text-[11px] text-gray-400 block font-bold">2. إجمالي الإيرادات</span>
+          <h3 className="text-xl font-bold text-white mt-1">{totalInvoicesAmount.toLocaleString()} ج.م</h3>
+          <span className="text-[9px] text-green-400 block mt-1 font-medium">{invoices.length} فاتورة مسجلة</span>
         </div>
 
-        <div className="bg-[#11131e] border border-[#2a2d42] p-5 rounded-xl">
-          <span className="text-[11px] text-gray-400 block">إجمالي المصروفات التشغيلية</span>
-          <h3 className="text-2xl font-bold text-red-400 mt-2">{totalExpensesAmount.toLocaleString()} ج.م</h3>
-          <span className="text-[9px] text-gray-500 mt-2 block font-mono">إيجار، رواتب، كهرباء، مستلزمات</span>
+        <div className="bg-[#11131e] border border-rose-500/30 p-4 rounded-xl">
+          <span className="text-[11px] text-rose-300 block font-bold">3. تكلفة البضاعة (COGS)</span>
+          <h3 className="text-xl font-bold text-rose-400 mt-1">{totalCogs.toLocaleString()} ج.م</h3>
+          <span className="text-[9px] text-rose-300/80 block mt-1">قطع غيار ومستلزمات</span>
         </div>
 
-        <div className="bg-[#11131e] border border-[#2a2d42] p-5 rounded-xl bg-gradient-to-br from-indigo-500/10 to-transparent">
-          <span className="text-[11px] text-indigo-300 block">صافي الأرباح المحققة</span>
-          <h3 className="text-2xl font-bold text-indigo-400 mt-2">{netProfit.toLocaleString()} ج.م</h3>
-          <span className="text-[9px] text-indigo-300 mt-2 block font-bold">معدل النمو مالي مستقر</span>
+        <div className="bg-[#11131e] border border-[#2a2d42] p-4 rounded-xl">
+          <span className="text-[11px] text-gray-400 block font-bold">4. المصروفات التشغيلية</span>
+          <h3 className="text-xl font-bold text-red-400 mt-1">{totalExpensesAmount.toLocaleString()} ج.م</h3>
+          <span className="text-[9px] text-gray-500 block mt-1 font-mono">رواتب، إيجار، كهرباء</span>
+        </div>
+
+        <div className="bg-[#11131e] border border-cyan-500/40 p-4 rounded-xl bg-cyan-950/10">
+          <span className="text-[11px] text-cyan-300 block font-bold">5. صافي الربح العام</span>
+          <h3 className="text-xl font-bold text-cyan-300 mt-1">{netProfit.toLocaleString()} ج.م</h3>
+          <span className="text-[9px] text-cyan-200/80 block mt-1 font-bold">الإيراد - التكلفة - المصروفات</span>
+        </div>
+
+        <div className="bg-[#11131e] border border-amber-500/30 p-4 rounded-xl">
+          <span className="text-[11px] text-amber-300 block font-bold">6. المديونيات والذمم</span>
+          <h3 className="text-xl font-bold text-amber-400 mt-1">{totalCustomerDebts.toLocaleString()} ج.م</h3>
+          <span className="text-[9px] text-amber-300/80 block mt-1">مستحقات لدى العملاء</span>
         </div>
       </div>
 
       {/* Navigation Sub-tab row */}
       <div className="border-b border-[#2a2d42] flex gap-6">
         <button
-          onClick={() => setActiveTab("profits_summary")}
-          className={`pb-3 text-sm font-bold transition-colors cursor-pointer relative ${
-            activeTab === "profits_summary" ? "text-cyan-400 font-black" : "text-gray-400 hover:text-white"
-          }`}
-        >
-          ملخص الأرباح (أحمد وعبده)
-          {activeTab === "profits_summary" && <span className="absolute bottom-0 right-0 left-0 h-0.5 bg-cyan-500"></span>}
-        </button>
-        <button
           onClick={() => setActiveTab("invoices")}
           className={`pb-3 text-sm font-bold transition-colors cursor-pointer relative ${
             activeTab === "invoices" ? "text-indigo-400" : "text-gray-400 hover:text-white"
           }`}
         >
-          فواتير المبيعات والصيانة
+          فواتير المبيعات والصيانة العامة
           {activeTab === "invoices" && <span className="absolute bottom-0 right-0 left-0 h-0.5 bg-indigo-500"></span>}
         </button>
         <button
@@ -350,15 +362,10 @@ export default function Accounting({ openInvoiceModal = false }: AccountingProps
             activeTab === "expenses" ? "text-indigo-400" : "text-gray-400 hover:text-white"
           }`}
         >
-          كشف بنود المصروفات العامة
+          كشف المصروفات التشغيلية والخزنة
           {activeTab === "expenses" && <span className="absolute bottom-0 right-0 left-0 h-0.5 bg-indigo-500"></span>}
         </button>
       </div>
-
-      {/* --- Profits Summary Tab Content --- */}
-      {activeTab === "profits_summary" && (
-        <ProfitsSummary orders={orders} />
-      )}
 
       {/* --- Invoices Tab Content --- */}
       {activeTab === "invoices" && (

@@ -7,30 +7,40 @@ import {
   FileText,
   Printer,
   Download,
-  RotateCcw,
-  ShieldCheck,
   Package,
   ChevronDown,
   ChevronUp,
   Box,
   Layers,
-  Sparkles,
-  ShoppingBag
+  ShoppingBag,
+  X,
+  Search,
+  Filter,
+  Eye,
+  AlertCircle,
+  Clock,
+  DollarSign
 } from 'lucide-react';
-import { RepairOrder, WorkOwnershipType } from '../../types';
+import { RepairOrder, WorkOwnershipType, Invoice } from '../../types';
 import { formatDateISO, roundMoney } from '../../lib/finalReportsEngine';
-import { useRepairPartUsages } from '../../hooks/useData';
+import { useRepairPartUsages, useInvoices } from '../../hooks/useData';
 
 interface ProfitsSummaryProps {
   orders: RepairOrder[];
   currencySymbol?: string;
 }
 
-interface PartDetail {
+export interface WithdrawnItemDetail {
+  id: string;
   partName: string;
   quantity: number;
   unitCost: number;
   totalCost: number;
+  refNum: string;
+  customerName: string;
+  date: string;
+  ownership: WorkOwnershipType;
+  sourceType: 'REPAIR_ORDER' | 'DIRECT_INVOICE';
 }
 
 export default function ProfitsSummary({
@@ -38,16 +48,26 @@ export default function ProfitsSummary({
   currencySymbol = 'ج.م.'
 }: ProfitsSummaryProps) {
   const { partUsages } = useRepairPartUsages();
+  const { invoices } = useInvoices();
 
-  // Get current year-month string (e.g. "2026-07")
+  // Current Date Helper Values
   const now = new Date();
+  const todayISO = now.toISOString().split('T')[0];
   const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
+  // State
   const [selectedMonthYear, setSelectedMonthYear] = useState<string>(currentMonthStr);
-  const [workTypeFilter, setWorkTypeFilter] = useState<string>('ALL'); // 'ALL' | 'CUSTOMER_SHARED' | 'PARTNER_1_PRIVATE' | 'PARTNER_2_PRIVATE'
+  const [partyFilter, setPartyFilter] = useState<'ALL' | 'SHOP' | 'AHMED' | 'ABDO'>('ALL');
+  const [dateFilterType, setDateFilterType] = useState<'MONTH' | 'TODAY' | 'WEEK' | 'CUSTOM'>('MONTH');
+  const [customFromDate, setCustomFromDate] = useState<string>(`${currentMonthStr}-01`);
+  const [customToDate, setCustomToDate] = useState<string>(todayISO);
+
+  // UI Modals & Expanders
+  const [isWithdrawnModalOpen, setIsWithdrawnModalOpen] = useState(false);
+  const [modalSearchQuery, setModalSearchQuery] = useState('');
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
 
-  // Parse Year and Month for label display (e.g. "يوليو 2026")
+  // Parse Month/Year for display
   const [yearStr, monthNumStr] = selectedMonthYear.split('-');
   const selectedYear = Number(yearStr) || now.getFullYear();
   const selectedMonth = Number(monthNumStr) || now.getMonth() + 1;
@@ -58,40 +78,58 @@ export default function ProfitsSummary({
   ];
   const selectedMonthLabel = `${monthNamesArabic[selectedMonth - 1] || ''} ${selectedYear}`;
 
-  // Filter orders by selected month/year and work ownership filter
-  const filteredOrders = orders.filter((o) => {
-    if (!o.receivedDate) return false;
-    const orderDateISO = formatDateISO(o.receivedDate); // "YYYY-MM-DD"
-    if (!orderDateISO.startsWith(selectedMonthYear)) return false;
+  // Helper Date Check Function
+  const isDateInFilterRange = (dateStr?: string): boolean => {
+    if (!dateStr) return false;
+    const isoDate = formatDateISO(dateStr);
 
-    const ownership = o.jobType || o.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
-
-    if (workTypeFilter === 'ALL') return true;
-    if (workTypeFilter === 'CUSTOMER_SHARED') {
-      return ownership === WorkOwnershipType.CUSTOMER_SHARED;
+    if (dateFilterType === 'TODAY') {
+      return isoDate === todayISO;
     }
-    if (workTypeFilter === 'PARTNER_1_PRIVATE') {
-      return ownership === WorkOwnershipType.PARTNER_1_PRIVATE;
+    if (dateFilterType === 'WEEK') {
+      const d = new Date(isoDate);
+      const diffMs = now.getTime() - d.getTime();
+      const diffDays = diffMs / (1000 * 60 * 60 * 24);
+      return diffDays >= 0 && diffDays <= 7;
     }
-    if (workTypeFilter === 'PARTNER_2_PRIVATE') {
-      return ownership === WorkOwnershipType.PARTNER_2_PRIVATE;
+    if (dateFilterType === 'MONTH') {
+      return isoDate.startsWith(selectedMonthYear);
+    }
+    if (dateFilterType === 'CUSTOM') {
+      return isoDate >= customFromDate && isoDate <= customToDate;
     }
     return true;
+  };
+
+  // Helper Party Ownership Match
+  const matchesPartyFilter = (ownership: WorkOwnershipType): boolean => {
+    if (partyFilter === 'ALL') return true;
+    if (partyFilter === 'SHOP') return ownership === WorkOwnershipType.CUSTOMER_SHARED;
+    if (partyFilter === 'AHMED') return ownership === WorkOwnershipType.PARTNER_1_PRIVATE;
+    if (partyFilter === 'ABDO') return ownership === WorkOwnershipType.PARTNER_2_PRIVATE;
+    return true;
+  };
+
+  // 1. Filter Orders by Date & Party
+  const filteredOrders = orders.filter((o) => {
+    if (!isDateInFilterRange(o.receivedDate)) return false;
+    const ownership = o.jobType || o.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
+    return matchesPartyFilter(ownership);
   });
 
-  // Build row details for each order including spare parts used
+  // Build row details for each filtered order
   const rows = filteredOrders.map((o) => {
     const orderNum = (o as any).orderNumber || o.id;
     const customer = o.customerNameSnapshot || o.guestCustomerName || 'عميل نقدي';
     const date = formatDateISO(o.receivedDate);
     const totalInvoice = Math.max(0, (Number(o.finalRepairPrice ?? o.totalEstimatedCost) || 0) - (Number(o.discount) || 0));
 
-    // Get parts for this order from partUsages
+    // Get parts for this order
     const orderParts = partUsages.filter(
       (pu) => pu.repairOrderId === o.id && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
     );
 
-    let partsList: PartDetail[] = [];
+    let partsList: { partName: string; quantity: number; unitCost: number; totalCost: number }[] = [];
     let partsCost = 0;
 
     if (orderParts.length > 0) {
@@ -108,7 +146,6 @@ export default function ProfitsSummary({
       });
       partsCost = partsList.reduce((sum, item) => sum + item.totalCost, 0);
     } else {
-      // Fallback to order devices partsCost if specific parts list is not saved
       const devicePartsCost = o.devices?.reduce((sum, d) => sum + (Number(d.partsCost) || 0), 0) || 0;
       partsCost = devicePartsCost;
       if (devicePartsCost > 0) {
@@ -163,36 +200,136 @@ export default function ProfitsSummary({
     };
   });
 
-  // Calculate Monthly Aggregated Spare Parts Summary ("تجميع البضاعة خلال الشهر")
-  const aggregatedPartsMap: { [key: string]: { partName: string; totalQty: number; unitCost: number; totalCost: number } } = {};
+  // 2. Extract All Withdrawn Inventory Items across filtered orders & invoices
+  const withdrawnItemsList: WithdrawnItemDetail[] = [];
 
-  rows.forEach((r) => {
-    r.partsList.forEach((p) => {
-      const key = p.partName.trim().toLowerCase();
-      if (!aggregatedPartsMap[key]) {
-        aggregatedPartsMap[key] = {
-          partName: p.partName,
-          totalQty: 0,
-          unitCost: p.unitCost,
-          totalCost: 0
-        };
+  // A. From Repair Orders
+  filteredOrders.forEach((o) => {
+    const orderNum = (o as any).orderNumber || o.id;
+    const customerName = o.customerNameSnapshot || o.guestCustomerName || 'عميل نقدي';
+    const date = formatDateISO(o.receivedDate);
+    const ownership = o.jobType || o.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
+
+    const orderParts = partUsages.filter(
+      (pu) => pu.repairOrderId === o.id && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
+    );
+
+    if (orderParts.length > 0) {
+      orderParts.forEach((pu) => {
+        const qty = Number(pu.quantity) || 1;
+        const uCost = Number(pu.unitCost) || 0;
+        const tCost = Number(pu.totalCost) || qty * uCost;
+        withdrawnItemsList.push({
+          id: pu.id || `${o.id}-${pu.partName}`,
+          partName: pu.partName || 'قطع غيار صيانة',
+          quantity: qty,
+          unitCost: uCost,
+          totalCost: tCost,
+          refNum: `أمر #${orderNum}`,
+          customerName,
+          date,
+          ownership,
+          sourceType: 'REPAIR_ORDER'
+        });
+      });
+    } else {
+      const devicePartsCost = o.devices?.reduce((sum, d) => sum + (Number(d.partsCost) || 0), 0) || 0;
+      if (devicePartsCost > 0) {
+        withdrawnItemsList.push({
+          id: `${o.id}-devparts`,
+          partName: 'قطع غيار صيانة مسجلة بأجهزة الأوردر',
+          quantity: 1,
+          unitCost: devicePartsCost,
+          totalCost: devicePartsCost,
+          refNum: `أمر #${orderNum}`,
+          customerName,
+          date,
+          ownership,
+          sourceType: 'REPAIR_ORDER'
+        });
       }
-      aggregatedPartsMap[key].totalQty += p.quantity;
-      aggregatedPartsMap[key].totalCost += p.totalCost;
-    });
+    }
   });
 
-  const aggregatedPartsList = Object.values(aggregatedPartsMap).sort((a, b) => b.totalCost - a.totalCost);
+  // B. From Direct Sales Invoices (if applicable)
+  invoices.forEach((inv) => {
+    if (!isDateInFilterRange(inv.createdAt)) return;
+    const invOwnership = WorkOwnershipType.CUSTOMER_SHARED;
+    if (!matchesPartyFilter(invOwnership)) return;
 
-  // Overall KPI Summaries (الملخص النهائي)
+    if (inv.items && inv.items.length > 0) {
+      inv.items.forEach((item, idx) => {
+        const qty = Number(item.quantity) || 1;
+        const uCost = Number((item as any).costPrice) || Number(item.unitPrice) * 0.7; // fallback
+        const tCost = uCost * qty;
+        if (tCost > 0) {
+          withdrawnItemsList.push({
+            id: `inv-${inv.id}-${idx}`,
+            partName: item.productName || item.description || 'بضاعة مبيعات',
+            quantity: qty,
+            unitCost: uCost,
+            totalCost: tCost,
+            refNum: `فاتورة #${inv.invoiceNumber || inv.id}`,
+            customerName: inv.customerName || 'عميل مبيعات',
+            date: formatDateISO(inv.createdAt),
+            ownership: invOwnership,
+            sourceType: 'DIRECT_INVOICE'
+          });
+        }
+      });
+    }
+  });
+
+  // Withdrawn Inventory Aggregations
+  const totalWithdrawnQty = withdrawnItemsList.reduce((sum, i) => sum + i.quantity, 0);
+  const totalWithdrawnCost = roundMoney(withdrawnItemsList.reduce((sum, i) => sum + i.totalCost, 0));
+
+  // Overall KPI Summaries for displayed dataset
   const totalOrdersCount = rows.length;
   const totalInvoices = roundMoney(rows.reduce((sum, r) => sum + r.totalInvoice, 0));
-  const totalPartsQty = rows.reduce((sum, r) => sum + r.partsList.reduce((pSum, p) => pSum + p.quantity, 0), 0);
   const totalPartsCost = roundMoney(rows.reduce((sum, r) => sum + r.partsCost, 0));
   const totalNetProfit = roundMoney(rows.reduce((sum, r) => sum + r.netProfit, 0));
   const totalAhmedShare = roundMoney(rows.reduce((sum, r) => sum + r.ahmedShare, 0));
   const totalAbdoShare = roundMoney(rows.reduce((sum, r) => sum + r.abdoShare, 0));
 
+  // ABDO'S SETTLEMENT FORMULA CALCULATIONS (Requirement 2)
+  // For Abdo's Work specifically (Job type = PARTNER_2_PRIVATE):
+  const abdoWorkRows = orders.filter((o) => {
+    if (!isDateInFilterRange(o.receivedDate)) return false;
+    const ownership = o.jobType || o.workOwnershipType;
+    return ownership === WorkOwnershipType.PARTNER_2_PRIVATE;
+  }).map((o) => {
+    const totalInvoice = Math.max(0, (Number(o.finalRepairPrice ?? o.totalEstimatedCost) || 0) - (Number(o.discount) || 0));
+    const orderParts = partUsages.filter(
+      (pu) => pu.repairOrderId === o.id && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
+    );
+    let partsCost = 0;
+    if (orderParts.length > 0) {
+      partsCost = orderParts.reduce((sum, p) => sum + (Number(p.totalCost) || (Number(p.quantity) * Number(p.unitCost))), 0);
+    } else {
+      partsCost = o.devices?.reduce((sum, d) => sum + (Number(d.partsCost) || 0), 0) || 0;
+    }
+    const netProfit = Math.max(0, totalInvoice - partsCost);
+    return {
+      totalInvoice,
+      partsCost,
+      netProfit,
+      ahmed25Share: roundMoney(netProfit * 0.25),
+      abdo75Share: roundMoney(netProfit * 0.75)
+    };
+  });
+
+  const abdoTotalInvoices = roundMoney(abdoWorkRows.reduce((sum, r) => sum + r.totalInvoice, 0));
+  const abdoTotalPartsCost = roundMoney(abdoWorkRows.reduce((sum, r) => sum + r.partsCost, 0));
+  const abdoTotalNetProfit = roundMoney(abdoWorkRows.reduce((sum, r) => sum + r.netProfit, 0));
+  const abdoAhmed25Share = roundMoney(abdoWorkRows.reduce((sum, r) => sum + r.ahmed25Share, 0));
+  const abdoAbdo75Profit = roundMoney(abdoWorkRows.reduce((sum, r) => sum + r.abdo75Share, 0));
+
+  // Exact Formula required:
+  // إجمالي المستحق على عبده = تكلفة البضاعة المسحوبة + نسبة أحمد 25%
+  const abdoTotalOwedByAbdo = roundMoney(abdoTotalPartsCost + abdoAhmed25Share);
+
+  // Print & Export Handlers
   const handlePrint = () => {
     window.print();
   };
@@ -223,21 +360,27 @@ export default function ProfitsSummary({
     ]);
 
     csvRows.push([]);
-    csvRows.push(['--- ملخص البضاعة المسحوبة خلال الشهر ---']);
-    csvRows.push(['اسم قطعة الغيار', 'إجمالي العدد', 'تكلفة الوحدة', 'إجمالي التكلفة']);
-    aggregatedPartsList.forEach((p) => {
-      csvRows.push([`"${p.partName}"`, p.totalQty, p.unitCost, p.totalCost]);
+    csvRows.push(['--- تفاصيل البضاعة المسحوبة ---']);
+    csvRows.push(['اسم القطعة', 'الكمية المسحوبة', 'سعر التكلفة', 'إجمالي التكلفة', 'رقم الأوردر/الفاتورة', 'العميل', 'التاريخ']);
+    withdrawnItemsList.forEach((item) => {
+      csvRows.push([
+        `"${item.partName}"`,
+        item.quantity,
+        item.unitCost,
+        item.totalCost,
+        `"${item.refNum}"`,
+        `"${item.customerName}"`,
+        item.date
+      ]);
     });
 
     csvRows.push([]);
-    csvRows.push(['--- الإجمالي العام ---']);
-    csvRows.push(['عدد الأوردرات', totalOrdersCount]);
-    csvRows.push(['إجمالي الفواتير', totalInvoices]);
-    csvRows.push(['إجمالي قطع الغيار', totalPartsQty]);
-    csvRows.push(['إجمالي تكلفة قطع الغيار', totalPartsCost]);
-    csvRows.push(['إجمالي صافي الربح', totalNetProfit]);
-    csvRows.push(['نصيب أحمد النهائي', totalAhmedShare]);
-    csvRows.push(['نصيب عبده النهائي', totalAbdoShare]);
+    csvRows.push(['--- تسوية حساب عبده (شغل عبده) ---']);
+    csvRows.push(['إجمالي الفواتير الخاصة بعبده', abdoTotalInvoices]);
+    csvRows.push(['إجمالي تكلفة البضاعة المسحوبة', abdoTotalPartsCost]);
+    csvRows.push(['نسبة أحمد (25%)', abdoAhmed25Share]);
+    csvRows.push(['صافي ربح عبده (75%)', abdoAbdo75Profit]);
+    csvRows.push(['إجمالي المستحق على عبده (البضاعة + نسبة أحمد)', abdoTotalOwedByAbdo]);
 
     const csvContent =
       'data:text/csv;charset=utf-8,\uFEFF' +
@@ -245,36 +388,26 @@ export default function ProfitsSummary({
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `monthly_profits_report_${selectedMonthYear}.csv`);
+    link.setAttribute('download', `partner_accounting_report_${selectedMonthYear}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  // Quick Month Navigation
-  const handleSetPrevMonth = () => {
-    let y = selectedYear;
-    let m = selectedMonth - 1;
-    if (m < 1) {
-      m = 12;
-      y -= 1;
-    }
-    setSelectedMonthYear(`${y}-${String(m).padStart(2, '0')}`);
-  };
-
-  const handleSetNextMonth = () => {
-    let y = selectedYear;
-    let m = selectedMonth + 1;
-    if (m > 12) {
-      m = 1;
-      y += 1;
-    }
-    setSelectedMonthYear(`${y}-${String(m).padStart(2, '0')}`);
-  };
+  // Modal Filtered Items
+  const modalFilteredItems = withdrawnItemsList.filter((item) => {
+    if (!modalSearchQuery.trim()) return true;
+    const q = modalSearchQuery.toLowerCase();
+    return (
+      item.partName.toLowerCase().includes(q) ||
+      item.refNum.toLowerCase().includes(q) ||
+      item.customerName.toLowerCase().includes(q)
+    );
+  });
 
   return (
     <div className="space-y-6 text-right dir-rtl">
-      {/* HEADER & FILTER BAR */}
+      {/* HEADER BAR */}
       <div className="bg-[#11131e] border border-[#2a2d42] p-5 rounded-2xl flex flex-wrap items-center justify-between gap-4 shadow-xl">
         <div className="flex items-center gap-3">
           <div className="p-3 bg-cyan-500/10 border border-cyan-500/20 rounded-xl text-cyan-400">
@@ -282,30 +415,29 @@ export default function ProfitsSummary({
           </div>
           <div>
             <h2 className="text-xl font-black text-white flex items-center gap-2">
-              ملخص الأرباح والتقرير الشهري
+              محاسبة الشركاء وتقارير الأرباح
               <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
-                {selectedMonthLabel}
+                {dateFilterType === 'MONTH' ? selectedMonthLabel : dateFilterType === 'TODAY' ? 'تقرير اليوم' : dateFilterType === 'WEEK' ? 'تقرير الأسبوع' : 'فترة مخصصة'}
               </span>
             </h2>
             <p className="text-xs text-gray-400 mt-0.5">
-              حساب وإجمالي أرباح المحل والشركاء (أحمد وعبده) بدون تعقيدات محاسبية
+              توزيع الأرباح الدقيق حسب نوع الشغل، تتبع البضاعة المسحوبة، وتسوية حساب عبده
             </p>
           </div>
         </div>
 
-        {/* Action Buttons */}
+        {/* Export & Print */}
         <div className="flex items-center gap-2">
           <button
             onClick={handleExportCSV}
-            className="px-3 py-2 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+            className="px-3.5 py-2 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
           >
             <Download className="w-4 h-4" />
-            تصدير Excel/CSV
+            تصدير CSV
           </button>
-
           <button
             onClick={handlePrint}
-            className="px-3 py-2 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+            className="px-3.5 py-2 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
           >
             <Printer className="w-4 h-4" />
             طباعة
@@ -313,66 +445,186 @@ export default function ProfitsSummary({
         </div>
       </div>
 
-      {/* FILTERS CONTROL CARD */}
-      <div className="bg-[#11131e] border border-[#2a2d42] p-4 rounded-2xl grid grid-cols-1 md:grid-cols-2 gap-4 shadow-md">
-        {/* 1. Month & Year Selector */}
-        <div className="space-y-1.5">
-          <label className="text-xs text-cyan-400 font-bold block flex items-center gap-1.5">
-            <Calendar className="w-4 h-4 text-cyan-400" />
-            1. اختيار الشهر والسنة:
-          </label>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleSetPrevMonth}
-              className="px-3 py-2 bg-[#181b2a] hover:bg-[#202538] border border-[#2a2d42] text-gray-300 rounded-xl text-xs font-bold transition"
-            >
-              الشهر السابق
-            </button>
+      {/* FILTER CONTROL PANEL */}
+      <div className="bg-[#11131e] border border-[#2a2d42] p-4.5 rounded-2xl space-y-4 shadow-md">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* 1. Select Party / Work Owner */}
+          <div className="space-y-1.5">
+            <label className="text-xs text-cyan-400 font-bold block flex items-center gap-1.5">
+              <Users className="w-4 h-4 text-cyan-400" />
+              1. اختيار الطرف / نوع الشغل:
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                { id: 'ALL', label: 'الجميع (الكل)', icon: Users },
+                { id: 'SHOP', label: 'المحل (50/50)', icon: Building2 },
+                { id: 'AHMED', label: 'أحمد (100%)', icon: User },
+                { id: 'ABDO', label: 'عبده (75/25)', icon: User }
+              ].map((p) => {
+                const Icon = p.icon;
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => setPartyFilter(p.id as any)}
+                    className={`flex-1 min-w-[100px] py-2 px-3 rounded-xl text-xs font-bold transition cursor-pointer flex items-center justify-center gap-1.5 border ${
+                      partyFilter === p.id
+                        ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/60 shadow-lg font-black'
+                        : 'bg-[#181b2a] text-gray-400 border-[#2a2d42] hover:bg-[#202538] hover:text-white'
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5" />
+                    <span>{p.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 2. Select Date Range */}
+          <div className="space-y-1.5">
+            <label className="text-xs text-cyan-400 font-bold block flex items-center gap-1.5">
+              <Calendar className="w-4 h-4 text-cyan-400" />
+              2. التصفية حسب التاريخ:
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                { id: 'TODAY', label: 'اليوم' },
+                { id: 'WEEK', label: 'الأسبوع' },
+                { id: 'MONTH', label: 'الشهر' },
+                { id: 'CUSTOM', label: 'فترة مخصصة' }
+              ].map((d) => (
+                <button
+                  key={d.id}
+                  onClick={() => setDateFilterType(d.id as any)}
+                  className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition cursor-pointer border ${
+                    dateFilterType === d.id
+                      ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/60 font-black'
+                      : 'bg-[#181b2a] text-gray-400 border-[#2a2d42] hover:bg-[#202538] hover:text-white'
+                  }`}
+                >
+                  {d.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Sub-inputs for Month Selector or Custom Date Inputs */}
+        {dateFilterType === 'MONTH' && (
+          <div className="flex items-center gap-3 pt-2 border-t border-[#1f2336]">
+            <span className="text-xs text-gray-400 font-semibold">الشهر والسنة:</span>
             <input
               type="month"
               value={selectedMonthYear}
               onChange={(e) => setSelectedMonthYear(e.target.value)}
-              className="bg-[#181b2a] border border-cyan-500/40 text-white font-bold text-sm px-3 py-1.5 rounded-xl outline-none focus:border-cyan-400 cursor-pointer flex-1"
+              className="bg-[#181b2a] border border-cyan-500/40 text-white font-bold text-xs px-3 py-1.5 rounded-xl outline-none focus:border-cyan-400 cursor-pointer"
             />
-            <button
-              onClick={handleSetNextMonth}
-              className="px-3 py-2 bg-[#181b2a] hover:bg-[#202538] border border-[#2a2d42] text-gray-300 rounded-xl text-xs font-bold transition"
-            >
-              الشهر التالي
-            </button>
+            <span className="text-xs text-cyan-300 font-bold">({selectedMonthLabel})</span>
           </div>
-        </div>
+        )}
 
-        {/* 2. Work Ownership Filter */}
-        <div className="space-y-1.5">
-          <label className="text-xs text-cyan-400 font-bold block flex items-center gap-1.5">
-            <Layers className="w-4 h-4 text-cyan-400" />
-            2. اختيار نوع الشغل:
-          </label>
-          <div className="flex flex-wrap gap-1.5">
-            {[
-              { id: 'ALL', label: 'الكل' },
-              { id: 'CUSTOMER_SHARED', label: 'شغل المحل' },
-              { id: 'PARTNER_1_PRIVATE', label: 'شغل أحمد' },
-              { id: 'PARTNER_2_PRIVATE', label: 'شغل عبده' }
-            ].map((f) => (
-              <button
-                key={f.id}
-                onClick={() => setWorkTypeFilter(f.id)}
-                className={`flex-1 min-w-[80px] py-2 px-3 rounded-xl text-xs font-bold transition cursor-pointer border ${
-                  workTypeFilter === f.id
-                    ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50 shadow-md'
-                    : 'bg-[#181b2a] text-gray-400 border-[#2a2d42] hover:bg-[#202538] hover:text-white'
-                }`}
-              >
-                {f.label}
-              </button>
-            ))}
+        {dateFilterType === 'CUSTOM' && (
+          <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-[#1f2336]">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-400 font-semibold">من:</span>
+              <input
+                type="date"
+                value={customFromDate}
+                onChange={(e) => setCustomFromDate(e.target.value)}
+                className="bg-[#181b2a] border border-cyan-500/40 text-white font-bold text-xs px-3 py-1.5 rounded-xl outline-none focus:border-cyan-400 cursor-pointer"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-400 font-semibold">إلى:</span>
+              <input
+                type="date"
+                value={customToDate}
+                onChange={(e) => setCustomToDate(e.target.value)}
+                className="bg-[#181b2a] border border-cyan-500/40 text-white font-bold text-xs px-3 py-1.5 rounded-xl outline-none focus:border-cyan-400 cursor-pointer"
+              />
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
-      {/* SUMMARY KPI CARDS (الملخص النهائي - الخانات السبع) */}
+      {/* SPECIAL HIGHLIGHT: ABDO'S ACCOUNT SETTLEMENT BOX (Requirement 2) */}
+      {(partyFilter === 'ALL' || partyFilter === 'ABDO') && (
+        <div className="bg-gradient-to-br from-[#1a1710] via-[#11131e] to-[#141221] border-2 border-amber-500/40 p-5 rounded-2xl shadow-2xl relative overflow-hidden space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-500/20 pb-3">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2.5 bg-amber-500/20 border border-amber-500/40 rounded-xl text-amber-400">
+                <DollarSign className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black text-amber-300 flex items-center gap-2">
+                  تسوية حساب عبده (شغل عبده الخاص)
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                    قواعد: عبده 75% | أحمد 25% | البضاعة مسحوبة
+                  </span>
+                </h3>
+                <p className="text-[11px] text-gray-400">
+                  عبده يسحب البضاعة من المحل دون دفع قيمتها فوراً، وتُسوى أرباح أحمد والبضاعة بنهاية الشهر
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-rose-950/40 border border-rose-500/50 px-4 py-2 rounded-xl text-left dir-ltr">
+              <span className="text-[10px] text-rose-300 font-bold block text-right dir-rtl">
+                إجمالي المستحق على عبده
+              </span>
+              <span className="text-xl font-black text-rose-400">
+                {abdoTotalOwedByAbdo.toLocaleString('ar-EG')} <span className="text-xs">{currencySymbol}</span>
+              </span>
+            </div>
+          </div>
+
+          {/* Abdo Breakdown Grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            <div className="bg-[#181b2a]/80 border border-[#2a2d42] p-3 rounded-xl">
+              <span className="text-[10px] text-gray-400 font-bold block">1. إجمالي فواتير عبده</span>
+              <h4 className="text-base font-black text-white mt-1">
+                {abdoTotalInvoices.toLocaleString('ar-EG')} <span className="text-[10px]">{currencySymbol}</span>
+              </h4>
+            </div>
+
+            <div className="bg-[#181b2a]/80 border border-rose-500/30 p-3 rounded-xl">
+              <span className="text-[10px] text-rose-300 font-bold block">2. تكلفة البضاعة المسحوبة</span>
+              <h4 className="text-base font-black text-rose-400 mt-1">
+                {abdoTotalPartsCost.toLocaleString('ar-EG')} <span className="text-[10px]">{currencySymbol}</span>
+              </h4>
+            </div>
+
+            <div className="bg-[#181b2a]/80 border border-indigo-500/30 p-3 rounded-xl">
+              <span className="text-[10px] text-indigo-300 font-bold block">3. نسبة أحمد (25%)</span>
+              <h4 className="text-base font-black text-indigo-300 mt-1">
+                {abdoAhmed25Share.toLocaleString('ar-EG')} <span className="text-[10px]">{currencySymbol}</span>
+              </h4>
+            </div>
+
+            <div className="bg-[#181b2a]/80 border border-emerald-500/30 p-3 rounded-xl">
+              <span className="text-[10px] text-emerald-300 font-bold block">4. صافي ربح عبده (75%)</span>
+              <h4 className="text-base font-black text-emerald-300 mt-1">
+                {abdoAbdo75Profit.toLocaleString('ar-EG')} <span className="text-[10px]">{currencySymbol}</span>
+              </h4>
+            </div>
+
+            <div className="col-span-2 sm:col-span-1 bg-gradient-to-r from-rose-950/60 to-rose-900/40 border border-rose-500/60 p-3 rounded-xl">
+              <span className="text-[10px] text-rose-200 font-bold block">5. المستحق على عبده</span>
+              <h4 className="text-base font-black text-rose-300 mt-1">
+                {abdoTotalOwedByAbdo.toLocaleString('ar-EG')} <span className="text-[10px]">{currencySymbol}</span>
+              </h4>
+            </div>
+          </div>
+
+          <div className="bg-[#131625] p-2.5 rounded-xl border border-amber-500/20 text-xs text-amber-200/90 flex items-center justify-between">
+            <span>
+              💡 <strong>معادلة التسوية:</strong> إجمالي المستحق على عبده = تكلفة البضاعة المسحوبة ({abdoTotalPartsCost.toLocaleString('ar-EG')} ج.م) + نسبة أحمد 25% ({abdoAhmed25Share.toLocaleString('ar-EG')} ج.م) = <strong>{abdoTotalOwedByAbdo.toLocaleString('ar-EG')} ج.م.</strong>
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* SUMMARY KPI CARDS (INCLUDING CLICKABLE WITHDRAWN INVENTORY CARD - Requirement 3) */}
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
         {/* 1. عدد الأوردرات */}
         <div className="bg-[#11131e] border border-[#2a2d42] p-3.5 rounded-2xl">
@@ -383,29 +635,42 @@ export default function ProfitsSummary({
 
         {/* 2. إجمالي الفواتير */}
         <div className="bg-[#11131e] border border-[#2a2d42] p-3.5 rounded-2xl">
-          <span className="text-[11px] text-gray-400 font-bold block">إجمالي الفواتير</span>
+          <span className="text-[11px] text-gray-400 font-bold block">إجمالي الإيرادات</span>
           <h4 className="text-xl font-black text-white mt-1">
             {totalInvoices.toLocaleString('ar-EG')}{' '}
             <span className="text-[10px] text-gray-400">{currencySymbol}</span>
           </h4>
-          <span className="text-[10px] text-gray-500 block mt-0.5">شامل الإيرادات</span>
+          <span className="text-[10px] text-gray-500 block mt-0.5">إجمالي الفواتير</span>
         </div>
 
-        {/* 3. إجمالي عدد قطع الغيار */}
-        <div className="bg-[#11131e] border border-rose-500/20 p-3.5 rounded-2xl">
-          <span className="text-[11px] text-rose-300/80 font-bold block">إجمالي عدد قطع الغيار</span>
-          <h4 className="text-xl font-black text-rose-400 mt-1">{totalPartsQty}</h4>
-          <span className="text-[10px] text-gray-500 block mt-0.5">قطع مستخدمة</span>
-        </div>
-
-        {/* 4. إجمالي تكلفة قطع الغيار */}
-        <div className="bg-[#11131e] border border-rose-500/30 p-3.5 rounded-2xl">
-          <span className="text-[11px] text-rose-400 font-bold block">إجمالي تكلفة قطع الغيار</span>
+        {/* 3. CLICKABLE CARD: البضاعة المسحوبة (تكلفة البضاعة) */}
+        <div
+          onClick={() => setIsWithdrawnModalOpen(true)}
+          className="bg-gradient-to-br from-rose-950/40 via-[#11131e] to-[#161222] border-2 border-rose-500/50 hover:border-rose-400 p-3.5 rounded-2xl cursor-pointer transition-all hover:scale-[1.02] group shadow-lg relative"
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] text-rose-300 font-extrabold flex items-center gap-1">
+              <ShoppingBag className="w-3.5 h-3.5 text-rose-400" />
+              البضاعة المسحوبة
+            </span>
+            <span className="text-[9px] bg-rose-500/20 text-rose-300 px-1.5 py-0.5 rounded-full font-bold group-hover:bg-rose-500 group-hover:text-white transition">
+              عرض التفاصيل 👁️
+            </span>
+          </div>
           <h4 className="text-xl font-black text-rose-300 mt-1">
             {totalPartsCost.toLocaleString('ar-EG')}{' '}
             <span className="text-[10px] text-gray-400">{currencySymbol}</span>
           </h4>
-          <span className="text-[10px] text-gray-500 block mt-0.5">تكلفة البضاعة</span>
+          <span className="text-[10px] text-rose-400/80 block mt-0.5 font-bold">
+            {totalWithdrawnQty} قطعة مسحوبة (اضغط)
+          </span>
+        </div>
+
+        {/* 4. عدد قطع الغيار */}
+        <div className="bg-[#11131e] border border-rose-500/20 p-3.5 rounded-2xl">
+          <span className="text-[11px] text-rose-300/80 font-bold block">إجمالي قطع الغيار</span>
+          <h4 className="text-xl font-black text-rose-400 mt-1">{totalWithdrawnQty}</h4>
+          <span className="text-[10px] text-gray-500 block mt-0.5">قطعة مستخدمة</span>
         </div>
 
         {/* 5. إجمالي صافي الربح */}
@@ -415,20 +680,20 @@ export default function ProfitsSummary({
             {totalNetProfit.toLocaleString('ar-EG')}{' '}
             <span className="text-[10px] text-gray-400">{currencySymbol}</span>
           </h4>
-          <span className="text-[10px] text-gray-400 block mt-0.5">بعد خصم البضاعة</span>
+          <span className="text-[10px] text-gray-400 block mt-0.5">بعد خصم التكلفة</span>
         </div>
 
-        {/* 6. إجمالي نصيب أحمد */}
+        {/* 6. إجمالي مستحق أحمد */}
         <div className="bg-gradient-to-br from-indigo-950/60 to-[#11131e] border border-indigo-500/40 p-3.5 rounded-2xl">
           <span className="text-[11px] text-indigo-300 font-bold block">إجمالي مستحق أحمد</span>
           <h4 className="text-xl font-black text-indigo-200 mt-1">
             {totalAhmedShare.toLocaleString('ar-EG')}{' '}
             <span className="text-[10px] text-gray-400">{currencySymbol}</span>
           </h4>
-          <span className="text-[10px] text-indigo-300/80 block mt-0.5">نصيبه النهائى</span>
+          <span className="text-[10px] text-indigo-300/80 block mt-0.5">نصيبه النهائي</span>
         </div>
 
-        {/* 7. إجمالي نصيب عبده */}
+        {/* 7. إجمالي مستحق عبده */}
         <div className="bg-gradient-to-br from-emerald-950/60 to-[#11131e] border border-emerald-500/40 p-3.5 rounded-2xl">
           <span className="text-[11px] text-emerald-300 font-bold block">إجمالي مستحق عبده</span>
           <h4 className="text-xl font-black text-emerald-200 mt-1">
@@ -439,13 +704,16 @@ export default function ProfitsSummary({
         </div>
       </div>
 
-      {/* MAIN ORDERS REPAIR TABLE (جدول تفاصيل الأوردرات) */}
+      {/* MAIN ORDERS REPAIR TABLE */}
       <div className="bg-[#11131e] border border-[#2a2d42] rounded-2xl overflow-hidden shadow-xl">
         <div className="p-4 border-b border-[#2a2d42] flex items-center justify-between bg-[#141724]">
           <h3 className="text-sm font-bold text-white flex items-center gap-2">
             <FileText className="w-4 h-4 text-cyan-400" />
-            جدول أوردرات الصيانة والتوزيع - {selectedMonthLabel} ({rows.length} أمر)
+            جدول أوردرات الصيانة والتوزيع ({rows.length} أمر)
           </h3>
+          <span className="text-xs font-bold text-gray-400">
+            الطرف المفلتر: <strong className="text-cyan-300">{partyFilter === 'ALL' ? 'الكل' : partyFilter === 'SHOP' ? 'المحل' : partyFilter === 'AHMED' ? 'أحمد' : 'عبده'}</strong>
+          </span>
         </div>
 
         <div className="overflow-x-auto">
@@ -457,8 +725,8 @@ export default function ProfitsSummary({
                 <th className="p-3">العميل</th>
                 <th className="p-3">نوع الشغل</th>
                 <th className="p-3">إجمالي الفاتورة</th>
-                <th className="p-3">تكلفة قطع الغيار</th>
-                <th className="p-3">صافي الربح</th>
+                <th className="p-3 text-rose-400">تكلفة قطع الغيار</th>
+                <th className="p-3 text-cyan-300">صافي الربح</th>
                 <th className="p-3 text-indigo-400 font-bold">نصيب أحمد</th>
                 <th className="p-3 text-emerald-400 font-bold">نصيب عبده</th>
                 <th className="p-3 text-center">عرض البضاعة</th>
@@ -512,13 +780,13 @@ export default function ProfitsSummary({
                             }`}
                           >
                             <Box className="w-3.5 h-3.5" />
-                            <span>عرض البضاعة</span>
+                            <span>عرض التفاصيل</span>
                             {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                           </button>
                         </td>
                       </tr>
 
-                      {/* Expanded Sub-Row for Order Parts */}
+                      {/* Expanded Sub-Row */}
                       {isExpanded && (
                         <tr className="bg-[#0e101a] border-y-2 border-cyan-500/30">
                           <td colSpan={10} className="p-4">
@@ -526,10 +794,10 @@ export default function ProfitsSummary({
                               <div className="flex items-center justify-between border-b border-[#2a2d42] pb-2">
                                 <span className="text-xs font-bold text-cyan-300 flex items-center gap-1.5">
                                   <Package className="w-4 h-4" />
-                                  قطع الغيار المستخدمة للأوردر رقم #{r.orderNum}
+                                  قطع الغيار المسحوبة للأوردر رقم #{r.orderNum}
                                 </span>
                                 <span className="text-[11px] text-gray-400 font-mono">
-                                  إجمالي البضاعة: {r.partsCost.toLocaleString('ar-EG')} {currencySymbol}
+                                  إجمالي التكلفة: {r.partsCost.toLocaleString('ar-EG')} {currencySymbol}
                                 </span>
                               </div>
 
@@ -538,9 +806,9 @@ export default function ProfitsSummary({
                                   <thead className="bg-[#1c2035] text-gray-400 font-bold">
                                     <tr>
                                       <th className="p-2">اسم قطعة الغيار</th>
-                                      <th className="p-2">الكمية المستخدمة</th>
+                                      <th className="p-2">الكمية المسحوبة</th>
                                       <th className="p-2">تكلفة الوحدة</th>
-                                      <th className="p-2 text-rose-300">إجمالي تكلفة القطعة</th>
+                                      <th className="p-2 text-rose-300">إجمالي التكلفة</th>
                                     </tr>
                                   </thead>
                                   <tbody className="divide-y divide-[#2a2d42]">
@@ -571,113 +839,144 @@ export default function ProfitsSummary({
               ) : (
                 <tr>
                   <td colSpan={10} className="p-8 text-center text-gray-500">
-                    لا توجد أوردرات صيانة مطابقة للفلتر في هذا الشهر ({selectedMonthLabel})
+                    لا توجد أوردرات صيانة مطابقة للفلتر المحدد
                   </td>
                 </tr>
               )}
             </tbody>
-            {rows.length > 0 && (
-              <tfoot className="bg-[#181b2a] border-t-2 border-[#2a2d42] font-bold text-white">
-                <tr>
-                  <td colSpan={4} className="p-3 text-left font-black text-cyan-400">
-                    الإجمالي العام ({selectedMonthLabel}):
-                  </td>
-                  <td className="p-3 text-white text-sm">
-                    {totalInvoices.toLocaleString('ar-EG')} {currencySymbol}
-                  </td>
-                  <td className="p-3 text-rose-400 text-sm">
-                    {totalPartsCost.toLocaleString('ar-EG')} {currencySymbol}
-                  </td>
-                  <td className="p-3 text-cyan-300 text-base font-black">
-                    {totalNetProfit.toLocaleString('ar-EG')} {currencySymbol}
-                  </td>
-                  <td className="p-3 text-indigo-300 text-base font-black">
-                    {totalAhmedShare.toLocaleString('ar-EG')} {currencySymbol}
-                  </td>
-                  <td className="p-3 text-emerald-300 text-base font-black">
-                    {totalAbdoShare.toLocaleString('ar-EG')} {currencySymbol}
-                  </td>
-                  <td className="p-3"></td>
-                </tr>
-              </tfoot>
-            )}
           </table>
         </div>
       </div>
 
-      {/* MONTHLY AGGREGATED SPARE PARTS SUMMARY TABLE (تجميع البضاعة خلال الشهر / ملخص البضاعة المسحوبة) */}
-      <div className="bg-[#11131e] border border-[#2a2d42] rounded-2xl overflow-hidden shadow-xl">
-        <div className="p-4 border-b border-[#2a2d42] flex items-center justify-between bg-[#141724]">
-          <div className="flex items-center gap-2">
-            <ShoppingBag className="w-5 h-5 text-rose-400" />
-            <div>
-              <h3 className="text-sm font-bold text-white">
-                ملخص البضاعة المسحوبة خلال شهر {selectedMonthLabel}
-              </h3>
-              <p className="text-[11px] text-gray-400">
-                تجميع لكافة قطع الغيار المسحوبة للأوردرات المحددة بالتقرير
-              </p>
+      {/* MODAL: DETAILED WITHDRAWN INVENTORY REPORT (Requirement 3) */}
+      {isWithdrawnModalOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 dir-rtl text-right overflow-y-auto">
+          <div className="bg-[#11131e] border border-[#2a2d42] rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+            {/* Modal Header */}
+            <div className="p-4 border-b border-[#2a2d42] flex items-center justify-between bg-[#141724]">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-rose-500/20 border border-rose-500/40 rounded-xl text-rose-400">
+                  <ShoppingBag className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white flex items-center gap-2">
+                    تقرير البضاعة المسحوبة بالتفصيل
+                    <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                      {partyFilter === 'ALL' ? 'جميع الأطراف' : partyFilter === 'SHOP' ? 'شغل المحل' : partyFilter === 'AHMED' ? 'شغل أحمد' : 'شغل عبده'}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-gray-400">
+                    قائمة تفصيلية بكافة البضائع والقطع المسحوبة من المخزن بناءً على الفلاتر المحددة
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setIsWithdrawnModalOpen(false)}
+                className="p-2 text-gray-400 hover:text-white bg-[#1a1d2d] hover:bg-[#25293e] rounded-xl transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Search Bar */}
+            <div className="p-4 border-b border-[#2a2d42] bg-[#161928] flex items-center gap-3">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-gray-400 absolute right-3 top-3" />
+                <input
+                  type="text"
+                  placeholder="ابحث باسم المنتج، رقم الأوردر، أو اسم العميل..."
+                  value={modalSearchQuery}
+                  onChange={(e) => setModalSearchQuery(e.target.value)}
+                  className="w-full bg-[#11131e] border border-[#2a2d42] text-white text-xs pr-9 pl-4 py-2.5 rounded-xl outline-none focus:border-rose-500/50"
+                />
+              </div>
+              <span className="text-xs font-bold text-gray-400">
+                النتائج: <strong className="text-rose-400">{modalFilteredItems.length}</strong> صنف
+              </span>
+            </div>
+
+            {/* Modal Table Content */}
+            <div className="overflow-y-auto flex-1 p-4">
+              <table className="w-full text-xs text-right text-gray-300 border-collapse">
+                <thead className="bg-[#181b2a] text-gray-400 font-semibold border-b border-[#2a2d42] sticky top-0">
+                  <tr>
+                    <th className="p-3">اسم المنتج / قطعة الغيار</th>
+                    <th className="p-3 text-center">الكمية المسحوبة</th>
+                    <th className="p-3">سعر التكلفة للوحدة</th>
+                    <th className="p-3 text-rose-400 font-bold">إجمالي تكلفة الصنف</th>
+                    <th className="p-3">رقم الفاتورة / أمر الصيانة</th>
+                    <th className="p-3">اسم العميل</th>
+                    <th className="p-3">التاريخ</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#1f2937]">
+                  {modalFilteredItems.length > 0 ? (
+                    modalFilteredItems.map((item, idx) => (
+                      <tr key={item.id || idx} className="hover:bg-[#161927] transition">
+                        <td className="p-3 font-bold text-white flex items-center gap-2">
+                          <Box className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                          <span>{item.partName}</span>
+                        </td>
+                        <td className="p-3 font-extrabold text-cyan-300 text-center text-sm">
+                          {item.quantity}
+                        </td>
+                        <td className="p-3 text-gray-300">
+                          {item.unitCost.toLocaleString('ar-EG')} {currencySymbol}
+                        </td>
+                        <td className="p-3 font-black text-rose-300 text-sm">
+                          {item.totalCost.toLocaleString('ar-EG')} {currencySymbol}
+                        </td>
+                        <td className="p-3 font-mono font-bold text-indigo-300">
+                          {item.refNum}
+                        </td>
+                        <td className="p-3 font-semibold text-white">
+                          {item.customerName}
+                        </td>
+                        <td className="p-3 text-gray-400 whitespace-nowrap">
+                          {item.date}
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={7} className="p-8 text-center text-gray-500">
+                        لا توجد بضاعة مسحوبة مطابقة للبحث أو الفلتر المختار
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Modal Footer Summary */}
+            <div className="p-4 border-t-2 border-[#2a2d42] bg-[#141724] flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <div className="bg-[#1a1d2d] border border-[#2a2d42] px-3.5 py-2 rounded-xl">
+                  <span className="text-[10px] text-gray-400 font-bold block">إجمالي عدد القطع:</span>
+                  <span className="text-sm font-black text-cyan-300">
+                    {modalFilteredItems.reduce((sum, i) => sum + i.quantity, 0)} قطعة
+                  </span>
+                </div>
+
+                <div className="bg-[#1a1d2d] border border-rose-500/30 px-3.5 py-2 rounded-xl">
+                  <span className="text-[10px] text-rose-300 font-bold block">إجمالي تكلفة البضاعة:</span>
+                  <span className="text-sm font-black text-rose-400">
+                    {roundMoney(modalFilteredItems.reduce((sum, i) => sum + i.totalCost, 0)).toLocaleString('ar-EG')} {currencySymbol}
+                  </span>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setIsWithdrawnModalOpen(false)}
+                className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl transition cursor-pointer"
+              >
+                إغلاق التقرير
+              </button>
             </div>
           </div>
-          <span className="text-xs font-bold px-3 py-1 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/30">
-            {aggregatedPartsList.length} نوع قطعة غيار
-          </span>
         </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs text-right text-gray-300">
-            <thead className="bg-[#181b2a] text-gray-400 font-semibold border-b border-[#2a2d42]">
-              <tr>
-                <th className="p-3">قطعة الغيار</th>
-                <th className="p-3 text-cyan-400">إجمالي العدد المستخدم خلال الشهر</th>
-                <th className="p-3">تكلفة الوحدة (وقت الأوردر)</th>
-                <th className="p-3 text-rose-400">إجمالي تكلفة الكمية</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#1f2937]">
-              {aggregatedPartsList.length > 0 ? (
-                aggregatedPartsList.map((p, idx) => (
-                  <tr key={idx} className="hover:bg-[#161927] transition">
-                    <td className="p-3 font-bold text-white flex items-center gap-2">
-                      <Box className="w-3.5 h-3.5 text-cyan-400" />
-                      {p.partName}
-                    </td>
-                    <td className="p-3 font-extrabold text-cyan-300 text-sm">
-                      {p.totalQty}
-                    </td>
-                    <td className="p-3 text-gray-300">
-                      {p.unitCost.toLocaleString('ar-EG')} {currencySymbol}
-                    </td>
-                    <td className="p-3 font-black text-rose-300 text-sm">
-                      {p.totalCost.toLocaleString('ar-EG')} {currencySymbol}
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan={4} className="p-8 text-center text-gray-500">
-                    لا توجد بضاعة مسحوبة لأوردرات الصيانة في هذا الشهر
-                  </td>
-                </tr>
-              )}
-            </tbody>
-            {aggregatedPartsList.length > 0 && (
-              <tfoot className="bg-[#181b2a] border-t-2 border-[#2a2d42] font-bold text-white">
-                <tr>
-                  <td className="p-3 text-left font-black text-cyan-400">
-                    إجمالي البضاعة المسحوبة بالكامل:
-                  </td>
-                  <td className="p-3 text-cyan-300 font-black text-sm">{totalPartsQty} قطعة</td>
-                  <td className="p-3"></td>
-                  <td className="p-3 text-rose-300 font-black text-base">
-                    {totalPartsCost.toLocaleString('ar-EG')} {currencySymbol}
-                  </td>
-                </tr>
-              </tfoot>
-            )}
-          </table>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
