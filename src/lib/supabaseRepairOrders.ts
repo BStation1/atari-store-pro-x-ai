@@ -218,14 +218,15 @@ export async function addRepairOrderToSupabase(
   orderData: Omit<RepairOrder, "id" | "receivedDate" | "trackingToken">,
   currentUser?: User
 ): Promise<RepairOrder> {
+  console.log("Save repair started");
+
   let targetCustomerId: string | null = isUuid(orderData.customerId) ? orderData.customerId! : null;
 
-  // If customer ID is missing or not a valid UUID (e.g. Guest customer or empty)
+  // Step 1: Ensure customer ID exists in Supabase
   if (!targetCustomerId) {
     const phoneToSearch = orderData.guestCustomerPhone || orderData.customerPhoneSnapshot || "";
     const nameToSearch = orderData.guestCustomerName || orderData.customerNameSnapshot || "عميل غير مسجل";
 
-    // 1. Try to find existing customer by phone in Supabase
     if (phoneToSearch) {
       try {
         const { data: existingCust } = await supabase
@@ -241,7 +242,6 @@ export async function addRepairOrderToSupabase(
       }
     }
 
-    // 2. If not found, attempt to insert a new customer into Supabase customers table
     if (!targetCustomerId) {
       try {
         const newCustPayload = {
@@ -261,14 +261,13 @@ export async function addRepairOrderToSupabase(
         if (createdCust?.id) {
           targetCustomerId = createdCust.id;
         } else {
-          console.warn("⚠️ Could not insert guest customer in Supabase:", custErr);
+          console.warn("⚠️ Could not insert guest customer in Supabase:", custErr?.message || custErr);
         }
       } catch (e) {
         console.warn("⚠️ Exception inserting guest customer in Supabase:", e);
       }
     }
 
-    // 3. Fallback: query any existing customer in Supabase if creation failed
     if (!targetCustomerId) {
       try {
         const { data: fallbackCust } = await supabase
@@ -286,13 +285,15 @@ export async function addRepairOrderToSupabase(
   }
 
   if (!targetCustomerId) {
-    throw new Error('تعذر ربط أمر الصيانة بعميل في قاعدة البيانات Supabase. يرجى اختيار عميل مسجل أو إدخال بيانات العميل الزائر.');
+    const err = new Error('تعذر ربط أمر الصيانة بعميل في قاعدة البيانات Supabase. يرجى اختيار عميل مسجل أو إدخال بيانات العميل الزائر.');
+    console.error("Save repair failed - No customer ID:", err);
+    throw err;
   }
 
+  // Step 2: Generate unique Order ID (ATR-XXXXX)
   const localList = getLocalRepairOrdersBackup();
   let maxNum = 10000;
 
-  // Determine next ATR number
   for (const o of localList) {
     const match = o.id.match(/ATR-(\d+)/) || o.id.match(/\d+/);
     if (match) {
@@ -303,7 +304,6 @@ export async function addRepairOrderToSupabase(
     }
   }
 
-  // Also query Supabase to ensure no duplicate order numbers
   try {
     const { data: latestRow } = await supabase
       .from('repair_orders')
@@ -364,45 +364,42 @@ export async function addRepairOrderToSupabase(
     notes: JSON.stringify(fullOrderObj)
   };
 
-  let sessionUserId = 'anonymous';
+  console.log("Payload:", payload);
+  console.log("Before Supabase insert");
+
   try {
-    const { data: authData } = await supabase.auth.getUser();
-    sessionUserId = authData?.user?.id || 'no-auth-user';
-  } catch (e) {
-    console.warn("Could not get auth user:", e);
+    const { data, error } = await supabase
+      .from("repair_orders")
+      .insert(payload)
+      .select()
+      .single();
+
+    console.log("Result:", data);
+    if (error) {
+      console.error("Error:", error);
+      const detailedErr = new Error(`فشل حفظ أمر الصيانة في Supabase [الكود: ${error.code || 'N/A'}]: ${error.message}${error.details ? ` (${error.details})` : ''}`);
+      throw detailedErr;
+    }
+
+    if (!data) {
+      const emptyErr = new Error('لم يتم إرجاع بيانات أمر الصيانة الجديد من قاعدة البيانات (Supabase returned empty data).');
+      console.error("Error:", emptyErr);
+      throw emptyErr;
+    }
+
+    const createdOrder = mapRowToRepairOrder(data);
+
+    // Update local backup cache ONLY after verified Supabase insert success
+    const updatedLocalList = [createdOrder, ...localList.filter(o => o.id !== createdOrder.id)];
+    saveLocalRepairOrdersBackup(updatedLocalList, true);
+
+    return createdOrder;
+  } catch (err: any) {
+    console.error("Error in addRepairOrderToSupabase execution:", err);
+    // Extract real cause from network or exception
+    const realMsg = err?.message || (typeof err === 'string' ? err : 'خطأ غير معروف أثناء الاتصال بـ Supabase');
+    throw new Error(realMsg);
   }
-
-  console.log("------------------------------------------");
-  console.log("🔍 [addRepairOrderToSupabase] Sending Payload:", payload);
-  console.log("👤 [addRepairOrderToSupabase] Session User ID:", sessionUserId);
-
-  const { data, error } = await supabase
-    .from('repair_orders')
-    .insert(payload)
-    .select()
-    .single();
-
-  console.log("📦 [addRepairOrderToSupabase] Supabase Data Response:", data);
-  console.log("❌ [addRepairOrderToSupabase] Supabase Error Response:", error);
-  console.log("------------------------------------------");
-
-  if (error) {
-    console.error("⛔ [addRepairOrderToSupabase] Insert Failed with Error:", error);
-    throw new Error(`فشل حفظ أمر الصيانة في قاعدة البيانات Supabase: ${error.message}`);
-  }
-
-  if (!data) {
-    console.error("⛔ [addRepairOrderToSupabase] Insert returned no data!");
-    throw new Error('لم يتم إرجاع بيانات أمر الصيانة الجديد من قاعدة البيانات (Supabase returned empty data).');
-  }
-
-  const createdOrder = mapRowToRepairOrder(data);
-
-  // Update local backup cache ONLY after verified Supabase insert success
-  const updatedLocalList = [createdOrder, ...localList.filter(o => o.id !== createdOrder.id)];
-  saveLocalRepairOrdersBackup(updatedLocalList, true);
-
-  return createdOrder;
 }
 
 /**
