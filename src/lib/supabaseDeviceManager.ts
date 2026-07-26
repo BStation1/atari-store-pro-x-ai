@@ -174,121 +174,143 @@ function dispatchDbChanged(key: string) {
   }
 }
 
-function isInitializedInStorage(): boolean {
+function saveDeviceTypesToLocalStorage(items: DBDeviceType[]) {
   try {
-    return typeof localStorage !== 'undefined' && localStorage.getItem(INITIALIZED_DEVICE_KEY) === 'true';
-  } catch {
-    return false;
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('atari_device_types', JSON.stringify(items));
+    }
+  } catch (e) {
+    console.error('Error saving device types to localStorage:', e);
   }
 }
 
-function setInitializedInStorage() {
+function getDeviceTypesFromLocalStorage(): DBDeviceType[] {
   try {
     if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(INITIALIZED_DEVICE_KEY, 'true');
+      const stored = localStorage.getItem('atari_device_types');
+      if (stored !== null) return JSON.parse(stored);
     }
-  } catch {
-    // Ignore storage errors
+  } catch (e) {
+    console.error('Error reading device types from localStorage:', e);
   }
+  return [];
 }
 
 // ================= DEVICE TYPES SERVICES =================
 export async function fetchDeviceTypesFromSupabase(): Promise<DBDeviceType[]> {
   try {
-    const { data, error } = await supabase
+    const response = await supabase
       .from('device_types')
       .select('*')
       .order('sort_order', { ascending: true })
       .order('created_at', { ascending: true });
 
-    if (!error && data) {
-      if (data.length === 0 && !isInitializedInStorage()) {
-        console.log('🌱 First run: Seeding default device_types into Supabase...');
-        for (const dt of DEFAULT_SUPABASE_DEVICE_TYPES) {
-          await supabase.from('device_types').insert([mapDeviceTypeToRow(dt)]);
-        }
-        setInitializedInStorage();
-        const refetch = await supabase
-          .from('device_types')
-          .select('*')
-          .order('sort_order', { ascending: true });
-        
-        cachedDeviceTypes = (refetch.data || []).map(mapRowToDeviceType);
-      } else {
-        setInitializedInStorage();
-        cachedDeviceTypes = data.map(mapRowToDeviceType);
-      }
+    if (!response.error && response.data) {
+      cachedDeviceTypes = response.data.map(mapRowToDeviceType);
+      saveDeviceTypesToLocalStorage(cachedDeviceTypes);
       isDeviceTypesFetched = true;
       return cachedDeviceTypes;
+    } else if (response.error) {
+      console.error('⚠️ Supabase Error fetching device types:', {
+        code: response.error.code,
+        message: response.error.message,
+        details: response.error.details,
+      });
     }
   } catch (err) {
-    console.warn('⚠️ Could not query Supabase device_types table directly:', err);
+    console.error('⚠️ Could not query Supabase device_types table:', err);
   }
 
-  // If table does not exist or fetch fails, fallback only if never initialized
-  if (!isDeviceTypesFetched && !isInitializedInStorage()) {
-    cachedDeviceTypes = DEFAULT_SUPABASE_DEVICE_TYPES;
-    setInitializedInStorage();
+  if (!isDeviceTypesFetched) {
+    cachedDeviceTypes = getDeviceTypesFromLocalStorage();
   }
   isDeviceTypesFetched = true;
   return cachedDeviceTypes;
 }
 
 export function getDeviceTypesSync(): DBDeviceType[] {
+  if (cachedDeviceTypes.length === 0 && typeof localStorage !== 'undefined') {
+    cachedDeviceTypes = getDeviceTypesFromLocalStorage();
+  }
   return cachedDeviceTypes;
 }
 
 export async function addDeviceTypeToSupabase(dt: Omit<DBDeviceType, 'id'>): Promise<DBDeviceType> {
-  const newId = `DT-${Date.now()}`;
+  console.log("Saving device type...", dt);
+  const newId = dt.nameAr ? `DT-${Date.now()}` : crypto.randomUUID();
   const fullDt: DBDeviceType = { ...dt, id: newId };
   const row = mapDeviceTypeToRow(fullDt);
 
+  let response;
   try {
-    const { data, error } = await supabase
+    response = await supabase
       .from('device_types')
       .insert([row])
       .select()
       .single();
 
-    if (!error && data) {
-      const created = mapRowToDeviceType(data);
-      await fetchDeviceTypesFromSupabase();
+    console.log("Supabase response", response);
+
+    if (response.error) {
+      console.error("Supabase Error adding device type:", {
+        code: response.error.code,
+        message: response.error.message,
+        details: response.error.details,
+      });
+    } else if (response.data) {
+      const created = mapRowToDeviceType(response.data);
+      cachedDeviceTypes = [...cachedDeviceTypes.filter(d => d.id !== created.id), created];
+      saveDeviceTypesToLocalStorage(cachedDeviceTypes);
       dispatchDbChanged('atari_device_types');
       return created;
     }
-  } catch (e) {
-    console.error('Error inserting device type to Supabase:', e);
+  } catch (e: any) {
+    console.error('Exception inserting device type to Supabase:', e);
   }
 
-  // Update memory state
+  // Fallback update local memory state
   cachedDeviceTypes = [...cachedDeviceTypes.filter(d => d.id !== fullDt.id), fullDt];
+  saveDeviceTypesToLocalStorage(cachedDeviceTypes);
   dispatchDbChanged('atari_device_types');
   return fullDt;
 }
 
 export async function updateDeviceTypeInSupabase(dt: DBDeviceType): Promise<void> {
+  console.log("Saving device type...", dt);
   const row = mapDeviceTypeToRow(dt);
 
   try {
-    const { error } = await supabase
+    const response = await supabase
       .from('device_types')
       .update(row)
       .eq('id', dt.id);
 
-    if (!error) {
-      await fetchDeviceTypesFromSupabase();
+    console.log("Supabase response", response);
+
+    if (response.error) {
+      console.error("Supabase Error updating device type:", {
+        code: response.error.code,
+        message: response.error.message,
+        details: response.error.details,
+      });
+    } else {
+      cachedDeviceTypes = cachedDeviceTypes.map(item => item.id === dt.id ? dt : item);
+      saveDeviceTypesToLocalStorage(cachedDeviceTypes);
       dispatchDbChanged('atari_device_types');
       return;
     }
   } catch (e) {
-    console.error('Error updating device type in Supabase:', e);
+    console.error('Exception updating device type in Supabase:', e);
   }
 
   cachedDeviceTypes = cachedDeviceTypes.map(item => item.id === dt.id ? dt : item);
+  saveDeviceTypesToLocalStorage(cachedDeviceTypes);
   dispatchDbChanged('atari_device_types');
 }
 
 export async function deleteDeviceTypeInSupabase(id: string): Promise<{ success: boolean; isArchived?: boolean; error?: string }> {
+  console.log("Deleting device type...", id);
+
   // Check for linked models or templates
   const linkedModels = cachedDeviceModels.filter(m => (m.deviceTypeId === id || m.id === id) && !m.isArchived);
   const linkedTemplates = cachedRepairTemplates.filter(t => (t.deviceTypeId === id) && t.isActive);
@@ -296,7 +318,6 @@ export async function deleteDeviceTypeInSupabase(id: string): Promise<{ success:
   let target = cachedDeviceTypes.find(dt => dt.id === id);
 
   if (linkedModels.length > 0 || linkedTemplates.length > 0) {
-    // Soft archive on Supabase
     if (target) {
       const archivedDt = { ...target, isArchived: true, isActive: false };
       await updateDeviceTypeInSupabase(archivedDt);
@@ -308,24 +329,27 @@ export async function deleteDeviceTypeInSupabase(id: string): Promise<{ success:
     }
   }
 
-  // Permanent Delete on Supabase
   try {
-    const { error } = await supabase
+    const response = await supabase
       .from('device_types')
       .delete()
       .eq('id', id);
 
-    if (!error) {
-      cachedDeviceTypes = cachedDeviceTypes.filter(item => item.id !== id);
-      await fetchDeviceTypesFromSupabase();
-      dispatchDbChanged('atari_device_types');
-      return { success: true };
+    console.log("Supabase response", response);
+
+    if (response.error) {
+      console.error("Supabase Error deleting device type:", {
+        code: response.error.code,
+        message: response.error.message,
+        details: response.error.details,
+      });
     }
   } catch (e) {
-    console.error('Error deleting device type from Supabase:', e);
+    console.error('Exception deleting device type from Supabase:', e);
   }
 
   cachedDeviceTypes = cachedDeviceTypes.filter(item => item.id !== id);
+  saveDeviceTypesToLocalStorage(cachedDeviceTypes);
   dispatchDbChanged('atari_device_types');
   return { success: true };
 }
@@ -341,20 +365,7 @@ export async function fetchDeviceModelsFromSupabase(): Promise<DBDeviceModel[]> 
       .order('created_at', { ascending: true });
 
     if (!error && data) {
-      if (data.length === 0 && !isInitializedInStorage()) {
-        console.log('🌱 First run: Seeding default device_models into Supabase...');
-        for (const m of DEFAULT_SUPABASE_DEVICE_MODELS) {
-          await supabase.from('device_models').insert([mapDeviceModelToRow(m)]);
-        }
-        const refetch = await supabase
-          .from('device_models')
-          .select('*')
-          .order('sort_order', { ascending: true });
-        
-        cachedDeviceModels = (refetch.data || []).map(mapRowToDeviceModel);
-      } else {
-        cachedDeviceModels = data.map(mapRowToDeviceModel);
-      }
+      cachedDeviceModels = data.map(mapRowToDeviceModel);
       isDeviceModelsFetched = true;
       return cachedDeviceModels;
     }
@@ -362,9 +373,6 @@ export async function fetchDeviceModelsFromSupabase(): Promise<DBDeviceModel[]> 
     console.warn('⚠️ Could not query Supabase device_models table directly:', err);
   }
 
-  if (!isDeviceModelsFetched && !isInitializedInStorage()) {
-    cachedDeviceModels = DEFAULT_SUPABASE_DEVICE_MODELS;
-  }
   isDeviceModelsFetched = true;
   return cachedDeviceModels;
 }
@@ -470,20 +478,7 @@ export async function fetchRepairTemplatesFromSupabase(): Promise<RepairTemplate
       .order('created_at', { ascending: true });
 
     if (!error && data) {
-      if (data.length === 0 && !isInitializedInStorage()) {
-        console.log('🌱 First run: Seeding default repair_templates into Supabase...');
-        for (const t of DEFAULT_SUPABASE_REPAIR_TEMPLATES) {
-          await supabase.from('repair_templates').insert([mapRepairTemplateToRow(t)]);
-        }
-        const refetch = await supabase
-          .from('repair_templates')
-          .select('*')
-          .order('sort_order', { ascending: true });
-        
-        cachedRepairTemplates = (refetch.data || []).map(mapRowToRepairTemplate);
-      } else {
-        cachedRepairTemplates = data.map(mapRowToRepairTemplate);
-      }
+      cachedRepairTemplates = data.map(mapRowToRepairTemplate);
       isRepairTemplatesFetched = true;
       return cachedRepairTemplates;
     }
@@ -491,9 +486,6 @@ export async function fetchRepairTemplatesFromSupabase(): Promise<RepairTemplate
     console.warn('⚠️ Could not query Supabase repair_templates table directly:', err);
   }
 
-  if (!isRepairTemplatesFetched && !isInitializedInStorage()) {
-    cachedRepairTemplates = DEFAULT_SUPABASE_REPAIR_TEMPLATES;
-  }
   isRepairTemplatesFetched = true;
   return cachedRepairTemplates;
 }

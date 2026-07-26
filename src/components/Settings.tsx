@@ -382,22 +382,26 @@ export default function SettingsView() {
   const [dmActive, setDmActive] = useState(true);
   const [editingDmId, setEditingDmId] = useState<string | null>(null);
 
-  const handleSaveDeviceType = (e: React.FormEvent) => {
+  const handleSaveDeviceType = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!dtNameAr.trim() || !dtNameEn.trim()) return;
 
-    if (editingDtId) {
-      updateDeviceType({ id: editingDtId, nameAr: dtNameAr, nameEn: dtNameEn, brand: dtBrand, sortOrder: Number(dtSort), isActive: dtActive });
-      showNotification("تم تحديث نوع الجهاز بنجاح");
-      setEditingDtId(null);
-    } else {
-      addDeviceType({ nameAr: dtNameAr, nameEn: dtNameEn, brand: dtBrand, sortOrder: Number(dtSort), isActive: dtActive });
-      showNotification("تم تسجيل نوع الجهاز الجديد بنجاح");
+    try {
+      if (editingDtId) {
+        await updateDeviceType({ id: editingDtId, nameAr: dtNameAr, nameEn: dtNameEn, brand: dtBrand, sortOrder: Number(dtSort), isActive: dtActive });
+        showNotification("تم تحديث نوع الجهاز بنجاح");
+        setEditingDtId(null);
+      } else {
+        await addDeviceType({ nameAr: dtNameAr, nameEn: dtNameEn, brand: dtBrand, sortOrder: Number(dtSort), isActive: dtActive });
+        showNotification("تم تسجيل نوع الجهاز الجديد بنجاح");
+      }
+      setDtNameAr("");
+      setDtNameEn("");
+      setDtBrand("Sony");
+      setDtSort(deviceTypes.length + 2);
+    } catch (err: any) {
+      showNotification(err?.message || "حدث خطأ أثناء حفظ نوع الجهاز", true);
     }
-    setDtNameAr("");
-    setDtNameEn("");
-    setDtBrand("Sony");
-    setDtSort(deviceTypes.length + 2);
   };
 
   const handleSaveDeviceModel = (e: React.FormEvent) => {
@@ -1303,36 +1307,44 @@ export default function SettingsView() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#2a2d42]/40 text-xs text-gray-300">
-                {categories.map(c => (
-                  <tr key={c.id} className="hover:bg-gray-950/20 transition-colors">
-                    <td className="p-4 font-mono font-bold text-indigo-400">{c.id}</td>
-                    <td className="p-4 font-bold text-white">{c.name}</td>
-                    <td className="p-4 font-mono">{c.sortOrder}</td>
-                    <td className="p-4">
-                      {c.isActive !== false ? (
-                        <span className="bg-green-500/10 text-green-400 border border-green-500/20 px-2 py-0.5 rounded text-[10px] font-bold">نشط</span>
-                      ) : (
-                        <span className="bg-gray-500/10 text-gray-400 border border-gray-500/20 px-2 py-0.5 rounded text-[10px] font-bold">معطل</span>
-                      )}
-                    </td>
-                    <td className="p-4">
-                      <div className="flex items-center justify-center gap-2">
-                        <button
-                          onClick={() => handleEditCategory(c)}
-                          className="p-1.5 bg-[#2a2d42]/40 hover:bg-indigo-600/20 hover:text-indigo-400 text-gray-400 rounded-lg transition-colors cursor-pointer"
-                        >
-                          <Edit className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteCategoryAction(c.id)}
-                          className="p-1.5 bg-[#2a2d42]/40 hover:bg-red-600/20 hover:text-red-400 text-gray-400 rounded-lg transition-colors cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
+                {categories.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="p-8 text-center text-gray-400 text-xs font-bold">
+                      لا توجد تصنيفات، قم بإضافة أول تصنيف.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  categories.map(c => (
+                    <tr key={c.id} className="hover:bg-gray-950/20 transition-colors">
+                      <td className="p-4 font-mono font-bold text-indigo-400">{c.id}</td>
+                      <td className="p-4 font-bold text-white">{c.name}</td>
+                      <td className="p-4 font-mono">{c.sortOrder}</td>
+                      <td className="p-4">
+                        {c.isActive !== false ? (
+                          <span className="bg-green-500/10 text-green-400 border border-green-500/20 px-2 py-0.5 rounded text-[10px] font-bold">نشط</span>
+                        ) : (
+                          <span className="bg-gray-500/10 text-gray-400 border border-gray-500/20 px-2 py-0.5 rounded text-[10px] font-bold">معطل</span>
+                        )}
+                      </td>
+                      <td className="p-4">
+                        <div className="flex items-center justify-center gap-2">
+                          <button
+                            onClick={() => handleEditCategory(c)}
+                            className="p-1.5 bg-[#2a2d42]/40 hover:bg-indigo-600/20 hover:text-indigo-400 text-gray-400 rounded-lg transition-colors cursor-pointer"
+                          >
+                            <Edit className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteCategoryAction(c.id)}
+                            className="p-1.5 bg-[#2a2d42]/40 hover:bg-red-600/20 hover:text-red-400 text-gray-400 rounded-lg transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -1419,37 +1431,45 @@ export default function SettingsView() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#2a2d42]/40 text-xs text-gray-300">
-                  {deviceTypes.filter(dt => !dt.isArchived).map(dt => (
-                    <tr key={dt.id} className="hover:bg-gray-950/20 transition-colors">
-                      <td className="p-4 font-mono font-bold text-indigo-400">{dt.id}</td>
-                      <td className="p-4 font-bold text-white">{dt.nameAr}</td>
-                      <td className="p-4 font-mono">{dt.nameEn}</td>
-                      <td className="p-4 font-bold">{dt.brand}</td>
-                      <td className="p-4">
-                        <div className="flex items-center justify-center gap-2">
-                          <button
-                            onClick={() => {
-                              setEditingDtId(dt.id);
-                              setDtNameAr(dt.nameAr);
-                              setDtNameEn(dt.nameEn);
-                              setDtBrand(dt.brand);
-                              setDtSort(dt.sortOrder || 1);
-                              setDtActive(dt.isActive !== false);
-                            }}
-                            className="p-1.5 bg-[#2a2d42]/40 hover:bg-indigo-600/20 hover:text-indigo-400 text-gray-400 rounded-lg transition-colors cursor-pointer"
-                          >
-                            <Edit className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteDeviceTypeAction(dt.id)}
-                            className="p-1.5 bg-[#2a2d42]/40 hover:bg-red-600/20 hover:text-red-400 text-gray-400 rounded-lg transition-colors cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
+                  {deviceTypes.filter(dt => !dt.isArchived).length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="p-8 text-center text-gray-400 text-xs font-bold">
+                        لا توجد فئات أجهزة، قم بإضافة أول فئة.
                       </td>
                     </tr>
-                  ))}
+                  ) : (
+                    deviceTypes.filter(dt => !dt.isArchived).map(dt => (
+                      <tr key={dt.id} className="hover:bg-gray-950/20 transition-colors">
+                        <td className="p-4 font-mono font-bold text-indigo-400">{dt.id}</td>
+                        <td className="p-4 font-bold text-white">{dt.nameAr}</td>
+                        <td className="p-4 font-mono">{dt.nameEn}</td>
+                        <td className="p-4 font-bold">{dt.brand}</td>
+                        <td className="p-4">
+                          <div className="flex items-center justify-center gap-2">
+                            <button
+                              onClick={() => {
+                                setEditingDtId(dt.id);
+                                setDtNameAr(dt.nameAr);
+                                setDtNameEn(dt.nameEn);
+                                setDtBrand(dt.brand);
+                                setDtSort(dt.sortOrder || 1);
+                                setDtActive(dt.isActive !== false);
+                              }}
+                              className="p-1.5 bg-[#2a2d42]/40 hover:bg-indigo-600/20 hover:text-indigo-400 text-gray-400 rounded-lg transition-colors cursor-pointer"
+                            >
+                              <Edit className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteDeviceTypeAction(dt.id)}
+                              className="p-1.5 bg-[#2a2d42]/40 hover:bg-red-600/20 hover:text-red-400 text-gray-400 rounded-lg transition-colors cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>

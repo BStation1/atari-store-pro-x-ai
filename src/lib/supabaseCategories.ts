@@ -56,9 +56,11 @@ export function mapCategoryToRow(cat: Partial<ProductCategory>): Record<string, 
     updated_at: new Date().toISOString(),
   };
 
-  // If id looks like a UUID or valid non-placeholder ID, include it
+  // If id looks like a valid UUID, include it; otherwise generate a new UUID for Supabase
   if (cat.id && !cat.id.startsWith('CAT-') && cat.id.length > 10) {
     row.id = cat.id;
+  } else {
+    row.id = crypto.randomUUID();
   }
 
   return row;
@@ -76,7 +78,7 @@ export function getLocalCategoriesBackup(): ProductCategory[] {
   } catch (e) {
     console.error('Error reading local categories backup:', e);
   }
-  return isCategoriesInitialized() ? [] : DEFAULT_CATEGORIES;
+  return [];
 }
 
 /**
@@ -100,27 +102,27 @@ export function setLocalCategoriesBackup(categories: ProductCategory[], dispatch
  * Fetch categories directly from Supabase.
  */
 export async function getCategoriesFromSupabase(): Promise<ProductCategory[]> {
-  const { data, error } = await supabase
+  const response = await supabase
     .from('categories')
     .select('*')
     .order('sort_order', { ascending: true });
 
-  if (error) {
-    console.warn('⚠️ Supabase error fetching categories:', error.message);
+  if (response.error) {
+    console.error('⚠️ Supabase Error fetching categories:', {
+      code: response.error.code,
+      message: response.error.message,
+      details: response.error.details,
+    });
     return getLocalCategoriesBackup();
   }
 
-  const categories = (data || []).map(mapRowToCategory);
+  const categories = (response.data || []).map(mapRowToCategory);
   setLocalCategoriesBackup(categories, false);
   return categories;
 }
 
 /**
- * Migration helper:
- * 1. Reads local categories.
- * 2. Fetches Supabase categories.
- * 3. If Supabase is empty on first run, uploads initial categories.
- * 4. Returns summary counts and categories list.
+ * Migration helper: Read categories from Supabase without auto-seeding.
  */
 export async function fetchOrMigrateCategories(): Promise<{
   categories: ProductCategory[];
@@ -132,13 +134,17 @@ export async function fetchOrMigrateCategories(): Promise<{
   const localCount = localCategories.length;
 
   try {
-    const { data, error } = await supabase
+    const response = await supabase
       .from('categories')
       .select('*')
       .order('sort_order', { ascending: true });
 
-    if (error) {
-      console.warn('⚠️ Could not fetch categories from Supabase:', error.message);
+    if (response.error) {
+      console.error('⚠️ Could not fetch categories from Supabase:', {
+        code: response.error.code,
+        message: response.error.message,
+        details: response.error.details,
+      });
       return {
         categories: localCategories,
         localCount,
@@ -147,50 +153,17 @@ export async function fetchOrMigrateCategories(): Promise<{
       };
     }
 
-    if (data) {
-      if (data.length === 0 && !isCategoriesInitialized()) {
-        console.log('🌱 First run: Seeding default categories into Supabase...');
-        for (const cat of DEFAULT_CATEGORIES) {
-          try {
-            await supabase.from('categories').insert([mapCategoryToRow(cat)]);
-          } catch {
-            // Ignore duplicate/insert errors on seed
-          }
-        }
-        setCategoriesInitialized();
-        const refetch = await supabase.from('categories').select('*').order('sort_order', { ascending: true });
-        const seededCats = (refetch.data || []).map(mapRowToCategory);
-        const finalCats = seededCats.length > 0 ? seededCats : DEFAULT_CATEGORIES;
-        setLocalCategoriesBackup(finalCats, false);
-        return {
-          categories: finalCats,
-          localCount,
-          uploadedCount: finalCats.length,
-          totalSupabaseCount: finalCats.length,
-        };
-      }
-
-      setCategoriesInitialized();
-      const existingSupabaseCategories = data.map(mapRowToCategory);
-      setLocalCategoriesBackup(existingSupabaseCategories, false);
-      return {
-        categories: existingSupabaseCategories,
-        localCount,
-        uploadedCount: 0,
-        totalSupabaseCount: existingSupabaseCategories.length,
-      };
-    }
-
     setCategoriesInitialized();
-    setLocalCategoriesBackup(localCategories, false);
+    const existingSupabaseCategories = (response.data || []).map(mapRowToCategory);
+    setLocalCategoriesBackup(existingSupabaseCategories, false);
     return {
-      categories: localCategories,
+      categories: existingSupabaseCategories,
       localCount,
       uploadedCount: 0,
-      totalSupabaseCount: localCategories.length,
+      totalSupabaseCount: existingSupabaseCategories.length,
     };
   } catch (err: any) {
-    console.warn('⚠️ Error in fetchOrMigrateCategories:', err);
+    console.error('⚠️ Error in fetchOrMigrateCategories:', err);
     return {
       categories: localCategories,
       localCount,
@@ -202,23 +175,30 @@ export async function fetchOrMigrateCategories(): Promise<{
 
 /**
  * Add a new category directly to Supabase.
- * Throws an error if Supabase connection fails (does NOT silently succeed locally).
+ * Throws an error if Supabase connection fails.
  */
 export async function addCategoryToSupabase(cat: Omit<ProductCategory, 'id'>): Promise<ProductCategory> {
+  console.log("Saving category...", cat);
   const row = mapCategoryToRow(cat);
 
-  const { data, error } = await supabase
+  const response = await supabase
     .from('categories')
     .insert([row])
     .select()
     .single();
 
-  if (error) {
-    console.error('❌ Supabase error adding category:', error.message);
-    throw new Error(`تعذر إضافة التصنيف إلى Supabase: ${error.message}`);
+  console.log("Supabase response", response);
+
+  if (response.error) {
+    console.error("Supabase Error adding category:", {
+      code: response.error.code,
+      message: response.error.message,
+      details: response.error.details,
+    });
+    throw new Error(`تعذر إضافة التصنيف إلى Supabase: [${response.error.code}] ${response.error.message}`);
   }
 
-  const newCategory = mapRowToCategory(data);
+  const newCategory = mapRowToCategory(response.data);
 
   // Sync to local backup
   const currentBackup = getLocalCategoriesBackup();
@@ -233,6 +213,7 @@ export async function addCategoryToSupabase(cat: Omit<ProductCategory, 'id'>): P
  * Throws an error if Supabase connection fails.
  */
 export async function updateCategoryInSupabase(cat: ProductCategory): Promise<ProductCategory> {
+  console.log("Saving category...", cat);
   const row = mapCategoryToRow(cat);
 
   let query = supabase.from('categories').update(row);
@@ -243,14 +224,20 @@ export async function updateCategoryInSupabase(cat: ProductCategory): Promise<Pr
     query = query.eq('name', cat.name);
   }
 
-  const { data, error } = await query.select().single();
+  const response = await query.select().single();
 
-  if (error) {
-    console.error('❌ Supabase error updating category:', error.message);
-    throw new Error(`تعذر تعديل التصنيف في Supabase: ${error.message}`);
+  console.log("Supabase response", response);
+
+  if (response.error) {
+    console.error("Supabase Error updating category:", {
+      code: response.error.code,
+      message: response.error.message,
+      details: response.error.details,
+    });
+    throw new Error(`تعذر تعديل التصنيف في Supabase: [${response.error.code}] ${response.error.message}`);
   }
 
-  const updatedCat = mapRowToCategory(data);
+  const updatedCat = mapRowToCategory(response.data);
 
   // Sync to local backup
   const currentBackup = getLocalCategoriesBackup();
@@ -267,13 +254,13 @@ export async function updateCategoryInSupabase(cat: ProductCategory): Promise<Pr
 
 /**
  * Delete a category from Supabase.
- * - Checks if any product in localStorage belongs to this category.
- * - Returns { success: false, error: string } if linked products exist or Supabase fails.
  */
 export async function deleteCategoryFromSupabase(
   id: string,
   categoryName: string
 ): Promise<{ success: boolean; error?: string }> {
+  console.log("Deleting category...", { id, categoryName });
+
   // Check local products (from localStorage)
   let products: Product[] = [];
   try {
@@ -302,13 +289,19 @@ export async function deleteCategoryFromSupabase(
     query = query.eq('name', categoryName);
   }
 
-  const { error } = await query;
+  const response = await query;
 
-  if (error) {
-    console.error('❌ Supabase error deleting category:', error.message);
+  console.log("Supabase response", response);
+
+  if (response.error) {
+    console.error("Supabase Error deleting category:", {
+      code: response.error.code,
+      message: response.error.message,
+      details: response.error.details,
+    });
     return {
       success: false,
-      error: `تعذر حذف التصنيف من Supabase: ${error.message}`,
+      error: `تعذر حذف التصنيف من Supabase: [${response.error.code}] ${response.error.message}`,
     };
   }
 
