@@ -7,6 +7,11 @@ import { authStore } from "./authStore";
 import { supabase } from "./supabaseClient";
 import { fetchOrMigrateStoreSettings, saveStoreSettingsToSupabase } from "./supabaseSettings";
 import { fetchOrMigrateCategories } from "./supabaseCategories";
+import { 
+  getDeviceTypesSync, fetchDeviceTypesFromSupabase, addDeviceTypeToSupabase, updateDeviceTypeInSupabase, deleteDeviceTypeInSupabase,
+  getDeviceModelsSync, fetchDeviceModelsFromSupabase, addDeviceModelToSupabase, updateDeviceModelInSupabase, deleteDeviceModelInSupabase,
+  getRepairTemplatesSync, fetchRepairTemplatesFromSupabase, addRepairTemplateToSupabase, updateRepairTemplateInSupabase, deleteRepairTemplateInSupabase
+} from './supabaseDeviceManager';
 import { canDeliverDevice, canReopenDeliveredOrder, canDeleteSale, canDeleteAccountingTransaction, canCancelWarranty, canResetOperationalData } from "./authPermissions";
 import {
   Customer,
@@ -902,96 +907,77 @@ export const db = {
 
   // --- DEVICE TYPES ---
   getDeviceTypes: (): DBDeviceType[] => {
-    return getStorageItem<DBDeviceType[]>(KEYS.DEVICE_TYPES, DEFAULT_DEVICE_TYPES);
+    fetchDeviceTypesFromSupabase().catch(() => {});
+    return getDeviceTypesSync();
   },
   saveDeviceTypes: (data: DBDeviceType[]) => {
-    setStorageItem(KEYS.DEVICE_TYPES, data);
+    // Deprecated direct localStorage save, handled via Supabase
   },
   addDeviceType: (dt: Omit<DBDeviceType, "id">): DBDeviceType => {
-    const list = db.getDeviceTypes();
-    const newDt: DBDeviceType = {
-      ...dt,
-      id: `DT-${String(list.length + 101).padStart(3, "0")}`
-    };
-    list.push(newDt);
-    db.saveDeviceTypes(list);
-    db.logActivity("U-101", "أحمد محمد", "إضافة نوع جهاز", `تم إضافة نوع الجهاز ${newDt.nameAr}`);
+    const newId = `DT-${Date.now()}`;
+    const newDt: DBDeviceType = { ...dt, id: newId };
+    addDeviceTypeToSupabase(dt).catch(err => console.error(err));
+    db.logActivity("U-101", "أحمد محمد", "إضافة نوع جهاز", `تم إضافة نوع الجهاز ${dt.nameAr}`);
     return newDt;
   },
   updateDeviceType: (dt: DBDeviceType) => {
-    const list = db.getDeviceTypes();
-    const index = list.findIndex(d => d.id === dt.id);
-    if (index !== -1) {
-      list[index] = dt;
-      db.saveDeviceTypes(list);
-    }
+    updateDeviceTypeInSupabase(dt).catch(err => console.error(err));
   },
   deleteDeviceType: (id: string): { success: boolean; error?: string } => {
-    const dt = db.getDeviceTypes().find(d => d.id === id);
+    const dt = getDeviceTypesSync().find(d => d.id === id);
     if (!dt) return { success: false, error: "نوع الجهاز غير موجود" };
     
     // Check repair orders for matching type
     const orders = db.getRepairOrders();
-    const isUsed = orders.some(o => o.devices.some(d => d.type.toLowerCase() === dt.nameEn.toLowerCase() || d.type.toLowerCase() === dt.nameAr.toLowerCase()));
+    const isUsed = orders.some(o => o.devices.some(d => d.type === dt.id || d.type.toLowerCase() === dt.nameEn.toLowerCase() || d.type.toLowerCase() === dt.nameAr.toLowerCase()));
     
     if (isUsed) {
-      // Archive instead
       dt.isArchived = true;
       dt.isActive = false;
-      db.updateDeviceType(dt);
+      updateDeviceTypeInSupabase(dt).catch(err => console.error(err));
       db.logActivity("U-101", "أحمد محمد", "أرشفة نوع جهاز", `تم أرشفة نوع الجهاز ${dt.nameAr} لوجود سجلات صيانة مرتبطة به`);
       return { success: true, error: "تم أرشفة نوع الجهاز بنجاح بدلاً من الحذف لتعلقه بملفات صيانة سابقة." };
     }
     
-    const list = db.getDeviceTypes().filter(d => d.id !== id);
-    db.saveDeviceTypes(list);
+    deleteDeviceTypeInSupabase(id).catch(err => console.error(err));
     db.logActivity("U-101", "أحمد محمد", "حذف نوع جهاز", `تم حذف نوع الجهاز ${dt.nameAr}`);
     return { success: true };
   },
 
   // --- DEVICE MODELS ---
   getDeviceModels: (): DBDeviceModel[] => {
-    return getStorageItem<DBDeviceModel[]>(KEYS.DEVICE_MODELS, DEFAULT_DEVICE_MODELS);
+    fetchDeviceModelsFromSupabase().catch(() => {});
+    return getDeviceModelsSync();
   },
   saveDeviceModels: (data: DBDeviceModel[]) => {
-    setStorageItem(KEYS.DEVICE_MODELS, data);
+    // Deprecated direct localStorage save
   },
   addDeviceModel: (m: Omit<DBDeviceModel, "id">): DBDeviceModel => {
-    const list = db.getDeviceModels();
-    const newM: DBDeviceModel = {
-      ...m,
-      id: `DM-${String(list.length + 101).padStart(3, "0")}`
-    };
-    list.push(newM);
-    db.saveDeviceModels(list);
-    db.logActivity("U-101", "أحمد محمد", "إضافة موديل جهاز", `تم إضافة الموديل ${newM.nameAr}`);
+    const newId = `DM-${Date.now()}`;
+    const newM: DBDeviceModel = { ...m, id: newId };
+    addDeviceModelToSupabase(m).catch(err => console.error(err));
+    db.logActivity("U-101", "أحمد محمد", "إضافة موديل جهاز", `تم إضافة الموديل ${m.nameAr}`);
     return newM;
   },
   updateDeviceModel: (m: DBDeviceModel) => {
-    const list = db.getDeviceModels();
-    const index = list.findIndex(x => x.id === m.id);
-    if (index !== -1) {
-      list[index] = m;
-      db.saveDeviceModels(list);
-    }
+    updateDeviceModelInSupabase(m).catch(err => console.error(err));
   },
   deleteDeviceModel: (id: string): { success: boolean; error?: string } => {
-    const m = db.getDeviceModels().find(x => x.id === id);
+    const m = getDeviceModelsSync().find(x => x.id === id);
     if (!m) return { success: false, error: "الموديل غير موجود" };
     
     const orders = db.getRepairOrders();
-    const isUsed = orders.some(o => o.devices.some(d => d.model.toLowerCase().includes(m.nameAr.toLowerCase()) || d.model.toLowerCase().includes(m.nameEn.toLowerCase())));
+    const isUsed = orders.some(o => o.devices.some(d => d.model === m.id || d.model.toLowerCase().includes(m.nameAr.toLowerCase())));
     
     if (isUsed) {
       m.isArchived = true;
       m.isActive = false;
-      db.updateDeviceModel(m);
+      updateDeviceModelInSupabase(m).catch(err => console.error(err));
       db.logActivity("U-101", "أحمد محمد", "أرشفة موديل جهاز", `تم أرشفة الموديل ${m.nameAr} لوجود أجهزة صيانة مسجلة به`);
       return { success: true, error: "تم أرشفة الموديل بنجاح لتعلقه بسجلات صيانة فعالة." };
     }
     
-    const list = db.getDeviceModels().filter(x => x.id !== id);
-    db.saveDeviceModels(list);
+    deleteDeviceModelInSupabase(id).catch(err => console.error(err));
     db.logActivity("U-101", "أحمد محمد", "حذف موديل جهاز", `تم حذف الموديل ${m.nameAr}`);
     return { success: true };
   },
@@ -1172,32 +1158,23 @@ export const db = {
 
   // --- REPAIR TEMPLATES ---
   getRepairTemplates: (): RepairTemplateItem[] => {
-    return getStorageItem<RepairTemplateItem[]>(KEYS.REPAIR_TEMPLATES, DEFAULT_REPAIR_TEMPLATES);
+    fetchRepairTemplatesFromSupabase().catch(() => {});
+    return getRepairTemplatesSync();
   },
   saveRepairTemplates: (data: RepairTemplateItem[]) => {
-    setStorageItem(KEYS.REPAIR_TEMPLATES, data);
+    // Deprecated direct localStorage save
   },
   addRepairTemplateItem: (item: Omit<RepairTemplateItem, "id">): RepairTemplateItem => {
-    const list = db.getRepairTemplates();
-    const newItem: RepairTemplateItem = {
-      ...item,
-      id: `RPT-${String(list.length + 101).padStart(3, "0")}`
-    };
-    list.push(newItem);
-    db.saveRepairTemplates(list);
+    const newId = `RPT-${Date.now()}`;
+    const newItem: RepairTemplateItem = { ...item, id: newId };
+    addRepairTemplateToSupabase(item).catch(err => console.error(err));
     return newItem;
   },
   updateRepairTemplateItem: (item: RepairTemplateItem) => {
-    const list = db.getRepairTemplates();
-    const index = list.findIndex(x => x.id === item.id);
-    if (index !== -1) {
-      list[index] = item;
-      db.saveRepairTemplates(list);
-    }
+    updateRepairTemplateInSupabase(item).catch(err => console.error(err));
   },
   deleteRepairTemplateItem: (id: string) => {
-    const list = db.getRepairTemplates().filter(x => x.id !== id);
-    db.saveRepairTemplates(list);
+    deleteRepairTemplateInSupabase(id).catch(err => console.error(err));
   },
 
   deleteProduct: (id: string): { success: boolean; error?: string } => {

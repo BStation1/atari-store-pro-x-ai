@@ -446,7 +446,7 @@ export default function SettingsView() {
       confirmText: "نعم، حذف/أرشفة"
     });
     if (confirmed) {
-      const res = deleteDeviceType(id);
+      const res = await deleteDeviceType(id);
       if (res.success) {
         showNotification(res.error || "تم حذف نوع الجهاز بنجاح");
       } else {
@@ -463,7 +463,7 @@ export default function SettingsView() {
       confirmText: "نعم، حذف"
     });
     if (confirmed) {
-      const res = deleteDeviceModel(id);
+      const res = await deleteDeviceModel(id);
       if (res.success) {
         showNotification(res.error || "تم حذف موديل الجهاز بنجاح");
       } else {

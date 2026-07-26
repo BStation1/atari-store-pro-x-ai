@@ -303,11 +303,24 @@ export async function addProductToSupabase(
   const categoryMap = await getCategoryUuidMap();
   const row = mapProductToRow(prod, categoryMap);
 
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from('products')
     .insert([row])
     .select()
     .single();
+
+  if (error && (error.code === 'PGRST204' || error.message?.includes('is_archived'))) {
+    console.warn('⚠️ is_archived column missing in schema cache. Retrying insert without is_archived column...');
+    const fallbackRow = { ...row };
+    delete fallbackRow.is_archived;
+    const retryRes = await supabase
+      .from('products')
+      .insert([fallbackRow])
+      .select()
+      .single();
+    data = retryRes.data;
+    error = retryRes.error;
+  }
 
   if (error) {
     console.error('❌ Supabase error adding product:', error.message);
@@ -382,12 +395,26 @@ export async function updateProductInSupabase(
   const categoryMap = await getCategoryUuidMap();
   const row = mapProductToRow(prod, categoryMap);
 
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from('products')
     .update(row)
     .eq('id', prod.id)
     .select()
     .single();
+
+  if (error && (error.code === 'PGRST204' || error.message?.includes('is_archived'))) {
+    console.warn('⚠️ is_archived column missing in schema cache. Retrying update without is_archived column...');
+    const fallbackRow = { ...row };
+    delete fallbackRow.is_archived;
+    const retryRes = await supabase
+      .from('products')
+      .update(fallbackRow)
+      .eq('id', prod.id)
+      .select()
+      .single();
+    data = retryRes.data;
+    error = retryRes.error;
+  }
 
   if (error) {
     console.error('❌ Supabase error updating product:', error.message);
@@ -534,22 +561,39 @@ export async function deleteProductFromSupabase(
   if (isReferenced) {
     console.log(`📌 [DeleteProduct] Product ${id} is referenced in (${referenceReason}). Executing archive flow...`);
 
-    const { data, error } = await supabase
+    const currentBackup = getLocalProductsBackup();
+    const targetProd = currentBackup.find(p => p.id === id);
+
+    let archiveMeta: Record<string, any> = { isArchived: true };
+    if (targetProd) {
+      targetProd.isArchived = true;
+      const categoryMap = await getCategoryUuidMap();
+      const row = mapProductToRow(targetProd, categoryMap);
+      archiveMeta = JSON.parse(row.description || '{}');
+    }
+
+    let archiveRes = await supabase
       .from('products')
-      .update({ is_archived: true })
+      .update({ is_archived: true, description: JSON.stringify(archiveMeta) })
       .eq('id', id)
       .select();
 
-    if (error) {
-      console.error('❌ [DeleteProduct] Archiving failed:', error);
-      return { success: false, error: `تعذر أرشفة المنتج في Supabase: ${error.message}` };
+    if (archiveRes.error && (archiveRes.error.code === 'PGRST204' || archiveRes.error.message?.includes('is_archived'))) {
+      console.warn('⚠️ is_archived column missing in schema cache during archive. Retrying with description JSON update...');
+      archiveRes = await supabase
+        .from('products')
+        .update({ description: JSON.stringify(archiveMeta) })
+        .eq('id', id)
+        .select();
+    }
+
+    if (archiveRes.error) {
+      console.error('❌ [DeleteProduct] Archiving failed:', archiveRes.error);
+      return { success: false, error: `تعذر أرشفة المنتج في Supabase: ${archiveRes.error.message}` };
     }
 
     // Update local backup
-    const currentBackup = getLocalProductsBackup();
-    const targetProd = currentBackup.find(p => p.id === id);
     if (targetProd) {
-      targetProd.isArchived = true;
       setLocalProductsBackup(currentBackup);
     }
 
@@ -595,15 +639,30 @@ export async function deleteProductFromSupabase(
     if (error.code === '23503') {
       console.warn('⚠️ [DeleteProduct] Foreign Key constraint (23503) caught. Falling back to archiving...');
 
-      await supabase
-        .from('products')
-        .update({ is_archived: true })
-        .eq('id', id);
-
       const currentBackup = getLocalProductsBackup();
       const targetProd = currentBackup.find(p => p.id === id);
+
+      let archiveMeta: Record<string, any> = { isArchived: true };
       if (targetProd) {
         targetProd.isArchived = true;
+        const categoryMap = await getCategoryUuidMap();
+        const row = mapProductToRow(targetProd, categoryMap);
+        archiveMeta = JSON.parse(row.description || '{}');
+      }
+
+      let archiveRes = await supabase
+        .from('products')
+        .update({ is_archived: true, description: JSON.stringify(archiveMeta) })
+        .eq('id', id);
+
+      if (archiveRes.error && (archiveRes.error.code === 'PGRST204' || archiveRes.error.message?.includes('is_archived'))) {
+        await supabase
+          .from('products')
+          .update({ description: JSON.stringify(archiveMeta) })
+          .eq('id', id);
+      }
+
+      if (targetProd) {
         setLocalProductsBackup(currentBackup);
       }
 

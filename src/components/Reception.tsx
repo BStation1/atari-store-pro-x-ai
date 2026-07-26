@@ -291,12 +291,26 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
   };
 
   // When Device Section / Category changes
-  const handleDeviceTypeChange = (idx: number, typeName: string) => {
+  const handleDeviceTypeChange = (idx: number, typeVal: string) => {
     const updated = [...devices];
     updated[idx] = {
       ...updated[idx],
-      type: typeName as any,
+      type: typeVal as any,
       model: "",
+      selectedRepairItems: [],
+      estimatedCost: 0,
+      partsCost: 0,
+      laborCost: 0
+    };
+    setDevices(updated);
+  };
+
+  // When Device Model changes
+  const handleDeviceModelChange = (idx: number, modelVal: string) => {
+    const updated = [...devices];
+    updated[idx] = {
+      ...updated[idx],
+      model: modelVal,
       selectedRepairItems: [],
       estimatedCost: 0,
       partsCost: 0,
@@ -798,20 +812,41 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
             {/* Devices Loop */}
             <div className="space-y-6">
               {devices.map((device, index) => {
-                // Device Models matching selected Section
-                const selectedTypeObj = deviceTypes.find(t => t.nameAr === device.type || t.nameEn === device.type);
-                const filteredModelsList = selectedTypeObj 
-                  ? deviceModels.filter(m => m.deviceTypeId === selectedTypeObj.id) 
-                  : deviceModels;
+                // Find selected category object (matching by ID first, then nameAr/nameEn as fallback)
+                const selectedTypeObj = deviceTypes.find(t => t.id === device.type || t.nameAr === device.type || t.nameEn === device.type);
+                const selectedCategoryId = selectedTypeObj ? selectedTypeObj.id : device.type;
 
-                // Templates matching selected Section/Type
+                // Filter models strictly by category ID (and not archived)
+                const filteredModelsList = selectedCategoryId
+                  ? deviceModels.filter(m => (m.deviceTypeId === selectedCategoryId || m.categoryId === selectedCategoryId) && !m.isArchived)
+                  : [];
+
+                // Find selected model object
+                const selectedModelObj = deviceModels.find(m => m.id === device.model || m.nameAr === device.model);
+                const selectedModelId = selectedModelObj ? selectedModelObj.id : device.model;
+
+                // Filter repair templates strictly by selected model ID
                 const filteredTemplates = repairTemplates.filter(t => {
-                  if (!device.type) return false;
-                  return (t.deviceTypeId || "").toLowerCase().includes((device.type || "").toLowerCase()) ||
-                         (device.type || "").toLowerCase().includes((t.deviceTypeId || "").toLowerCase());
+                  if (t.isActive === false) return false;
+
+                  // 1. Primary: Match by Model ID
+                  if (selectedModelId) {
+                    if (t.deviceModelId === selectedModelId || t.modelId === selectedModelId) {
+                      return true;
+                    }
+                  }
+
+                  // 2. Fallback: If template has no specific model assigned, match by Category ID
+                  if (!t.deviceModelId && !t.modelId && selectedCategoryId) {
+                    if (t.deviceTypeId === selectedCategoryId || t.categoryId === selectedCategoryId) {
+                      return true;
+                    }
+                  }
+
+                  return false;
                 });
 
-                const lockCodeConfig = getLockCodeConfig(device.type, device.model);
+                const lockCodeConfig = getLockCodeConfig(selectedTypeObj?.nameAr || device.type || "", selectedModelObj?.nameAr || device.model || "");
 
                 return (
                   <div
@@ -845,17 +880,9 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
                           className="w-full bg-[#11131e] border border-[#2a2d42] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-bold"
                         >
                           <option value="">-- اختر القسم --</option>
-                          <option value="PS5">PlayStation 5 (PS5)</option>
-                          <option value="Controller PS5">يد PS5 (DualSense)</option>
-                          <option value="PS4">PlayStation 4 (PS4)</option>
-                          <option value="Controller PS4">يد PS4 (DualShock 4)</option>
-                          <option value="PS3">PlayStation 3 (PS3)</option>
-                          <option value="Xbox Series S">Xbox Series S/X</option>
-                          <option value="Xbox Controller">يد Xbox</option>
-                          <option value="Nintendo Switch">Nintendo Switch</option>
                           {deviceTypes.filter(t => !t.isArchived).map(type => (
-                            <option key={type.id} value={type.nameAr}>
-                              {type.nameAr}
+                            <option key={type.id} value={type.id}>
+                              {type.nameAr} {type.brand ? `(${type.brand})` : ''}
                             </option>
                           ))}
                         </select>
@@ -867,14 +894,13 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
                           required
                           disabled={!device.type}
                           value={device.model || ""}
-                          onChange={e => handleDeviceChange(index, "model", e.target.value)}
+                          onChange={e => handleDeviceModelChange(index, e.target.value)}
                           className="w-full bg-[#11131e] border border-[#2a2d42] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-bold disabled:opacity-50"
                         >
                           <option value="">-- اختر الموديل --</option>
-                          <option value="قياسي">إصدار قياسي / أصلية</option>
                           {filteredModelsList.map(m => (
-                            <option key={m.id} value={m.nameAr}>
-                              {m.nameAr}
+                            <option key={m.id} value={m.id}>
+                              {m.nameAr} {m.modelCode ? `(${m.modelCode})` : ''}
                             </option>
                           ))}
                         </select>
@@ -887,7 +913,7 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
                         <div className="flex flex-wrap justify-between items-center gap-2">
                           <label className="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
                             <Wrench className="w-4 h-4 text-indigo-400" />
-                            <span>قالب عناصر الصيانة لـ ({device.type}):</span>
+                            <span>قالب عناصر الصيانة لـ ({selectedTypeObj ? selectedTypeObj.nameAr : (device.type || "عام")}{selectedModelObj ? ` - ${selectedModelObj.nameAr}` : ''}):</span>
                           </label>
 
                           <button

@@ -285,16 +285,9 @@ export default function RepairTemplatesTab() {
             }}
             className="w-full bg-[#181a29] border border-[#2a2d42] text-white rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-indigo-500 transition"
           >
-            <option value="PS5">PlayStation 5 (PS5)</option>
-            <option value="Controller PS5">يد PS5 (DualSense)</option>
-            <option value="PS4">PlayStation 4 (PS4)</option>
-            <option value="Controller PS4">يد PS4 (DualShock 4)</option>
-            <option value="PS3">PlayStation 3 (PS3)</option>
-            <option value="Xbox Series S">Xbox Series S/X</option>
-            <option value="Xbox Controller">يد Xbox</option>
-            <option value="Nintendo Switch">Nintendo Switch</option>
-            {deviceTypes.map((dt) => (
-              <option key={dt.id} value={dt.nameAr}>{dt.nameAr}</option>
+            <option value="">جميع الأقسام</option>
+            {deviceTypes.filter(dt => !dt.isArchived).map((dt) => (
+              <option key={dt.id} value={dt.id}>{dt.nameAr} {dt.brand ? `(${dt.brand})` : ''}</option>
             ))}
           </select>
         </div>
@@ -306,11 +299,11 @@ export default function RepairTemplatesTab() {
             onChange={(e) => setSelectedDeviceModel(e.target.value)}
             className="w-full bg-[#181a29] border border-[#2a2d42] text-white rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-indigo-500 transition"
           >
-            <option value="">جميع موديلات {selectedDeviceType}</option>
+            <option value="">جميع الموديلات</option>
             {deviceModels
-              .filter(m => m.nameAr.toLowerCase().includes(selectedDeviceType.toLowerCase()) || m.brand.toLowerCase().includes(selectedDeviceType.toLowerCase()))
+              .filter(m => !m.isArchived && (!selectedDeviceType || m.deviceTypeId === selectedDeviceType || m.categoryId === selectedDeviceType))
               .map(m => (
-                <option key={m.id} value={m.id}>{m.nameAr}</option>
+                <option key={m.id} value={m.id}>{m.nameAr} {m.modelCode ? `(${m.modelCode})` : ''}</option>
               ))}
           </select>
         </div>
@@ -342,20 +335,16 @@ export default function RepairTemplatesTab() {
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-gray-300 mb-1">نوع الجهاز المستهدف:</label>
+              <label className="block text-xs font-bold text-gray-300 mb-1">قسم/نوع الجهاز المستهدف:</label>
               <select
                 value={formDeviceType}
                 onChange={(e) => setFormDeviceType(e.target.value)}
                 className="w-full bg-[#181a29] border border-[#2a2d42] text-white rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-indigo-500 transition"
               >
-                <option value="PS5">PlayStation 5 (PS5)</option>
-                <option value="Controller PS5">يد PS5 (DualSense)</option>
-                <option value="PS4">PlayStation 4 (PS4)</option>
-                <option value="Controller PS4">يد PS4 (DualShock 4)</option>
-                <option value="PS3">PlayStation 3 (PS3)</option>
-                <option value="Xbox Series S">Xbox Series S/X</option>
-                <option value="Xbox Controller">يد Xbox</option>
-                <option value="Nintendo Switch">Nintendo Switch</option>
+                <option value="">اختر القسم</option>
+                {deviceTypes.filter(dt => !dt.isArchived).map((dt) => (
+                  <option key={dt.id} value={dt.id}>{dt.nameAr} {dt.brand ? `(${dt.brand})` : ''}</option>
+                ))}
               </select>
             </div>
 

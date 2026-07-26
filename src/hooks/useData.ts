@@ -28,6 +28,23 @@ import {
   getLocalCustomersBackup
 } from "../lib/supabaseCustomers";
 import {
+  fetchDeviceTypesFromSupabase,
+  addDeviceTypeToSupabase,
+  updateDeviceTypeInSupabase,
+  deleteDeviceTypeInSupabase,
+  getDeviceTypesSync,
+  fetchDeviceModelsFromSupabase,
+  addDeviceModelToSupabase,
+  updateDeviceModelInSupabase,
+  deleteDeviceModelInSupabase,
+  getDeviceModelsSync,
+  fetchRepairTemplatesFromSupabase,
+  addRepairTemplateToSupabase,
+  updateRepairTemplateInSupabase,
+  deleteRepairTemplateInSupabase,
+  getRepairTemplatesSync
+} from "../lib/supabaseDeviceManager";
+import {
   fetchOrMigrateSuppliers,
   addSupplierToSupabase,
   updateSupplierInSupabase,
@@ -588,22 +605,24 @@ export function useCategories() {
 
 export function useDeviceTypes() {
   const trigger = useDbTrigger();
-  const [deviceTypes, setDeviceTypes] = useState<DBDeviceType[]>([]);
+  const [deviceTypes, setDeviceTypes] = useState<DBDeviceType[]>(getDeviceTypesSync());
 
   useEffect(() => {
-    setDeviceTypes(db.getDeviceTypes());
+    fetchDeviceTypesFromSupabase().then(data => {
+      setDeviceTypes(data);
+    });
   }, [trigger]);
 
   const addDeviceType = (dt: Omit<DBDeviceType, "id">) => {
-    return db.addDeviceType(dt);
+    return addDeviceTypeToSupabase(dt);
   };
 
   const updateDeviceType = (dt: DBDeviceType) => {
-    db.updateDeviceType(dt);
+    updateDeviceTypeInSupabase(dt);
   };
 
   const deleteDeviceType = (id: string) => {
-    return db.deleteDeviceType(id);
+    return deleteDeviceTypeInSupabase(id);
   };
 
   return { deviceTypes, addDeviceType, updateDeviceType, deleteDeviceType };
@@ -611,22 +630,24 @@ export function useDeviceTypes() {
 
 export function useDeviceModels() {
   const trigger = useDbTrigger();
-  const [deviceModels, setDeviceModels] = useState<DBDeviceModel[]>([]);
+  const [deviceModels, setDeviceModels] = useState<DBDeviceModel[]>(getDeviceModelsSync());
 
   useEffect(() => {
-    setDeviceModels(db.getDeviceModels());
+    fetchDeviceModelsFromSupabase().then(data => {
+      setDeviceModels(data);
+    });
   }, [trigger]);
 
   const addDeviceModel = (m: Omit<DBDeviceModel, "id">) => {
-    return db.addDeviceModel(m);
+    return addDeviceModelToSupabase(m);
   };
 
   const updateDeviceModel = (m: DBDeviceModel) => {
-    db.updateDeviceModel(m);
+    updateDeviceModelInSupabase(m);
   };
 
   const deleteDeviceModel = (id: string) => {
-    return db.deleteDeviceModel(id);
+    return deleteDeviceModelInSupabase(id);
   };
 
   return { deviceModels, addDeviceModel, updateDeviceModel, deleteDeviceModel };
@@ -749,22 +770,24 @@ export function useDeviceConditions() {
 
 export function useRepairTemplates() {
   const trigger = useDbTrigger();
-  const [repairTemplates, setRepairTemplates] = useState<RepairTemplateItem[]>([]);
+  const [repairTemplates, setRepairTemplates] = useState<RepairTemplateItem[]>(getRepairTemplatesSync());
 
   useEffect(() => {
-    setRepairTemplates(db.getRepairTemplates());
+    fetchRepairTemplatesFromSupabase().then(data => {
+      setRepairTemplates(data);
+    });
   }, [trigger]);
 
   const addRepairTemplateItem = (item: Omit<RepairTemplateItem, "id">) => {
-    return db.addRepairTemplateItem(item);
+    return addRepairTemplateToSupabase(item);
   };
 
   const updateRepairTemplateItem = (item: RepairTemplateItem) => {
-    db.updateRepairTemplateItem(item);
+    updateRepairTemplateInSupabase(item);
   };
 
   const deleteRepairTemplateItem = (id: string) => {
-    return db.deleteRepairTemplateItem(id);
+    return deleteRepairTemplateInSupabase(id);
   };
 
   return { repairTemplates, addRepairTemplateItem, updateRepairTemplateItem, deleteRepairTemplateItem };
