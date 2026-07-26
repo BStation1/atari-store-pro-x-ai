@@ -211,18 +211,15 @@ export async function fetchDeviceTypesFromSupabase(): Promise<DBDeviceType[]> {
       isDeviceTypesFetched = true;
       return cachedDeviceTypes;
     } else if (response.error) {
-      console.error('⚠️ Supabase Error fetching device types:', {
-        code: response.error.code,
-        message: response.error.message,
-        details: response.error.details,
-      });
+      console.warn('⚠️ Supabase device_types notice:', response.error.message);
     }
   } catch (err) {
-    console.error('⚠️ Could not query Supabase device_types table:', err);
+    console.warn('⚠️ Could not query Supabase device_types table:', err);
   }
 
   if (!isDeviceTypesFetched) {
-    cachedDeviceTypes = getDeviceTypesFromLocalStorage();
+    const local = getDeviceTypesFromLocalStorage();
+    cachedDeviceTypes = local.length > 0 ? local : DEFAULT_SUPABASE_DEVICE_TYPES;
   }
   isDeviceTypesFetched = true;
   return cachedDeviceTypes;
@@ -230,7 +227,8 @@ export async function fetchDeviceTypesFromSupabase(): Promise<DBDeviceType[]> {
 
 export function getDeviceTypesSync(): DBDeviceType[] {
   if (cachedDeviceTypes.length === 0 && typeof localStorage !== 'undefined') {
-    cachedDeviceTypes = getDeviceTypesFromLocalStorage();
+    const local = getDeviceTypesFromLocalStorage();
+    cachedDeviceTypes = local.length > 0 ? local : DEFAULT_SUPABASE_DEVICE_TYPES;
   }
   return cachedDeviceTypes;
 }
@@ -241,70 +239,55 @@ export async function addDeviceTypeToSupabase(dt: Omit<DBDeviceType, 'id'>): Pro
   const fullDt: DBDeviceType = { ...dt, id: newId };
   const row = mapDeviceTypeToRow(fullDt);
 
-  let response;
-  try {
-    response = await supabase
-      .from('device_types')
-      .insert([row])
-      .select()
-      .single();
+  const response = await supabase
+    .from('device_types')
+    .insert([row])
+    .select()
+    .single();
 
-    console.log("Supabase response", response);
+  console.log("Supabase response", response);
 
-    if (response.error) {
-      console.error("Supabase Error adding device type:", {
-        code: response.error.code,
-        message: response.error.message,
-        details: response.error.details,
-      });
-    } else if (response.data) {
-      const created = mapRowToDeviceType(response.data);
-      cachedDeviceTypes = [...cachedDeviceTypes.filter(d => d.id !== created.id), created];
+  if (response.error) {
+    console.warn("Supabase notice adding device type:", response.error.message);
+    if (response.error.code === 'PGRST205') {
+      // Table not present in Supabase schema yet; handle locally
+      cachedDeviceTypes = [...cachedDeviceTypes.filter(d => d.id !== fullDt.id), fullDt];
       saveDeviceTypesToLocalStorage(cachedDeviceTypes);
       dispatchDbChanged('atari_device_types');
-      return created;
+      return fullDt;
     }
-  } catch (e: any) {
-    console.error('Exception inserting device type to Supabase:', e);
+    throw new Error(`تعذر إضافة نوع الجهاز إلى Supabase: [${response.error.code}] ${response.error.message}`);
   }
 
-  // Fallback update local memory state
-  cachedDeviceTypes = [...cachedDeviceTypes.filter(d => d.id !== fullDt.id), fullDt];
-  saveDeviceTypesToLocalStorage(cachedDeviceTypes);
+  const created = mapRowToDeviceType(response.data);
+  await fetchDeviceTypesFromSupabase();
   dispatchDbChanged('atari_device_types');
-  return fullDt;
+  return created;
 }
 
 export async function updateDeviceTypeInSupabase(dt: DBDeviceType): Promise<void> {
   console.log("Saving device type...", dt);
   const row = mapDeviceTypeToRow(dt);
 
-  try {
-    const response = await supabase
-      .from('device_types')
-      .update(row)
-      .eq('id', dt.id);
+  const response = await supabase
+    .from('device_types')
+    .update(row)
+    .eq('id', dt.id);
 
-    console.log("Supabase response", response);
+  console.log("Supabase response", response);
 
-    if (response.error) {
-      console.error("Supabase Error updating device type:", {
-        code: response.error.code,
-        message: response.error.message,
-        details: response.error.details,
-      });
-    } else {
+  if (response.error) {
+    console.warn("Supabase notice updating device type:", response.error.message);
+    if (response.error.code === 'PGRST205') {
       cachedDeviceTypes = cachedDeviceTypes.map(item => item.id === dt.id ? dt : item);
       saveDeviceTypesToLocalStorage(cachedDeviceTypes);
       dispatchDbChanged('atari_device_types');
       return;
     }
-  } catch (e) {
-    console.error('Exception updating device type in Supabase:', e);
+    throw new Error(`تعذر تعديل نوع الجهاز في Supabase: [${response.error.code}] ${response.error.message}`);
   }
 
-  cachedDeviceTypes = cachedDeviceTypes.map(item => item.id === dt.id ? dt : item);
-  saveDeviceTypesToLocalStorage(cachedDeviceTypes);
+  await fetchDeviceTypesFromSupabase();
   dispatchDbChanged('atari_device_types');
 }
 
@@ -329,27 +312,28 @@ export async function deleteDeviceTypeInSupabase(id: string): Promise<{ success:
     }
   }
 
-  try {
-    const response = await supabase
-      .from('device_types')
-      .delete()
-      .eq('id', id);
+  const response = await supabase
+    .from('device_types')
+    .delete()
+    .eq('id', id);
 
-    console.log("Supabase response", response);
+  console.log("Supabase response", response);
 
-    if (response.error) {
-      console.error("Supabase Error deleting device type:", {
-        code: response.error.code,
-        message: response.error.message,
-        details: response.error.details,
-      });
+  if (response.error) {
+    console.warn("Supabase notice deleting device type:", response.error.message);
+    if (response.error.code === 'PGRST205') {
+      cachedDeviceTypes = cachedDeviceTypes.filter(item => item.id !== id);
+      saveDeviceTypesToLocalStorage(cachedDeviceTypes);
+      dispatchDbChanged('atari_device_types');
+      return { success: true };
     }
-  } catch (e) {
-    console.error('Exception deleting device type from Supabase:', e);
+    return {
+      success: false,
+      error: `تعذر حذف نوع الجهاز من Supabase: [${response.error.code}] ${response.error.message}`,
+    };
   }
 
-  cachedDeviceTypes = cachedDeviceTypes.filter(item => item.id !== id);
-  saveDeviceTypesToLocalStorage(cachedDeviceTypes);
+  await fetchDeviceTypesFromSupabase();
   dispatchDbChanged('atari_device_types');
   return { success: true };
 }
@@ -368,16 +352,24 @@ export async function fetchDeviceModelsFromSupabase(): Promise<DBDeviceModel[]> 
       cachedDeviceModels = data.map(mapRowToDeviceModel);
       isDeviceModelsFetched = true;
       return cachedDeviceModels;
+    } else if (error) {
+      console.warn('⚠️ Supabase device_models notice:', error.message);
     }
   } catch (err) {
     console.warn('⚠️ Could not query Supabase device_models table directly:', err);
   }
 
+  if (!isDeviceModelsFetched && cachedDeviceModels.length === 0) {
+    cachedDeviceModels = DEFAULT_SUPABASE_DEVICE_MODELS;
+  }
   isDeviceModelsFetched = true;
   return cachedDeviceModels;
 }
 
 export function getDeviceModelsSync(): DBDeviceModel[] {
+  if (cachedDeviceModels.length === 0) {
+    cachedDeviceModels = DEFAULT_SUPABASE_DEVICE_MODELS;
+  }
   return cachedDeviceModels;
 }
 
@@ -386,47 +378,47 @@ export async function addDeviceModelToSupabase(m: Omit<DBDeviceModel, 'id'>): Pr
   const fullModel: DBDeviceModel = { ...m, id: newId };
   const row = mapDeviceModelToRow(fullModel);
 
-  try {
-    const { data, error } = await supabase
-      .from('device_models')
-      .insert([row])
-      .select()
-      .single();
+  const response = await supabase
+    .from('device_models')
+    .insert([row])
+    .select()
+    .single();
 
-    if (!error && data) {
-      const created = mapRowToDeviceModel(data);
-      await fetchDeviceModelsFromSupabase();
+  if (response.error) {
+    console.warn("Supabase notice adding device model:", response.error.message);
+    if (response.error.code === 'PGRST205') {
+      cachedDeviceModels = [...cachedDeviceModels.filter(item => item.id !== fullModel.id), fullModel];
       dispatchDbChanged('atari_device_models');
-      return created;
+      return fullModel;
     }
-  } catch (e) {
-    console.error('Error adding device model to Supabase:', e);
+    throw new Error(`تعذر إضافة الموديل إلى Supabase: [${response.error.code}] ${response.error.message}`);
   }
 
-  cachedDeviceModels = [...cachedDeviceModels.filter(item => item.id !== fullModel.id), fullModel];
+  const created = mapRowToDeviceModel(response.data);
+  await fetchDeviceModelsFromSupabase();
   dispatchDbChanged('atari_device_models');
-  return fullModel;
+  return created;
 }
 
 export async function updateDeviceModelInSupabase(m: DBDeviceModel): Promise<void> {
   const row = mapDeviceModelToRow(m);
 
-  try {
-    const { error } = await supabase
-      .from('device_models')
-      .update(row)
-      .eq('id', m.id);
+  const response = await supabase
+    .from('device_models')
+    .update(row)
+    .eq('id', m.id);
 
-    if (!error) {
-      await fetchDeviceModelsFromSupabase();
+  if (response.error) {
+    console.warn("Supabase notice updating device model:", response.error.message);
+    if (response.error.code === 'PGRST205') {
+      cachedDeviceModels = cachedDeviceModels.map(item => item.id === m.id ? m : item);
       dispatchDbChanged('atari_device_models');
       return;
     }
-  } catch (e) {
-    console.error('Error updating device model in Supabase:', e);
+    throw new Error(`تعذر تعديل الموديل في Supabase: [${response.error.code}] ${response.error.message}`);
   }
 
-  cachedDeviceModels = cachedDeviceModels.map(item => item.id === m.id ? m : item);
+  await fetchDeviceModelsFromSupabase();
   dispatchDbChanged('atari_device_models');
 }
 
@@ -446,23 +438,25 @@ export async function deleteDeviceModelInSupabase(id: string): Promise<{ success
     }
   }
 
-  try {
-    const { error } = await supabase
-      .from('device_models')
-      .delete()
-      .eq('id', id);
+  const response = await supabase
+    .from('device_models')
+    .delete()
+    .eq('id', id);
 
-    if (!error) {
+  if (response.error) {
+    console.warn("Supabase notice deleting device model:", response.error.message);
+    if (response.error.code === 'PGRST205') {
       cachedDeviceModels = cachedDeviceModels.filter(item => item.id !== id);
-      await fetchDeviceModelsFromSupabase();
       dispatchDbChanged('atari_device_models');
       return { success: true };
     }
-  } catch (e) {
-    console.error('Error deleting device model from Supabase:', e);
+    return {
+      success: false,
+      error: `تعذر حذف الموديل من Supabase: [${response.error.code}] ${response.error.message}`,
+    };
   }
 
-  cachedDeviceModels = cachedDeviceModels.filter(item => item.id !== id);
+  await fetchDeviceModelsFromSupabase();
   dispatchDbChanged('atari_device_models');
   return { success: true };
 }
@@ -481,16 +475,24 @@ export async function fetchRepairTemplatesFromSupabase(): Promise<RepairTemplate
       cachedRepairTemplates = data.map(mapRowToRepairTemplate);
       isRepairTemplatesFetched = true;
       return cachedRepairTemplates;
+    } else if (error) {
+      console.warn('⚠️ Supabase repair_templates notice:', error.message);
     }
   } catch (err) {
     console.warn('⚠️ Could not query Supabase repair_templates table directly:', err);
   }
 
+  if (!isRepairTemplatesFetched && cachedRepairTemplates.length === 0) {
+    cachedRepairTemplates = DEFAULT_SUPABASE_REPAIR_TEMPLATES;
+  }
   isRepairTemplatesFetched = true;
   return cachedRepairTemplates;
 }
 
 export function getRepairTemplatesSync(): RepairTemplateItem[] {
+  if (cachedRepairTemplates.length === 0) {
+    cachedRepairTemplates = DEFAULT_SUPABASE_REPAIR_TEMPLATES;
+  }
   return cachedRepairTemplates;
 }
 
@@ -499,68 +501,70 @@ export async function addRepairTemplateToSupabase(item: Omit<RepairTemplateItem,
   const fullItem: RepairTemplateItem = { ...item, id: newId };
   const row = mapRepairTemplateToRow(fullItem);
 
-  try {
-    const { data, error } = await supabase
-      .from('repair_templates')
-      .insert([row])
-      .select()
-      .single();
+  const response = await supabase
+    .from('repair_templates')
+    .insert([row])
+    .select()
+    .single();
 
-    if (!error && data) {
-      const created = mapRowToRepairTemplate(data);
-      await fetchRepairTemplatesFromSupabase();
+  if (response.error) {
+    console.warn("Supabase notice adding repair template:", response.error.message);
+    if (response.error.code === 'PGRST205') {
+      cachedRepairTemplates = [...cachedRepairTemplates.filter(i => i.id !== fullItem.id), fullItem];
       dispatchDbChanged('atari_repair_templates');
-      return created;
+      return fullItem;
     }
-  } catch (e) {
-    console.error('Error adding repair template to Supabase:', e);
+    throw new Error(`تعذر إضافة قالب الصيانة إلى Supabase: [${response.error.code}] ${response.error.message}`);
   }
 
-  cachedRepairTemplates = [...cachedRepairTemplates.filter(i => i.id !== fullItem.id), fullItem];
+  const created = mapRowToRepairTemplate(response.data);
+  await fetchRepairTemplatesFromSupabase();
   dispatchDbChanged('atari_repair_templates');
-  return fullItem;
+  return created;
 }
 
 export async function updateRepairTemplateInSupabase(item: RepairTemplateItem): Promise<void> {
   const row = mapRepairTemplateToRow(item);
 
-  try {
-    const { error } = await supabase
-      .from('repair_templates')
-      .update(row)
-      .eq('id', item.id);
+  const response = await supabase
+    .from('repair_templates')
+    .update(row)
+    .eq('id', item.id);
 
-    if (!error) {
-      await fetchRepairTemplatesFromSupabase();
+  if (response.error) {
+    console.warn("Supabase notice updating repair template:", response.error.message);
+    if (response.error.code === 'PGRST205') {
+      cachedRepairTemplates = cachedRepairTemplates.map(i => i.id === item.id ? item : i);
       dispatchDbChanged('atari_repair_templates');
       return;
     }
-  } catch (e) {
-    console.error('Error updating repair template in Supabase:', e);
+    throw new Error(`تعذر تعديل قالب الصيانة في Supabase: [${response.error.code}] ${response.error.message}`);
   }
 
-  cachedRepairTemplates = cachedRepairTemplates.map(i => i.id === item.id ? item : i);
+  await fetchRepairTemplatesFromSupabase();
   dispatchDbChanged('atari_repair_templates');
 }
 
 export async function deleteRepairTemplateInSupabase(id: string): Promise<{ success: boolean; error?: string }> {
-  try {
-    const { error } = await supabase
-      .from('repair_templates')
-      .delete()
-      .eq('id', id);
+  const response = await supabase
+    .from('repair_templates')
+    .delete()
+    .eq('id', id);
 
-    if (!error) {
+  if (response.error) {
+    console.warn("Supabase notice deleting repair template:", response.error.message);
+    if (response.error.code === 'PGRST205') {
       cachedRepairTemplates = cachedRepairTemplates.filter(i => i.id !== id);
-      await fetchRepairTemplatesFromSupabase();
       dispatchDbChanged('atari_repair_templates');
       return { success: true };
     }
-  } catch (e) {
-    console.error('Error deleting repair template from Supabase:', e);
+    return {
+      success: false,
+      error: `تعذر حذف قالب الصيانة من Supabase: [${response.error.code}] ${response.error.message}`,
+    };
   }
 
-  cachedRepairTemplates = cachedRepairTemplates.filter(i => i.id !== id);
+  await fetchRepairTemplatesFromSupabase();
   dispatchDbChanged('atari_repair_templates');
   return { success: true };
 }

@@ -20,6 +20,11 @@ export const isSupabaseConfigured = Boolean(
   !supabaseUrl.includes('placeholder')
 );
 
+if (typeof window !== 'undefined') {
+  console.log("Supabase URL:", supabaseUrl);
+  console.log("App Origin:", window.location.origin);
+}
+
 if (!isSupabaseConfigured) {
   console.warn(
     '⚠️ Supabase credentials missing! Please configure VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in Vercel Environment Variables.'

@@ -404,7 +404,7 @@ export default function SettingsView() {
     }
   };
 
-  const handleSaveDeviceModel = (e: React.FormEvent) => {
+  const handleSaveDeviceModel = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!dmDeviceTypeId || !dmNameAr.trim()) {
       showNotification("يرجى تحديد نوع الجهاز وإدخال اسم الموديل بالعربية", true);
@@ -426,20 +426,24 @@ export default function SettingsView() {
       sortOrder: deviceModels.length + 1
     };
 
-    if (editingDmId) {
-      updateDeviceModel({ id: editingDmId, ...payload });
-      showNotification("تم تحديث موديل الجهاز بنجاح");
-      setEditingDmId(null);
-    } else {
-      addDeviceModel(payload);
-      showNotification("تم إضافة موديل الجهاز الجديد بنجاح");
-    }
+    try {
+      if (editingDmId) {
+        await updateDeviceModel({ id: editingDmId, ...payload });
+        showNotification("تم تحديث موديل الجهاز بنجاح");
+        setEditingDmId(null);
+      } else {
+        await addDeviceModel(payload);
+        showNotification("تم إضافة موديل الجهاز الجديد بنجاح");
+      }
 
-    setDmNameAr("");
-    setDmNameEn("");
-    setDmCode("");
-    setDmStorage("1TB");
-    setDmNotes("");
+      setDmNameAr("");
+      setDmNameEn("");
+      setDmCode("");
+      setDmStorage("1TB");
+      setDmNotes("");
+    } catch (err: any) {
+      showNotification(err?.message || "حدث خطأ أثناء حفظ الموديل", true);
+    }
   };
 
   const handleDeleteDeviceTypeAction = async (id: string) => {

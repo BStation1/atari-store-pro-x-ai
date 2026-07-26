@@ -108,11 +108,7 @@ export async function getCategoriesFromSupabase(): Promise<ProductCategory[]> {
     .order('sort_order', { ascending: true });
 
   if (response.error) {
-    console.error('⚠️ Supabase Error fetching categories:', {
-      code: response.error.code,
-      message: response.error.message,
-      details: response.error.details,
-    });
+    console.warn('⚠️ Supabase categories notice:', response.error.message);
     return getLocalCategoriesBackup();
   }
 
