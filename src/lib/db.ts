@@ -2450,53 +2450,119 @@ export const db = {
     const forceFailure = options?.forceFailure || false;
     const startTime = Date.now();
 
-    // Helper for safe table deletion that ignores PGRST205 / schema cache / missing table errors
-    // and loops in batches to handle large tables (e.g. 15,000+ records) without hitting PostgREST batch limits
-    const safeDeleteTable = async (tableName: string): Promise<{ success: boolean; count: number; error?: string }> => {
-      let totalDeleted = 0;
-      let iterations = 0;
-      const maxIterations = 200; // Can handle up to 200,000 rows per table
+    // Helper for safe table deletion that logs every single step explicitly
+    const safeDeleteTable = async (tableName: string): Promise<{ success: boolean; count: number; error?: string; logs: string[] }> => {
+      const logs: string[] = [];
+      const log = (msg: string) => {
+        console.log(`[Operational Reset] ${msg}`);
+        logs.push(msg);
+      };
+      const logWarn = (msg: string) => {
+        console.warn(`[Operational Reset] ⚠️ ${msg}`);
+        logs.push(`⚠️ ${msg}`);
+      };
+      const logErr = (msg: string) => {
+        console.error(`[Operational Reset] ❌ ${msg}`);
+        logs.push(`❌ ${msg}`);
+      };
 
-      while (iterations < maxIterations) {
-        iterations++;
-        try {
-          const { data, error } = await supabase
-            .from(tableName)
-            .delete()
-            .neq('id', '00000000-0000-0000-0000-000000000000')
-            .select('id')
-            .limit(1000);
+      log(`▶ 1. Starting deletion sequence for table "${tableName}"...`);
 
-          if (error) {
-            const isMissingTable =
-              error.code === 'PGRST205' ||
-              error.code === '42P01' ||
-              error.message?.includes('schema cache') ||
-              error.message?.includes('does not exist') ||
-              error.message?.includes('Could not find the table');
+      // Step A: Inspect initial row count
+      let initialCount = 0;
+      try {
+        const { count, error: cntErr } = await supabase
+          .from(tableName)
+          .select('id', { count: 'exact', head: true });
 
-            if (isMissingTable) {
-              console.warn(`⚠️ [Operational Reset] Table "${tableName}" does not exist in Supabase schema cache. Skipping gracefully.`);
-              return { success: true, count: totalDeleted };
-            }
+        if (cntErr) {
+          const isMissingTable =
+            cntErr.code === 'PGRST205' ||
+            cntErr.code === '42P01' ||
+            cntErr.message?.includes('schema cache') ||
+            cntErr.message?.includes('does not exist') ||
+            cntErr.message?.includes('Could not find the table');
 
-            console.warn(`⚠️ [Operational Reset] Warning deleting table "${tableName}": ${error.message} (Code: ${error.code})`);
-            return { success: false, count: totalDeleted, error: error.message };
+          if (isMissingTable) {
+            logWarn(`Table "${tableName}" does not exist in Supabase schema cache. Skipping gracefully.`);
+            return { success: true, count: 0, logs };
           }
-
-          const batchCount = data ? data.length : 0;
-          totalDeleted += batchCount;
-
-          if (batchCount < 1000) {
-            break;
-          }
-        } catch (err: any) {
-          console.warn(`⚠️ [Operational Reset] Exception deleting table "${tableName}":`, err?.message || String(err));
-          return { success: true, count: totalDeleted };
+          logWarn(`Count query warning on table "${tableName}": ${cntErr.message} (Code: ${cntErr.code})`);
+        } else {
+          initialCount = count ?? 0;
+          log(`2. Found initial record count in "${tableName}": ${initialCount}`);
         }
+      } catch (e: any) {
+        logWarn(`Exception during initial count query on "${tableName}": ${e?.message || e}`);
       }
 
-      return { success: true, count: totalDeleted };
+      // Step B: Strategy 1 - Standard bulk delete with .not('id', 'is', null)
+      log(`3. Executing Strategy 1: Direct bulk delete on "${tableName}" using .not('id', 'is', null)...`);
+      try {
+        const { data: delData, error: delErr, count: delCount } = await supabase
+          .from(tableName)
+          .delete({ count: 'exact' })
+          .not('id', 'is', null)
+          .select('id');
+
+        if (delErr) {
+          logErr(`Strategy 1 bulk delete on "${tableName}" FAILED with error:`);
+          logErr(`- Code: ${delErr.code}`);
+          logErr(`- Message: ${delErr.message}`);
+          logErr(`- Details: ${delErr.details || 'None'}`);
+          logErr(`- Hint: ${delErr.hint || 'None'}`);
+        } else {
+          const deletedNum = delData?.length ?? delCount ?? 0;
+          log(`4. Strategy 1 bulk delete on "${tableName}" completed. Deleted rows count = ${deletedNum}`);
+          
+          // Re-verify remaining count
+          const { count: remCount } = await supabase.from(tableName).select('id', { count: 'exact', head: true });
+          log(`5. Post-delete remaining count in "${tableName}": ${remCount ?? 0}`);
+
+          if ((remCount ?? 0) === 0) {
+            return { success: true, count: initialCount, logs };
+          }
+        }
+      } catch (e: any) {
+        logErr(`Exception during Strategy 1 bulk delete on "${tableName}": ${e?.message || e}`);
+      }
+
+      // Step C: Strategy 2 - Fallback delete with .neq('id', '00000000-0000-0000-0000-000000000000')
+      log(`6. Executing Strategy 2: Fallback delete on "${tableName}" using .neq('id', zero_uuid)...`);
+      try {
+        const { data: delData2, error: delErr2 } = await supabase
+          .from(tableName)
+          .delete({ count: 'exact' })
+          .neq('id', '00000000-0000-0000-0000-000000000000')
+          .select('id');
+
+        if (delErr2) {
+          logErr(`Strategy 2 delete on "${tableName}" FAILED with error:`);
+          logErr(`- Code: ${delErr2.code}`);
+          logErr(`- Message: ${delErr2.message}`);
+          logErr(`- Details: ${delErr2.details || 'None'}`);
+        } else {
+          const deletedNum2 = delData2?.length ?? 0;
+          log(`7. Strategy 2 delete on "${tableName}" completed. Deleted rows = ${deletedNum2}`);
+        }
+      } catch (e: any) {
+        logErr(`Exception during Strategy 2 delete on "${tableName}": ${e?.message || e}`);
+      }
+
+      // Final count check for this table
+      const { count: finalRemCount } = await supabase.from(tableName).select('id', { count: 'exact', head: true });
+      log(`8. Final remaining count in "${tableName}": ${finalRemCount ?? 0}`);
+
+      if ((finalRemCount ?? 0) > 0) {
+        return {
+          success: false,
+          count: initialCount - (finalRemCount ?? 0),
+          error: `جدول "${tableName}" يحتوي على ${finalRemCount} سجل لم يتم حذفها. تحقق من RLS أو قيود المراجع (Foreign Keys).`,
+          logs
+        };
+      }
+
+      return { success: true, count: initialCount, logs };
     };
 
     try {
@@ -2606,7 +2672,7 @@ export const db = {
         safeCountTable('products', q => q.gt('quantity', 0))
       ]);
 
-      const verificationFailed =
+      let verificationFailed =
         custCount > 0 ||
         orderCount > 0 ||
         invCount > 0 ||
@@ -2616,12 +2682,39 @@ export const db = {
         nonZeroProdCount > 0;
 
       if (verificationFailed) {
-        const details = `العملاء: ${custCount}, الصيانة: ${orderCount}, الفواتير: ${invCount}, الموردين: ${supCount}, المصروفات: ${expCount}, حركات المخزون: ${movCount}, منتجات غير مصفّرة: ${nonZeroProdCount}`;
-        console.error("❌ Supabase reset verification failed. Counts remaining in DB:", details);
-        return {
-          success: false,
-          error: `فشل التحقق من التصفير: ما زالت توجد سجلات بقاعدة البيانات (${details})`
-        };
+        console.warn("⚠️ Initial verification found remaining records, attempting direct safeDeleteTable failsafe...");
+        
+        if (movCount > 0) await safeDeleteTable('inventory_movements');
+        if (custCount > 0) await safeDeleteTable('customers');
+        if (orderCount > 0) await safeDeleteTable('repair_orders');
+        if (invCount > 0) await safeDeleteTable('invoices');
+        if (supCount > 0) await safeDeleteTable('suppliers');
+        if (expCount > 0) await safeDeleteTable('expenses');
+        if (nonZeroProdCount > 0) {
+          try {
+            await supabase.from('products').update({ quantity: 0 }).neq('id', '00000000-0000-0000-0000-000000000000');
+          } catch (_) {}
+        }
+
+        // Re-verify counts after failsafe execution
+        const [reCust, reOrder, reInv, reSup, reExp, reMov, reProd] = await Promise.all([
+          safeCountTable('customers'),
+          safeCountTable('repair_orders'),
+          safeCountTable('invoices'),
+          safeCountTable('suppliers'),
+          safeCountTable('expenses'),
+          safeCountTable('inventory_movements'),
+          safeCountTable('products', q => q.gt('quantity', 0))
+        ]);
+
+        if (reCust > 0 || reOrder > 0 || reInv > 0 || reSup > 0 || reExp > 0 || reMov > 0 || reProd > 0) {
+          const details = `العملاء: ${reCust}, الصيانة: ${reOrder}, الفواتير: ${reInv}, الموردين: ${reSup}, المصروفات: ${reExp}, حركات المخزون: ${reMov}, منتجات غير مصفّرة: ${reProd}`;
+          console.error("❌ Supabase reset verification failed after retry. Counts remaining in DB:", details);
+          return {
+            success: false,
+            error: `فشل التحقق من التصفير: ما زالت توجد سجلات بقاعدة البيانات (${details})`
+          };
+        }
       }
 
       // 4. VERIFICATION PASSED! NOW WE SAFELY CLEAR LOCAL CACHE!
