@@ -116,5 +116,8 @@ export const AUDIT_ACTION_LABELS: Record<RepairAuditLogRecord['actionType'], { l
   CHANGE_DIAGNOSIS: { label: "تغيير التشخيص", badgeClass: "bg-purple-500/10 text-purple-400 border-purple-500/30" },
   CHANGE_STATUS: { label: "تغيير حالة الطلب", badgeClass: "bg-sky-500/10 text-sky-400 border-sky-500/30" },
   CHANGE_TECHNICIAN: { label: "تغيير الفني المسؤول", badgeClass: "bg-indigo-500/10 text-indigo-400 border-indigo-500/30" },
+  CHANGE_FAULTS: { label: "تعديل أعطال وشكاوى الجهاز", badgeClass: "bg-amber-500/10 text-amber-400 border-amber-500/30" },
+  CHANGE_OWNERSHIP: { label: "تعديل ملكية/تبعية الجهاز", badgeClass: "bg-sky-500/10 text-sky-400 border-sky-500/30" },
+  CHANGE_DEDUCTION_RATE: { label: "تعديل نسبة الخصم/الخصم الضريبي", badgeClass: "bg-purple-500/10 text-purple-400 border-purple-500/30" },
   OTHER_EDIT: { label: "تعديل آخر", badgeClass: "bg-gray-500/10 text-gray-400 border-gray-500/30" }
 };

@@ -175,6 +175,9 @@ export interface RepairAuditLogRecord {
     | "CHANGE_DIAGNOSIS"
     | "CHANGE_STATUS"
     | "CHANGE_TECHNICIAN"
+    | "CHANGE_FAULTS"
+    | "CHANGE_OWNERSHIP"
+    | "CHANGE_DEDUCTION_RATE"
     | "OTHER_EDIT";
   fieldName?: string;
   oldValue?: string | number | null;

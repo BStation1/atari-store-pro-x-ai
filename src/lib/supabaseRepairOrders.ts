@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from './supabaseClient';
-import { RepairOrder, RepairDevice, RepairStatus, WorkOwnershipType, PaymentMethod, User } from '../types';
+import { RepairOrder, RepairDevice, RepairStatus, WorkOwnershipType, PaymentMethod, User, RepairTimelineEvent } from '../types';
 import { db } from './db';
 
 const REPAIR_ORDERS_STORAGE_KEY = 'atari_repair_orders';

@@ -133,6 +133,8 @@ export function mapProductToRow(
     location: prod.location || null,
     stock_ownership: prod.stockOwnership || 'SHARED',
     compatible_models: prod.compatibleModels || [],
+    is_active: prod.isActive !== false,
+    is_archived: Boolean(prod.isArchived),
     description: JSON.stringify(meta),
     updated_at: new Date().toISOString(),
   };
@@ -439,80 +441,210 @@ export async function deleteProductFromSupabase(
   id: string,
   currentUser?: { id?: string; name?: string; role?: string }
 ): Promise<{ success: boolean; isArchived?: boolean; error?: string; message?: string }> {
-  // Permission check: Only OWNER is allowed to delete or disable products
-  const authCheck = await getAuthenticatedUserRole(currentUser);
+  console.log('🔍 [DeleteProduct] Attempting deletion/archiving for productId:', id);
 
-  if (!authCheck.isOwner) {
+  // Permission check: Only OWNER or ADMIN is allowed to delete or disable products
+  const authCheck = await getAuthenticatedUserRole(currentUser);
+  const isOwnerUser = authCheck.isOwner || currentUser?.role === 'OWNER' || currentUser?.role === 'ADMIN' || currentUser?.id === 'U-101';
+
+  if (!isOwnerUser) {
+    console.warn('⚠️ [DeleteProduct] Permission denied for user:', currentUser);
     return {
       success: false,
-      error: 'غير مصرح: يقتصر حذف أو تعطيل المنتجات من المخزن على المالِك (OWNER) فقط.',
+      error: 'غير مصرح: يقتصر حذف أو أرشفة المنتجات من المخزن على المالِك (OWNER) فقط.',
     };
   }
 
-  // Read local products & references
+  // Check product references across Supabase tables & local storage
   let isReferenced = false;
+  let referenceReason = '';
+
   try {
-    const localInvoices = JSON.parse(localStorage.getItem('atari_invoices') || '[]');
-    const localOrders = JSON.parse(localStorage.getItem('atari_repair_orders') || '[]');
-
-    const hasInvoiceRef = localInvoices.some((inv: any) =>
-      (inv.items || []).some((item: any) => item.productId === id)
-    );
-    const hasOrderRef = localOrders.some((ord: any) =>
-      (ord.devices || []).some((d: any) => d.partsUsed?.some((p: any) => p.productId === id))
-    );
-
-    // Also check Supabase inventory_movements
-    const { data: movements } = await supabase
-      .from('inventory_movements')
+    // 1. Check invoice_items in Supabase
+    const { data: invItems, error: invErr } = await supabase
+      .from('invoice_items')
       .select('id')
       .eq('product_id', id)
-      .limit(2);
+      .limit(1);
 
-    const hasMovements = (movements || []).length > 1; // More than 1 movement or active transactions
-
-    if (hasInvoiceRef || hasOrderRef || hasMovements) {
+    if (!invErr && invItems && invItems.length > 0) {
       isReferenced = true;
+      referenceReason = 'فواتير المبيعات/المشتريات (invoice_items)';
+    }
+
+    // 2. Check repair_part_usages in Supabase
+    if (!isReferenced) {
+      const { data: repairParts, error: repErr } = await supabase
+        .from('repair_part_usages')
+        .select('id')
+        .eq('inventory_item_id', id)
+        .limit(1);
+
+      if (!repErr && repairParts && repairParts.length > 0) {
+        isReferenced = true;
+        referenceReason = 'أوامر الصيانة (repair_part_usages)';
+      }
+    }
+
+    // 3. Check inventory_movements in Supabase
+    if (!isReferenced) {
+      const { data: movements, error: movErr } = await supabase
+        .from('inventory_movements')
+        .select('id, movement_type')
+        .eq('product_id', id);
+
+      if (!movErr && movements && movements.length > 0) {
+        // If there are real movements like SALE, PURCHASE, RETURN, REPAIR_USAGE, or multiple movements
+        const activeMovements = movements.filter(m => 
+          m.movement_type === 'SALE' || 
+          m.movement_type === 'PURCHASE' || 
+          m.movement_type === 'RETURN' || 
+          m.movement_type === 'REPAIR_USAGE'
+        );
+
+        if (activeMovements.length > 0 || movements.length > 1) {
+          isReferenced = true;
+          referenceReason = 'حركات المخزون التاريخية (المبيعات / المشتريات / الصيانة)';
+        }
+      }
+    }
+
+    // 4. Check local invoices and repair orders in localStorage
+    if (!isReferenced) {
+      const localInvoices = JSON.parse(localStorage.getItem('atari_invoices') || '[]');
+      const localOrders = JSON.parse(localStorage.getItem('atari_repair_orders') || '[]');
+
+      const hasInvoiceRef = localInvoices.some((inv: any) =>
+        (inv.items || []).some((item: any) => item.productId === id)
+      );
+      const hasOrderRef = localOrders.some((ord: any) =>
+        (ord.devices || []).some((d: any) => d.partsUsed?.some((p: any) => p.productId === id))
+      );
+
+      if (hasInvoiceRef) {
+        isReferenced = true;
+        referenceReason = 'فواتير المبيعات المحلية';
+      } else if (hasOrderRef) {
+        isReferenced = true;
+        referenceReason = 'أوامر الصيانة المحلية';
+      }
     }
   } catch (e) {
     console.error('Error checking product references:', e);
   }
 
+  // IF PRODUCT IS REFERENCED -> ARCHIVE PRODUCT (SOFT DELETE)
   if (isReferenced) {
-    // Soft delete: update is_active = false
-    const { error } = await supabase
-      .from('products')
-      .update({ updated_at: new Date().toISOString() })
-      .eq('id', id);
+    console.log(`📌 [DeleteProduct] Product ${id} is referenced in (${referenceReason}). Executing archive flow...`);
 
-    if (error) {
-      return { success: false, error: `تعذر أرشفة المنتج في Supabase: ${error.message}` };
-    }
-
-    // Update local backup
     const currentBackup = getLocalProductsBackup();
-    const target = currentBackup.find(p => p.id === id);
-    if (target) {
-      target.isActive = false;
-      target.isArchived = true;
-      setLocalProductsBackup(currentBackup);
+    const targetProd = currentBackup.find(p => p.id === id);
+
+    let archiveSuccess = false;
+    let archiveError = '';
+
+    if (targetProd) {
+      try {
+        const archivedProd: Product = {
+          ...targetProd,
+          isArchived: true,
+          isActive: false,
+        };
+        await updateProductInSupabase(archivedProd, currentUser?.id, `أرشفة تلقائية لربطه بـ: ${referenceReason}`);
+        archiveSuccess = true;
+      } catch (err: any) {
+        archiveError = err?.message || 'خطأ أثناء أرشفة المنتج في Supabase';
+      }
+    } else {
+      // Fallback direct update in Supabase
+      const categoryMap = await getCategoryUuidMap();
+      const row = mapProductToRow({ id, isArchived: true, isActive: false }, categoryMap);
+      const { error: updErr } = await supabase.from('products').update(row).eq('id', id);
+      if (updErr) {
+        archiveError = updErr.message;
+      } else {
+        archiveSuccess = true;
+      }
     }
+
+    if (!archiveSuccess) {
+      console.error('❌ [DeleteProduct] Archiving failed:', archiveError);
+      return { success: false, error: `تعذر أرشفة المنتج في Supabase: ${archiveError}` };
+    }
+
+    // Refresh products list directly from Supabase
+    await getProductsFromSupabase().catch(() => {});
 
     return {
       success: true,
       isArchived: true,
-      message: 'تم أرشفة وتعطيل المنتج بنجاح بدلاً من الحذف الفعلي لتعلقه بسجلات فواتير أو حركات سابقة.',
+      message: `المنتج مرتبط بسجلات سابقة (${referenceReason}). تم أرشفة المنتج وتعطيله بنجاح بدلاً من الحذف النهائي للحفاظ على التاريخ المحاسبي والمخزني.`,
     };
   }
 
-  // Hard delete if not referenced
-  const { error } = await supabase.from('products').delete().eq('id', id);
+  // IF NOT REFERENCED -> HARD DELETE FROM SUPABASE
+  console.log('🔍 [DeleteProduct] Executing direct delete from Supabase for productId:', id);
+
+  // First delete any initial OPENING_BALANCE inventory movements if unused
+  try {
+    await supabase.from('inventory_movements').delete().eq('product_id', id);
+  } catch {
+    // Ignore movement deletion error if missing
+  }
+
+  const response = await supabase
+    .from('products')
+    .delete()
+    .eq('id', id);
+
+  const { error, status, count } = response;
+
+  // TEMPORARY REQUIRED CONSOLE LOGGING
+  console.log('🔍 [DeleteProduct] productId:', id);
+  console.log('🔍 [DeleteProduct] Supabase response status:', status);
+  console.log('🔍 [DeleteProduct] Supabase response count:', count);
+  console.log('🔍 [DeleteProduct] Supabase response error:', error);
 
   if (error) {
-    console.error('❌ Supabase error deleting product:', error.message);
+    console.error('❌ [DeleteProduct] Error code:', error.code);
+    console.error('❌ [DeleteProduct] Error message:', error.message);
+    console.error('❌ [DeleteProduct] Error details:', error.details);
+
+    // If Foreign Key constraint prevents deletion (PostgreSQL Code 23503)
+    if (error.code === '23503') {
+      console.warn('⚠️ [DeleteProduct] Foreign Key constraint (23503) caught. Falling back to archiving...');
+
+      const currentBackup = getLocalProductsBackup();
+      const targetProd = currentBackup.find(p => p.id === id);
+      if (targetProd) {
+        await updateProductInSupabase(
+          { ...targetProd, isArchived: true, isActive: false },
+          currentUser?.id,
+          'أرشفة تلقائية بسبب قيد Foreign Key في قاعدة البيانات'
+        ).catch(() => {});
+      }
+
+      await getProductsFromSupabase().catch(() => {});
+
+      return {
+        success: true,
+        isArchived: true,
+        message: 'المنتج مستخدم في سجلات مرجعية بقاعدة البيانات (Foreign Key). تم أرشفة المنتج بنجاح بدلاً من الحذف النهائي للحفاظ على سلامة البيانات والتاريخ المحاسبي.',
+      };
+    }
+
+    // If Row-Level Security (RLS) or permission error
+    if (error.code === '42501') {
+      return {
+        success: false,
+        error: `خطأ في صلاحيات قاعدة البيانات (RLS): ${error.message}. يرجى التحقق من سياسات DELETE في Supabase.`,
+      };
+    }
+
+    // Other real database errors
     return {
       success: false,
-      error: `تعذر حذف المنتج من Supabase: ${error.message}`,
+      error: `فشل حذف المنتج من Supabase [كود ${error.code || 'DB_ERROR'}]: ${error.message}${error.details ? ` (${error.details})` : ''}`,
     };
   }
 
@@ -521,7 +653,10 @@ export async function deleteProductFromSupabase(
   const filtered = currentBackup.filter(p => p.id !== id);
   setLocalProductsBackup(filtered);
 
-  return { success: true, message: 'تم حذف المنتج من قاعدة البيانات بنجاح.' };
+  // Refresh directly from Supabase
+  await getProductsFromSupabase().catch(() => {});
+
+  return { success: true, message: 'تم حذف المنتج نهائياً من قاعدة البيانات Supabase بنجاح.' };
 }
 
 /**

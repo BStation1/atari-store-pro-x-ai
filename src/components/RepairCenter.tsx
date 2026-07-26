@@ -1383,7 +1383,7 @@ ${trackingLink}
                                 {selectedPartIndex === devIdx && partSearch.trim() && (
                                   <div className="absolute right-0 left-0 bg-[#11131e] border border-[#2a2d42] mt-1 rounded-xl max-h-[160px] overflow-y-auto z-40 divide-y divide-[#2a2d42] shadow-2xl">
                                     {products
-                                      .filter(p => p.name.includes(partSearch) || p.category.includes("قطع غيار"))
+                                      .filter(p => !p.isArchived && p.isActive !== false && (p.name.includes(partSearch) || p.category.includes("قطع غيار")))
                                       .map(p => (
                                         <button
                                           key={p.id}
@@ -1745,6 +1745,7 @@ ${trackingLink}
           isOpen={isReceiptOpen}
           onClose={() => setIsReceiptOpen(false)}
           order={receiptOrder}
+          settings={settings}
         />
       )}
 
@@ -1754,8 +1755,19 @@ ${trackingLink}
           onClose={() => setIsDeliverModalOpen(false)}
           order={selectedOrder}
           currentUser={currentUserForAction}
+          invoices={invoices}
+          onOpenReceiptPrint={(ord) => {
+            setReceiptOrder(ord);
+            setIsReceiptOpen(true);
+          }}
           onConfirmDelivery={async (deliverData) => {
-            const res = await deliverRepairOrder(selectedOrder.id, deliverData, currentUserForAction);
+            const res = await deliverRepairOrder({
+              orderId: selectedOrder.id,
+              paymentNow: deliverData.paymentNow,
+              paymentMethod: deliverData.paymentMethod,
+              deliveryNotes: deliverData.deliveryNotes,
+              currentUser: currentUserForAction
+            });
             if (res.success && res.order) {
               setSelectedOrder(res.order);
             }
@@ -1771,7 +1783,7 @@ ${trackingLink}
           order={selectedOrder}
           currentUser={currentUserForAction}
           onConfirmReopen={async (reason) => {
-            const res = await reopenRepairOrder(selectedOrder.id, reason, currentUserForAction);
+            const res = await reopenRepairOrder(selectedOrder.id, currentUserForAction, reason);
             if (res.success && res.order) {
               setSelectedOrder(res.order);
             }
