@@ -3,6 +3,7 @@ import { ProductCategory, Product } from '../types';
 
 const CATEGORIES_STORAGE_KEY = 'atari_categories';
 const PRODUCTS_STORAGE_KEY = 'atari_products';
+const CATEGORIES_INITIALIZED_KEY = 'atari_categories_initialized_sp';
 
 const DEFAULT_CATEGORIES: ProductCategory[] = [
   { id: "CAT-001", name: "قطع غيار صيانة", sortOrder: 1, isActive: true },
@@ -10,6 +11,24 @@ const DEFAULT_CATEGORIES: ProductCategory[] = [
   { id: "CAT-003", name: "ألعاب", sortOrder: 3, isActive: true },
   { id: "CAT-004", name: "أجهزة كونسول", sortOrder: 4, isActive: true }
 ];
+
+function isCategoriesInitialized(): boolean {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem(CATEGORIES_INITIALIZED_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function setCategoriesInitialized() {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(CATEGORIES_INITIALIZED_KEY, 'true');
+    }
+  } catch {
+    // Ignore storage error
+  }
+}
 
 /**
  * Safely map a Supabase database row to a ProductCategory object.
@@ -52,12 +71,12 @@ export function getLocalCategoriesBackup(): ProductCategory[] {
   try {
     if (typeof localStorage !== 'undefined') {
       const stored = localStorage.getItem(CATEGORIES_STORAGE_KEY);
-      if (stored) return JSON.parse(stored);
+      if (stored !== null) return JSON.parse(stored);
     }
   } catch (e) {
     console.error('Error reading local categories backup:', e);
   }
-  return DEFAULT_CATEGORIES;
+  return isCategoriesInitialized() ? [] : DEFAULT_CATEGORIES;
 }
 
 /**
@@ -67,6 +86,7 @@ export function setLocalCategoriesBackup(categories: ProductCategory[], dispatch
   try {
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem(CATEGORIES_STORAGE_KEY, JSON.stringify(categories));
+      setCategoriesInitialized();
       if (dispatchEvent) {
         window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: CATEGORIES_STORAGE_KEY } }));
       }
@@ -87,7 +107,7 @@ export async function getCategoriesFromSupabase(): Promise<ProductCategory[]> {
 
   if (error) {
     console.warn('⚠️ Supabase error fetching categories:', error.message);
-    throw new Error(`فشل الاتصال بقاعدة البيانات Supabase: ${error.message}`);
+    return getLocalCategoriesBackup();
   }
 
   const categories = (data || []).map(mapRowToCategory);
@@ -99,7 +119,7 @@ export async function getCategoriesFromSupabase(): Promise<ProductCategory[]> {
  * Migration helper:
  * 1. Reads local categories.
  * 2. Fetches Supabase categories.
- * 3. If Supabase is empty, uploads local categories using upsert.
+ * 3. If Supabase is empty on first run, uploads initial categories.
  * 4. Returns summary counts and categories list.
  */
 export async function fetchOrMigrateCategories(): Promise<{
@@ -123,11 +143,34 @@ export async function fetchOrMigrateCategories(): Promise<{
         categories: localCategories,
         localCount,
         uploadedCount: 0,
-        totalSupabaseCount: 0,
+        totalSupabaseCount: localCategories.length,
       };
     }
 
     if (data) {
+      if (data.length === 0 && !isCategoriesInitialized()) {
+        console.log('🌱 First run: Seeding default categories into Supabase...');
+        for (const cat of DEFAULT_CATEGORIES) {
+          try {
+            await supabase.from('categories').insert([mapCategoryToRow(cat)]);
+          } catch {
+            // Ignore duplicate/insert errors on seed
+          }
+        }
+        setCategoriesInitialized();
+        const refetch = await supabase.from('categories').select('*').order('sort_order', { ascending: true });
+        const seededCats = (refetch.data || []).map(mapRowToCategory);
+        const finalCats = seededCats.length > 0 ? seededCats : DEFAULT_CATEGORIES;
+        setLocalCategoriesBackup(finalCats, false);
+        return {
+          categories: finalCats,
+          localCount,
+          uploadedCount: finalCats.length,
+          totalSupabaseCount: finalCats.length,
+        };
+      }
+
+      setCategoriesInitialized();
       const existingSupabaseCategories = data.map(mapRowToCategory);
       setLocalCategoriesBackup(existingSupabaseCategories, false);
       return {
@@ -138,20 +181,13 @@ export async function fetchOrMigrateCategories(): Promise<{
       };
     }
 
-    // Fetch refreshed list from Supabase
-    const refreshed = await supabase
-      .from('categories')
-      .select('*')
-      .order('sort_order', { ascending: true });
-
-    const finalCategories = (refreshed.data || []).map(mapRowToCategory);
-    setLocalCategoriesBackup(finalCategories, false);
-
+    setCategoriesInitialized();
+    setLocalCategoriesBackup(localCategories, false);
     return {
-      categories: finalCategories,
+      categories: localCategories,
       localCount,
       uploadedCount: 0,
-      totalSupabaseCount: finalCategories.length,
+      totalSupabaseCount: localCategories.length,
     };
   } catch (err: any) {
     console.warn('⚠️ Error in fetchOrMigrateCategories:', err);
@@ -159,7 +195,7 @@ export async function fetchOrMigrateCategories(): Promise<{
       categories: localCategories,
       localCount,
       uploadedCount: 0,
-      totalSupabaseCount: 0,
+      totalSupabaseCount: localCategories.length,
     };
   }
 }

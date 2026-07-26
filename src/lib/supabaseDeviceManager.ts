@@ -1,9 +1,7 @@
 import { supabase } from './supabaseClient';
 import { DBDeviceType, DBDeviceModel, RepairTemplateItem } from '../types';
 
-const DEVICE_TYPES_STORAGE_KEY = 'atari_device_types_backup';
-const DEVICE_MODELS_STORAGE_KEY = 'atari_device_models_backup';
-const REPAIR_TEMPLATES_STORAGE_KEY = 'atari_repair_templates_backup';
+const INITIALIZED_DEVICE_KEY = 'atari_device_mgr_initialized_sp';
 
 // --- SEED DEFAULTS (ONLY USED IF SUPABASE TABLE IS COMPLETELY EMPTY ON FIRST PROVISIONING) ---
 export const DEFAULT_SUPABASE_DEVICE_TYPES: DBDeviceType[] = [
@@ -162,14 +160,35 @@ export function mapRepairTemplateToRow(item: Partial<RepairTemplateItem>): Recor
   return row;
 }
 
-// Memory caches for synchronous UI reactivity
+// In-memory runtime state synced strictly from Supabase
 let cachedDeviceTypes: DBDeviceType[] = [];
 let cachedDeviceModels: DBDeviceModel[] = [];
 let cachedRepairTemplates: RepairTemplateItem[] = [];
+let isDeviceTypesFetched = false;
+let isDeviceModelsFetched = false;
+let isRepairTemplatesFetched = false;
 
 function dispatchDbChanged(key: string) {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key } }));
+  }
+}
+
+function isInitializedInStorage(): boolean {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem(INITIALIZED_DEVICE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function setInitializedInStorage() {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(INITIALIZED_DEVICE_KEY, 'true');
+    }
+  } catch {
+    // Ignore storage errors
   }
 }
 
@@ -183,38 +202,40 @@ export async function fetchDeviceTypesFromSupabase(): Promise<DBDeviceType[]> {
       .order('created_at', { ascending: true });
 
     if (!error && data) {
-      if (data.length === 0) {
-        // Seed initial default device types if database table is completely empty
-        console.log('🌱 Seeding device_types into Supabase...');
+      if (data.length === 0 && !isInitializedInStorage()) {
+        console.log('🌱 First run: Seeding default device_types into Supabase...');
         for (const dt of DEFAULT_SUPABASE_DEVICE_TYPES) {
           await supabase.from('device_types').insert([mapDeviceTypeToRow(dt)]);
         }
+        setInitializedInStorage();
         const refetch = await supabase
           .from('device_types')
           .select('*')
           .order('sort_order', { ascending: true });
-        if (refetch.data && refetch.data.length > 0) {
-          cachedDeviceTypes = refetch.data.map(mapRowToDeviceType);
-          return cachedDeviceTypes;
-        }
+        
+        cachedDeviceTypes = (refetch.data || []).map(mapRowToDeviceType);
       } else {
+        setInitializedInStorage();
         cachedDeviceTypes = data.map(mapRowToDeviceType);
-        return cachedDeviceTypes;
       }
+      isDeviceTypesFetched = true;
+      return cachedDeviceTypes;
     }
   } catch (err) {
     console.warn('⚠️ Could not query Supabase device_types table directly:', err);
   }
 
-  // Fallback to memory cache or seed defaults if database connection fails
-  if (cachedDeviceTypes.length === 0) {
+  // If table does not exist or fetch fails, fallback only if never initialized
+  if (!isDeviceTypesFetched && !isInitializedInStorage()) {
     cachedDeviceTypes = DEFAULT_SUPABASE_DEVICE_TYPES;
+    setInitializedInStorage();
   }
+  isDeviceTypesFetched = true;
   return cachedDeviceTypes;
 }
 
 export function getDeviceTypesSync(): DBDeviceType[] {
-  return cachedDeviceTypes.length > 0 ? cachedDeviceTypes : DEFAULT_SUPABASE_DEVICE_TYPES;
+  return cachedDeviceTypes;
 }
 
 export async function addDeviceTypeToSupabase(dt: Omit<DBDeviceType, 'id'>): Promise<DBDeviceType> {
@@ -236,11 +257,11 @@ export async function addDeviceTypeToSupabase(dt: Omit<DBDeviceType, 'id'>): Pro
       return created;
     }
   } catch (e) {
-    console.error('Error inserting device type:', e);
+    console.error('Error inserting device type to Supabase:', e);
   }
 
   // Update memory state
-  cachedDeviceTypes = [...cachedDeviceTypes, fullDt];
+  cachedDeviceTypes = [...cachedDeviceTypes.filter(d => d.id !== fullDt.id), fullDt];
   dispatchDbChanged('atari_device_types');
   return fullDt;
 }
@@ -260,14 +281,34 @@ export async function updateDeviceTypeInSupabase(dt: DBDeviceType): Promise<void
       return;
     }
   } catch (e) {
-    console.error('Error updating device type:', e);
+    console.error('Error updating device type in Supabase:', e);
   }
 
   cachedDeviceTypes = cachedDeviceTypes.map(item => item.id === dt.id ? dt : item);
   dispatchDbChanged('atari_device_types');
 }
 
-export async function deleteDeviceTypeInSupabase(id: string): Promise<{ success: boolean; error?: string }> {
+export async function deleteDeviceTypeInSupabase(id: string): Promise<{ success: boolean; isArchived?: boolean; error?: string }> {
+  // Check for linked models or templates
+  const linkedModels = cachedDeviceModels.filter(m => (m.deviceTypeId === id || m.id === id) && !m.isArchived);
+  const linkedTemplates = cachedRepairTemplates.filter(t => (t.deviceTypeId === id) && t.isActive);
+
+  let target = cachedDeviceTypes.find(dt => dt.id === id);
+
+  if (linkedModels.length > 0 || linkedTemplates.length > 0) {
+    // Soft archive on Supabase
+    if (target) {
+      const archivedDt = { ...target, isArchived: true, isActive: false };
+      await updateDeviceTypeInSupabase(archivedDt);
+      return {
+        success: true,
+        isArchived: true,
+        error: 'تم أرشفة نوع الجهاز بنجاح بدلاً من الحذف لتعلقه بموديلات أو قوالب صيانة مسجلة.'
+      };
+    }
+  }
+
+  // Permanent Delete on Supabase
   try {
     const { error } = await supabase
       .from('device_types')
@@ -275,12 +316,13 @@ export async function deleteDeviceTypeInSupabase(id: string): Promise<{ success:
       .eq('id', id);
 
     if (!error) {
+      cachedDeviceTypes = cachedDeviceTypes.filter(item => item.id !== id);
       await fetchDeviceTypesFromSupabase();
       dispatchDbChanged('atari_device_types');
       return { success: true };
     }
   } catch (e) {
-    console.error('Error deleting device type:', e);
+    console.error('Error deleting device type from Supabase:', e);
   }
 
   cachedDeviceTypes = cachedDeviceTypes.filter(item => item.id !== id);
@@ -299,9 +341,8 @@ export async function fetchDeviceModelsFromSupabase(): Promise<DBDeviceModel[]> 
       .order('created_at', { ascending: true });
 
     if (!error && data) {
-      if (data.length === 0) {
-        // Seed initial default models if table is empty
-        console.log('🌱 Seeding device_models into Supabase...');
+      if (data.length === 0 && !isInitializedInStorage()) {
+        console.log('🌱 First run: Seeding default device_models into Supabase...');
         for (const m of DEFAULT_SUPABASE_DEVICE_MODELS) {
           await supabase.from('device_models').insert([mapDeviceModelToRow(m)]);
         }
@@ -309,27 +350,27 @@ export async function fetchDeviceModelsFromSupabase(): Promise<DBDeviceModel[]> 
           .from('device_models')
           .select('*')
           .order('sort_order', { ascending: true });
-        if (refetch.data && refetch.data.length > 0) {
-          cachedDeviceModels = refetch.data.map(mapRowToDeviceModel);
-          return cachedDeviceModels;
-        }
+        
+        cachedDeviceModels = (refetch.data || []).map(mapRowToDeviceModel);
       } else {
         cachedDeviceModels = data.map(mapRowToDeviceModel);
-        return cachedDeviceModels;
       }
+      isDeviceModelsFetched = true;
+      return cachedDeviceModels;
     }
   } catch (err) {
     console.warn('⚠️ Could not query Supabase device_models table directly:', err);
   }
 
-  if (cachedDeviceModels.length === 0) {
+  if (!isDeviceModelsFetched && !isInitializedInStorage()) {
     cachedDeviceModels = DEFAULT_SUPABASE_DEVICE_MODELS;
   }
+  isDeviceModelsFetched = true;
   return cachedDeviceModels;
 }
 
 export function getDeviceModelsSync(): DBDeviceModel[] {
-  return cachedDeviceModels.length > 0 ? cachedDeviceModels : DEFAULT_SUPABASE_DEVICE_MODELS;
+  return cachedDeviceModels;
 }
 
 export async function addDeviceModelToSupabase(m: Omit<DBDeviceModel, 'id'>): Promise<DBDeviceModel> {
@@ -351,10 +392,10 @@ export async function addDeviceModelToSupabase(m: Omit<DBDeviceModel, 'id'>): Pr
       return created;
     }
   } catch (e) {
-    console.error('Error adding device model:', e);
+    console.error('Error adding device model to Supabase:', e);
   }
 
-  cachedDeviceModels = [...cachedDeviceModels, fullModel];
+  cachedDeviceModels = [...cachedDeviceModels.filter(item => item.id !== fullModel.id), fullModel];
   dispatchDbChanged('atari_device_models');
   return fullModel;
 }
@@ -374,14 +415,29 @@ export async function updateDeviceModelInSupabase(m: DBDeviceModel): Promise<voi
       return;
     }
   } catch (e) {
-    console.error('Error updating device model:', e);
+    console.error('Error updating device model in Supabase:', e);
   }
 
   cachedDeviceModels = cachedDeviceModels.map(item => item.id === m.id ? m : item);
   dispatchDbChanged('atari_device_models');
 }
 
-export async function deleteDeviceModelInSupabase(id: string): Promise<{ success: boolean; error?: string }> {
+export async function deleteDeviceModelInSupabase(id: string): Promise<{ success: boolean; isArchived?: boolean; error?: string }> {
+  const linkedTemplates = cachedRepairTemplates.filter(t => t.deviceModelId === id);
+  const target = cachedDeviceModels.find(m => m.id === id);
+
+  if (linkedTemplates.length > 0) {
+    if (target) {
+      const archived = { ...target, isArchived: true, isActive: false };
+      await updateDeviceModelInSupabase(archived);
+      return {
+        success: true,
+        isArchived: true,
+        error: 'تم أرشفة الموديل بنجاح لتعلقه بقوالب صيانة سابقة.'
+      };
+    }
+  }
+
   try {
     const { error } = await supabase
       .from('device_models')
@@ -389,12 +445,13 @@ export async function deleteDeviceModelInSupabase(id: string): Promise<{ success
       .eq('id', id);
 
     if (!error) {
+      cachedDeviceModels = cachedDeviceModels.filter(item => item.id !== id);
       await fetchDeviceModelsFromSupabase();
       dispatchDbChanged('atari_device_models');
       return { success: true };
     }
   } catch (e) {
-    console.error('Error deleting device model:', e);
+    console.error('Error deleting device model from Supabase:', e);
   }
 
   cachedDeviceModels = cachedDeviceModels.filter(item => item.id !== id);
@@ -413,8 +470,8 @@ export async function fetchRepairTemplatesFromSupabase(): Promise<RepairTemplate
       .order('created_at', { ascending: true });
 
     if (!error && data) {
-      if (data.length === 0) {
-        console.log('🌱 Seeding repair_templates into Supabase...');
+      if (data.length === 0 && !isInitializedInStorage()) {
+        console.log('🌱 First run: Seeding default repair_templates into Supabase...');
         for (const t of DEFAULT_SUPABASE_REPAIR_TEMPLATES) {
           await supabase.from('repair_templates').insert([mapRepairTemplateToRow(t)]);
         }
@@ -422,27 +479,27 @@ export async function fetchRepairTemplatesFromSupabase(): Promise<RepairTemplate
           .from('repair_templates')
           .select('*')
           .order('sort_order', { ascending: true });
-        if (refetch.data && refetch.data.length > 0) {
-          cachedRepairTemplates = refetch.data.map(mapRowToRepairTemplate);
-          return cachedRepairTemplates;
-        }
+        
+        cachedRepairTemplates = (refetch.data || []).map(mapRowToRepairTemplate);
       } else {
         cachedRepairTemplates = data.map(mapRowToRepairTemplate);
-        return cachedRepairTemplates;
       }
+      isRepairTemplatesFetched = true;
+      return cachedRepairTemplates;
     }
   } catch (err) {
     console.warn('⚠️ Could not query Supabase repair_templates table directly:', err);
   }
 
-  if (cachedRepairTemplates.length === 0) {
+  if (!isRepairTemplatesFetched && !isInitializedInStorage()) {
     cachedRepairTemplates = DEFAULT_SUPABASE_REPAIR_TEMPLATES;
   }
+  isRepairTemplatesFetched = true;
   return cachedRepairTemplates;
 }
 
 export function getRepairTemplatesSync(): RepairTemplateItem[] {
-  return cachedRepairTemplates.length > 0 ? cachedRepairTemplates : DEFAULT_SUPABASE_REPAIR_TEMPLATES;
+  return cachedRepairTemplates;
 }
 
 export async function addRepairTemplateToSupabase(item: Omit<RepairTemplateItem, 'id'>): Promise<RepairTemplateItem> {
@@ -464,10 +521,10 @@ export async function addRepairTemplateToSupabase(item: Omit<RepairTemplateItem,
       return created;
     }
   } catch (e) {
-    console.error('Error adding repair template:', e);
+    console.error('Error adding repair template to Supabase:', e);
   }
 
-  cachedRepairTemplates = [...cachedRepairTemplates, fullItem];
+  cachedRepairTemplates = [...cachedRepairTemplates.filter(i => i.id !== fullItem.id), fullItem];
   dispatchDbChanged('atari_repair_templates');
   return fullItem;
 }
@@ -487,7 +544,7 @@ export async function updateRepairTemplateInSupabase(item: RepairTemplateItem): 
       return;
     }
   } catch (e) {
-    console.error('Error updating repair template:', e);
+    console.error('Error updating repair template in Supabase:', e);
   }
 
   cachedRepairTemplates = cachedRepairTemplates.map(i => i.id === item.id ? item : i);
@@ -502,15 +559,17 @@ export async function deleteRepairTemplateInSupabase(id: string): Promise<{ succ
       .eq('id', id);
 
     if (!error) {
+      cachedRepairTemplates = cachedRepairTemplates.filter(i => i.id !== id);
       await fetchRepairTemplatesFromSupabase();
       dispatchDbChanged('atari_repair_templates');
       return { success: true };
     }
   } catch (e) {
-    console.error('Error deleting repair template:', e);
+    console.error('Error deleting repair template from Supabase:', e);
   }
 
   cachedRepairTemplates = cachedRepairTemplates.filter(i => i.id !== id);
   dispatchDbChanged('atari_repair_templates');
   return { success: true };
 }
+

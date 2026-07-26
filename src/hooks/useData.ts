@@ -8,6 +8,7 @@ import { db } from "../lib/db";
 import { fetchOrMigrateStoreSettings } from "../lib/supabaseSettings";
 import {
   fetchOrMigrateCategories,
+  getCategoriesFromSupabase,
   addCategoryToSupabase,
   updateCategoryInSupabase,
   deleteCategoryFromSupabase,
@@ -580,12 +581,16 @@ export function useCategories() {
 
   const addCategory = async (cat: Omit<ProductCategory, "id">) => {
     const newCat = await addCategoryToSupabase(cat);
+    const refreshed = await getCategoriesFromSupabase();
+    setCategories(refreshed);
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_categories' } }));
     return newCat;
   };
 
   const updateCategory = async (cat: ProductCategory) => {
     const updated = await updateCategoryInSupabase(cat);
+    const refreshed = await getCategoriesFromSupabase();
+    setCategories(refreshed);
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_categories' } }));
     return updated;
   };
@@ -595,6 +600,8 @@ export function useCategories() {
     const catName = name || targetCat?.name || '';
     const res = await deleteCategoryFromSupabase(id, catName);
     if (res.success) {
+      const refreshed = await getCategoriesFromSupabase();
+      setCategories(refreshed);
       window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_categories' } }));
     }
     return res;
@@ -613,16 +620,24 @@ export function useDeviceTypes() {
     });
   }, [trigger]);
 
-  const addDeviceType = (dt: Omit<DBDeviceType, "id">) => {
-    return addDeviceTypeToSupabase(dt);
+  const addDeviceType = async (dt: Omit<DBDeviceType, "id">) => {
+    const created = await addDeviceTypeToSupabase(dt);
+    const refreshed = await fetchDeviceTypesFromSupabase();
+    setDeviceTypes(refreshed);
+    return created;
   };
 
-  const updateDeviceType = (dt: DBDeviceType) => {
-    updateDeviceTypeInSupabase(dt);
+  const updateDeviceType = async (dt: DBDeviceType) => {
+    await updateDeviceTypeInSupabase(dt);
+    const refreshed = await fetchDeviceTypesFromSupabase();
+    setDeviceTypes(refreshed);
   };
 
-  const deleteDeviceType = (id: string) => {
-    return deleteDeviceTypeInSupabase(id);
+  const deleteDeviceType = async (id: string) => {
+    const res = await deleteDeviceTypeInSupabase(id);
+    const refreshed = await fetchDeviceTypesFromSupabase();
+    setDeviceTypes(refreshed);
+    return res;
   };
 
   return { deviceTypes, addDeviceType, updateDeviceType, deleteDeviceType };
@@ -638,16 +653,24 @@ export function useDeviceModels() {
     });
   }, [trigger]);
 
-  const addDeviceModel = (m: Omit<DBDeviceModel, "id">) => {
-    return addDeviceModelToSupabase(m);
+  const addDeviceModel = async (m: Omit<DBDeviceModel, "id">) => {
+    const created = await addDeviceModelToSupabase(m);
+    const refreshed = await fetchDeviceModelsFromSupabase();
+    setDeviceModels(refreshed);
+    return created;
   };
 
-  const updateDeviceModel = (m: DBDeviceModel) => {
-    updateDeviceModelInSupabase(m);
+  const updateDeviceModel = async (m: DBDeviceModel) => {
+    await updateDeviceModelInSupabase(m);
+    const refreshed = await fetchDeviceModelsFromSupabase();
+    setDeviceModels(refreshed);
   };
 
-  const deleteDeviceModel = (id: string) => {
-    return deleteDeviceModelInSupabase(id);
+  const deleteDeviceModel = async (id: string) => {
+    const res = await deleteDeviceModelInSupabase(id);
+    const refreshed = await fetchDeviceModelsFromSupabase();
+    setDeviceModels(refreshed);
+    return res;
   };
 
   return { deviceModels, addDeviceModel, updateDeviceModel, deleteDeviceModel };
