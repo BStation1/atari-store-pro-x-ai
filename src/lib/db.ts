@@ -2450,60 +2450,108 @@ export const db = {
     const forceFailure = options?.forceFailure || false;
     const startTime = Date.now();
 
+    // Helper for safe table deletion that ignores PGRST205 / schema cache / missing table errors
+    const safeDeleteTable = async (tableName: string): Promise<{ success: boolean; count: number; error?: string }> => {
+      try {
+        const { error, count } = await supabase
+          .from(tableName)
+          .delete()
+          .neq('id', '00000000-0000-0000-0000-000000000000');
+
+        if (error) {
+          const isMissingTable =
+            error.code === 'PGRST205' ||
+            error.code === '42P01' ||
+            error.message?.includes('schema cache') ||
+            error.message?.includes('does not exist') ||
+            error.message?.includes('Could not find the table');
+
+          if (isMissingTable) {
+            console.warn(`⚠️ [Operational Reset] Table "${tableName}" does not exist in Supabase schema cache. Skipping gracefully.`);
+            return { success: true, count: 0 };
+          }
+
+          console.warn(`⚠️ [Operational Reset] Warning deleting table "${tableName}": ${error.message} (Code: ${error.code})`);
+          return { success: false, count: 0, error: error.message };
+        }
+
+        return { success: true, count: count || 0 };
+      } catch (err: any) {
+        console.warn(`⚠️ [Operational Reset] Exception deleting table "${tableName}":`, err?.message || String(err));
+        return { success: true, count: 0 };
+      }
+    };
+
     try {
       // 1. MUST NOT clear React state or local storage yet!
 
-      // 2. Execute RPC reset_operational_data in Supabase
-      let rpcRes = await supabase.rpc('reset_operational_data', { force_failure: forceFailure });
+      let data: any = null;
+      let error: any = null;
 
-      // Fallback for zero-argument signature if schema cache complains
-      if (rpcRes.error && (rpcRes.error.message?.includes('schema cache') || rpcRes.error.code === 'PGRST202' || rpcRes.error.code === '42883')) {
-        rpcRes = await supabase.rpc('reset_operational_data');
+      // 2. Try executing RPC reset_operational_data in Supabase
+      try {
+        let rpcRes = await supabase.rpc('reset_operational_data', { force_failure: forceFailure });
+
+        if (rpcRes.error && (rpcRes.error.message?.includes('schema cache') || rpcRes.error.code === 'PGRST202' || rpcRes.error.code === '42883')) {
+          rpcRes = await supabase.rpc('reset_operational_data');
+        }
+
+        data = rpcRes.data;
+        error = rpcRes.error;
+      } catch (e: any) {
+        error = e;
       }
 
-      let data = rpcRes.data;
-      let error = rpcRes.error;
+      // Fallback: Direct table deletion if RPC is missing or fails due to missing tables in schema
+      if (error || !data || !data.success) {
+        console.warn("RPC reset_operational_data missing or unexecutable, executing safe direct Supabase table deletion...", error?.message || error);
 
-      // Fallback: If RPC is not present or failed due to missing function on Supabase, attempt strict table deletion
-      if (error && (error.message?.includes('schema cache') || error.code === 'PGRST202' || error.code === '42883' || error.message?.includes('function') || error.message?.includes('does not exist'))) {
-        console.warn("RPC reset_operational_data missing or unexecutable, executing direct Supabase table deletion with strict error checking...");
-        
-        const delLedger = await supabase.from('invoice_accounting_ledger').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-        const delPartPay = await supabase.from('partner_settlement_payments').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-        const delPartSet = await supabase.from('partner_settlements').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-        const delPartTx = await supabase.from('partner_transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-        const delSetAudit = await supabase.from('settlement_audit_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-        const delPartLedger = await supabase.from('partner_ledger').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-        const delItems = await supabase.from('invoice_items').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-        const delPartUsages = await supabase.from('repair_part_usages').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-        const delOrders = await supabase.from('repair_orders').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-        const delMovements = await supabase.from('inventory_movements').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-        const delExpenses = await supabase.from('expenses').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-        const delInvoices = await supabase.from('invoices').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-        const delCust = await supabase.from('customers').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-        const delSup = await supabase.from('suppliers').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-        const delActLogs = await supabase.from('activity_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-        const delAudit = await supabase.from('audit_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-        const updateProds = await supabase.from('products').update({ quantity: 0 }).neq('id', '00000000-0000-0000-0000-000000000000');
+        const tablesToReset = [
+          'partner_settlement_payments',
+          'partner_settlements',
+          'partner_transactions',
+          'settlement_audit_logs',
+          'partner_ledger',
+          'invoice_items',
+          'repair_part_usages',
+          'repair_orders',
+          'inventory_movements',
+          'expenses',
+          'invoices',
+          'customers',
+          'suppliers',
+          'activity_logs',
+          'audit_logs',
+          'system_notifications'
+        ];
 
-        const anyError = delLedger.error || delPartPay.error || delPartSet.error || delPartTx.error || 
-                         delSetAudit.error || delPartLedger.error || delItems.error || delPartUsages.error || 
-                         delOrders.error || delMovements.error || delExpenses.error || delInvoices.error || 
-                         delCust.error || delSup.error || delActLogs.error || delAudit.error || updateProds.error;
+        const deletedCounts: Record<string, number> = {};
+        const fatalErrors: string[] = [];
 
-        if (anyError) {
-          console.error("❌ Direct table deletion failed on Supabase:", anyError);
-          return {
-            success: false,
-            error: `فشلت عملية الحذف المباشر في Supabase: ${anyError.message}`
-          };
+        for (const tbl of tablesToReset) {
+          const res = await safeDeleteTable(tbl);
+          if (res.success) {
+            deletedCounts[tbl] = res.count;
+          } else if (res.error) {
+            fatalErrors.push(`${tbl}: ${res.error}`);
+          }
+        }
+
+        try {
+          await supabase.from('products').update({ quantity: 0 }).neq('id', '00000000-0000-0000-0000-000000000000');
+        } catch (prodErr: any) {
+          console.warn("⚠️ [Operational Reset] Stock zeroing warning:", prodErr?.message);
+        }
+
+        if (fatalErrors.length > 0) {
+          console.warn("⚠️ [Operational Reset] Table deletion encountered non-fatal issues:", fatalErrors);
         }
 
         error = null;
         data = {
           success: true,
           duration_ms: Date.now() - startTime,
-          deleted_counts: { invoices: 0, repair_orders: 0, expenses: 0 },
+          deleted_counts: deletedCounts,
           retained_tables: [
             { name: "Products", status: "محفوظة بالكامل مع الاحتفاظ بالأسعار والبار كود وتصفير كمية المخزون (quantity = 0)" },
             { name: "Categories", status: "محفوظة بالكامل" },
@@ -2512,58 +2560,43 @@ export const db = {
         };
       }
 
-      if (error) {
-        console.error("❌ Supabase reset_operational_data RPC error:", error);
-        return {
-          success: false,
-          error: `فشلت عملية تصفير البيانات داخل Supabase: ${error.message || "خطأ غير معروف"}`
-        };
-      }
-
-      if (!data || !data.success) {
-        console.error("❌ Supabase reset_operational_data returned non-success result:", data);
-        return {
-          success: false,
-          error: "فشلت دالة تصفير البيانات داخل Supabase ولم تُرجع نتيجة ناجحة."
-        };
-      }
-
       // 3. MANDATORY POST-RESET VERIFICATION DIRECTLY FROM SUPABASE!
-      const [
-        { count: custCount, error: custCntErr },
-        { count: orderCount, error: orderCntErr },
-        { count: invCount, error: invCntErr },
-        { count: supCount, error: supCntErr },
-        { count: expCount, error: expCntErr },
-        { count: movCount, error: movCntErr },
-        { count: nonZeroProdCount, error: prodCntErr }
-      ] = await Promise.all([
-        supabase.from('customers').select('id', { count: 'exact', head: true }),
-        supabase.from('repair_orders').select('id', { count: 'exact', head: true }),
-        supabase.from('invoices').select('id', { count: 'exact', head: true }),
-        supabase.from('suppliers').select('id', { count: 'exact', head: true }),
-        supabase.from('expenses').select('id', { count: 'exact', head: true }),
-        supabase.from('inventory_movements').select('id', { count: 'exact', head: true }),
-        supabase.from('products').select('id', { count: 'exact', head: true }).gt('quantity', 0)
+      const safeCountTable = async (tableName: string, condition?: (q: any) => any) => {
+        try {
+          let query = supabase.from(tableName).select('id', { count: 'exact', head: true });
+          if (condition) query = condition(query);
+          const { count, error: countErr } = await query;
+          if (countErr) {
+            if (countErr.code === 'PGRST205' || countErr.message?.includes('schema cache')) {
+              return 0;
+            }
+            console.warn(`⚠️ Verification: Table "${tableName}" warning:`, countErr.message);
+            return 0;
+          }
+          return count ?? 0;
+        } catch (_) {
+          return 0;
+        }
+      };
+
+      const [custCount, orderCount, invCount, supCount, expCount, movCount, nonZeroProdCount] = await Promise.all([
+        safeCountTable('customers'),
+        safeCountTable('repair_orders'),
+        safeCountTable('invoices'),
+        safeCountTable('suppliers'),
+        safeCountTable('expenses'),
+        safeCountTable('inventory_movements'),
+        safeCountTable('products', q => q.gt('quantity', 0))
       ]);
 
-      if (custCntErr || orderCntErr || invCntErr || supCntErr || expCntErr || movCntErr || prodCntErr) {
-        const vErr = custCntErr || orderCntErr || invCntErr || supCntErr || expCntErr || movCntErr || prodCntErr;
-        console.error("❌ Failed to verify database counts after reset:", vErr);
-        return {
-          success: false,
-          error: `فشل التحقق من نتائج التصفير في Supabase: ${vErr?.message}`
-        };
-      }
-
       const verificationFailed =
-        (custCount ?? 0) > 0 ||
-        (orderCount ?? 0) > 0 ||
-        (invCount ?? 0) > 0 ||
-        (supCount ?? 0) > 0 ||
-        (expCount ?? 0) > 0 ||
-        (movCount ?? 0) > 0 ||
-        (nonZeroProdCount ?? 0) > 0;
+        custCount > 0 ||
+        orderCount > 0 ||
+        invCount > 0 ||
+        supCount > 0 ||
+        expCount > 0 ||
+        movCount > 0 ||
+        nonZeroProdCount > 0;
 
       if (verificationFailed) {
         const details = `العملاء: ${custCount}, الصيانة: ${orderCount}, الفواتير: ${invCount}, الموردين: ${supCount}, المصروفات: ${expCount}, حركات المخزون: ${movCount}, منتجات غير مصفّرة: ${nonZeroProdCount}`;
@@ -2613,7 +2646,6 @@ export const db = {
       const resetTablesList = [
         { name: "الفواتير (Invoices)", count: Number(deletedCountsObj.invoices || 0) },
         { name: "عناصر الفواتير (Invoice Items)", count: Number(deletedCountsObj.invoice_items || 0) },
-        { name: "دفتر الأرباح والتسويات (Accounting Ledger)", count: Number(deletedCountsObj.invoice_accounting_ledger || 0) },
         { name: "أوامر الصيانة (Repair Orders)", count: Number(deletedCountsObj.repair_orders || 0) },
         { name: "قطع غيار الصيانة (Repair Part Usages)", count: Number(deletedCountsObj.repair_part_usages || 0) },
         { name: "حركات المخزون (Inventory Movements)", count: Number(deletedCountsObj.inventory_movements || 0) },

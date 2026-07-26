@@ -94,81 +94,91 @@ BEGIN
     FROM public.profiles p
     WHERE p.id = v_user_id;
 
-    -- 2. Execute deletion sequence in strict FK order
-    -- Table 1: invoice_accounting_ledger
-    DELETE FROM public.invoice_accounting_ledger;
-    GET DIAGNOSTICS v_cnt_invoice_acct_ledger = ROW_COUNT;
+    -- 2. Execute deletion sequence in strict FK order safely checking table existence
+    IF to_regclass('public.partner_settlement_payments') IS NOT NULL THEN
+        DELETE FROM public.partner_settlement_payments;
+        GET DIAGNOSTICS v_cnt_partner_payments = ROW_COUNT;
+    END IF;
 
-    -- Table 2: partner_settlement_payments
-    DELETE FROM public.partner_settlement_payments;
-    GET DIAGNOSTICS v_cnt_partner_payments = ROW_COUNT;
+    IF to_regclass('public.partner_settlements') IS NOT NULL THEN
+        DELETE FROM public.partner_settlements;
+        GET DIAGNOSTICS v_cnt_partner_settlements = ROW_COUNT;
+    END IF;
 
-    -- Table 3: partner_settlements
-    DELETE FROM public.partner_settlements;
-    GET DIAGNOSTICS v_cnt_partner_settlements = ROW_COUNT;
+    IF to_regclass('public.partner_transactions') IS NOT NULL THEN
+        DELETE FROM public.partner_transactions;
+        GET DIAGNOSTICS v_cnt_partner_trans = ROW_COUNT;
+    END IF;
 
-    -- Table 4: partner_transactions
-    DELETE FROM public.partner_transactions;
-    GET DIAGNOSTICS v_cnt_partner_trans = ROW_COUNT;
+    IF to_regclass('public.settlement_audit_logs') IS NOT NULL THEN
+        DELETE FROM public.settlement_audit_logs;
+        GET DIAGNOSTICS v_cnt_settlement_audit = ROW_COUNT;
+    END IF;
 
-    -- Table 5: settlement_audit_logs
-    DELETE FROM public.settlement_audit_logs;
-    GET DIAGNOSTICS v_cnt_settlement_audit = ROW_COUNT;
+    IF to_regclass('public.partner_ledger') IS NOT NULL THEN
+        DELETE FROM public.partner_ledger;
+        GET DIAGNOSTICS v_cnt_partner_ledger = ROW_COUNT;
+    END IF;
 
-    -- Table 6: partner_ledger
-    DELETE FROM public.partner_ledger;
-    GET DIAGNOSTICS v_cnt_partner_ledger = ROW_COUNT;
+    IF to_regclass('public.invoice_items') IS NOT NULL THEN
+        DELETE FROM public.invoice_items;
+        GET DIAGNOSTICS v_cnt_invoice_items = ROW_COUNT;
+    END IF;
 
-    -- Table 7: replacement_fund_ledger
-    DELETE FROM public.replacement_fund_ledger;
-    GET DIAGNOSTICS v_cnt_replacement_fund = ROW_COUNT;
+    IF to_regclass('public.repair_part_usages') IS NOT NULL THEN
+        DELETE FROM public.repair_part_usages;
+        GET DIAGNOSTICS v_cnt_repair_part_usages = ROW_COUNT;
+    END IF;
 
-    -- Table 8: invoice_items
-    DELETE FROM public.invoice_items;
-    GET DIAGNOSTICS v_cnt_invoice_items = ROW_COUNT;
+    IF to_regclass('public.repair_orders') IS NOT NULL THEN
+        DELETE FROM public.repair_orders;
+        GET DIAGNOSTICS v_cnt_repair_orders = ROW_COUNT;
+    END IF;
 
-    -- Table 9: repair_part_usages
-    DELETE FROM public.repair_part_usages;
-    GET DIAGNOSTICS v_cnt_repair_part_usages = ROW_COUNT;
+    IF to_regclass('public.inventory_movements') IS NOT NULL THEN
+        DELETE FROM public.inventory_movements;
+        GET DIAGNOSTICS v_cnt_inventory_movements = ROW_COUNT;
+    END IF;
 
-    -- Table 10: repair_orders
-    DELETE FROM public.repair_orders;
-    GET DIAGNOSTICS v_cnt_repair_orders = ROW_COUNT;
+    -- Zero out product stock quantities if products table exists
+    IF to_regclass('public.products') IS NOT NULL THEN
+        UPDATE public.products SET quantity = 0;
+    END IF;
 
-    -- Table 11: inventory_movements (All inventory movements deleted)
-    DELETE FROM public.inventory_movements;
-    GET DIAGNOSTICS v_cnt_inventory_movements = ROW_COUNT;
+    IF to_regclass('public.expenses') IS NOT NULL THEN
+        DELETE FROM public.expenses;
+        GET DIAGNOSTICS v_cnt_expenses = ROW_COUNT;
+    END IF;
 
-    -- Zero out product stock quantities while preserving names, prices, barcodes, skus, categories
-    UPDATE public.products SET quantity = 0;
+    IF to_regclass('public.invoices') IS NOT NULL THEN
+        DELETE FROM public.invoices;
+        GET DIAGNOSTICS v_cnt_invoices = ROW_COUNT;
+    END IF;
 
-    -- Table 12: expenses
-    DELETE FROM public.expenses;
-    GET DIAGNOSTICS v_cnt_expenses = ROW_COUNT;
+    IF to_regclass('public.customers') IS NOT NULL THEN
+        DELETE FROM public.customers;
+        GET DIAGNOSTICS v_cnt_customers = ROW_COUNT;
+    END IF;
 
-    -- Table 13: invoices
-    DELETE FROM public.invoices;
-    GET DIAGNOSTICS v_cnt_invoices = ROW_COUNT;
+    IF to_regclass('public.suppliers') IS NOT NULL THEN
+        DELETE FROM public.suppliers;
+        GET DIAGNOSTICS v_cnt_suppliers = ROW_COUNT;
+    END IF;
 
-    -- Table 14: customers
-    DELETE FROM public.customers;
-    GET DIAGNOSTICS v_cnt_customers = ROW_COUNT;
+    IF to_regclass('public.activity_logs') IS NOT NULL THEN
+        DELETE FROM public.activity_logs;
+        GET DIAGNOSTICS v_cnt_activity_logs = ROW_COUNT;
+    END IF;
 
-    -- Table 15: suppliers
-    DELETE FROM public.suppliers;
-    GET DIAGNOSTICS v_cnt_suppliers = ROW_COUNT;
+    IF to_regclass('public.audit_logs') IS NOT NULL THEN
+        DELETE FROM public.audit_logs;
+        GET DIAGNOSTICS v_cnt_audit_logs = ROW_COUNT;
+    END IF;
 
-    -- Table 16: activity_logs
-    DELETE FROM public.activity_logs;
-    GET DIAGNOSTICS v_cnt_activity_logs = ROW_COUNT;
-
-    -- Table 17: audit_logs
-    DELETE FROM public.audit_logs;
-    GET DIAGNOSTICS v_cnt_audit_logs = ROW_COUNT;
-
-    -- Table 18: system_notifications
-    DELETE FROM public.system_notifications;
-    GET DIAGNOSTICS v_cnt_notifications = ROW_COUNT;
+    IF to_regclass('public.system_notifications') IS NOT NULL THEN
+        DELETE FROM public.system_notifications;
+        GET DIAGNOSTICS v_cnt_notifications = ROW_COUNT;
+    END IF;
 
     -- 3. Controlled Rollback Test Hook (Development Only)
     IF force_failure THEN
