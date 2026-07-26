@@ -2451,35 +2451,52 @@ export const db = {
     const startTime = Date.now();
 
     // Helper for safe table deletion that ignores PGRST205 / schema cache / missing table errors
+    // and loops in batches to handle large tables (e.g. 15,000+ records) without hitting PostgREST batch limits
     const safeDeleteTable = async (tableName: string): Promise<{ success: boolean; count: number; error?: string }> => {
-      try {
-        const { error, count } = await supabase
-          .from(tableName)
-          .delete()
-          .neq('id', '00000000-0000-0000-0000-000000000000');
+      let totalDeleted = 0;
+      let iterations = 0;
+      const maxIterations = 200; // Can handle up to 200,000 rows per table
 
-        if (error) {
-          const isMissingTable =
-            error.code === 'PGRST205' ||
-            error.code === '42P01' ||
-            error.message?.includes('schema cache') ||
-            error.message?.includes('does not exist') ||
-            error.message?.includes('Could not find the table');
+      while (iterations < maxIterations) {
+        iterations++;
+        try {
+          const { data, error } = await supabase
+            .from(tableName)
+            .delete()
+            .neq('id', '00000000-0000-0000-0000-000000000000')
+            .select('id')
+            .limit(1000);
 
-          if (isMissingTable) {
-            console.warn(`⚠️ [Operational Reset] Table "${tableName}" does not exist in Supabase schema cache. Skipping gracefully.`);
-            return { success: true, count: 0 };
+          if (error) {
+            const isMissingTable =
+              error.code === 'PGRST205' ||
+              error.code === '42P01' ||
+              error.message?.includes('schema cache') ||
+              error.message?.includes('does not exist') ||
+              error.message?.includes('Could not find the table');
+
+            if (isMissingTable) {
+              console.warn(`⚠️ [Operational Reset] Table "${tableName}" does not exist in Supabase schema cache. Skipping gracefully.`);
+              return { success: true, count: totalDeleted };
+            }
+
+            console.warn(`⚠️ [Operational Reset] Warning deleting table "${tableName}": ${error.message} (Code: ${error.code})`);
+            return { success: false, count: totalDeleted, error: error.message };
           }
 
-          console.warn(`⚠️ [Operational Reset] Warning deleting table "${tableName}": ${error.message} (Code: ${error.code})`);
-          return { success: false, count: 0, error: error.message };
-        }
+          const batchCount = data ? data.length : 0;
+          totalDeleted += batchCount;
 
-        return { success: true, count: count || 0 };
-      } catch (err: any) {
-        console.warn(`⚠️ [Operational Reset] Exception deleting table "${tableName}":`, err?.message || String(err));
-        return { success: true, count: 0 };
+          if (batchCount < 1000) {
+            break;
+          }
+        } catch (err: any) {
+          console.warn(`⚠️ [Operational Reset] Exception deleting table "${tableName}":`, err?.message || String(err));
+          return { success: true, count: totalDeleted };
+        }
       }
+
+      return { success: true, count: totalDeleted };
     };
 
     try {
