@@ -120,7 +120,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       return;
     }
 
-    const statusHeader = statusConfig[order.status]?.text || order.status;
+    const statusHeader = (order.status && statusConfig[order.status]?.text) || order.status || "غير محدد";
     const remaining = Math.max(0, (order.finalRepairPrice ?? order.totalEstimatedCost) - order.advancePayment);
     const trackingLink = `${window.location.origin}/track?id=${order.id}`;
 
@@ -747,9 +747,9 @@ ${trackingLink}
       updatedOrder,
       "CHANGE_STATUS",
       "حالة أمر الصيانة",
-      statusConfig[oldStatus]?.text || oldStatus,
-      statusConfig[status]?.text || status,
-      `تحديث مرحلة الصيانة إلى (${statusConfig[status]?.text})`,
+      statusConfig[oldStatus]?.text || oldStatus || "غير محدد",
+      statusConfig[status]?.text || status || "غير محدد",
+      `تحديث مرحلة الصيانة إلى (${statusConfig[status]?.text || status || "غير محدد"})`,
       currentUserForAction
     );
 
@@ -764,7 +764,7 @@ ${trackingLink}
     updatedOrder = addTimelineEventHelper(
       updatedOrder,
       timelineEvt,
-      `تغيير مرحلة الصيانة إلى: ${statusConfig[status]?.text}`,
+      `تغيير مرحلة الصيانة إلى: ${statusConfig[status]?.text || status || "غير محدد"}`,
       currentUserForAction
     );
 
@@ -806,7 +806,7 @@ ${trackingLink}
     // WhatsApp status step alert trigger
     const sendWa = await dialog.confirm({
       title: "إرسال إشعار إنجاز",
-      message: `تم تحديث حالة الطلب إلى "${statusConfig[status].text}". هل تود إرسال إشعار فوري للعميل عبر الواتس آب؟`,
+      message: `تم تحديث حالة الطلب إلى "${statusConfig[status]?.text || status || "غير محدد"}". هل تود إرسال إشعار فوري للعميل عبر الواتس آب؟`,
       confirmText: "إرسال واتساب",
       cancelText: "تخطي"
     });
@@ -858,7 +858,7 @@ ${trackingLink}
                   activeTab === st ? cfg.class : "text-gray-400 hover:text-white"
                 }`}
               >
-                {cfg.text} ({count})
+                {cfg?.text ?? st} ({count})
               </button>
             );
           })}
@@ -885,7 +885,7 @@ ${trackingLink}
               const isSelected = selectedOrder?.id === order.id;
               const customerName = getCustomerNameHelper(order, customers);
               const customerPhone = getCustomerPhoneHelper(order, customers);
-              const cfg = statusConfig[order.status] || { text: order.status, class: "bg-gray-800 text-gray-300" };
+              const cfg = statusConfig[order.status] || { text: order.status || "غير محدد", class: "bg-gray-800 text-gray-300" };
 
               return (
                 <div
@@ -907,7 +907,7 @@ ${trackingLink}
                       <PhoneDisplay phone={customerPhone} className="text-[10px] text-gray-400 font-mono" />
                     </div>
                     <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${cfg.class}`}>
-                      {cfg.text}
+                      {cfg?.text ?? order.status ?? "غير محدد"}
                     </span>
                   </div>
 
@@ -967,7 +967,7 @@ ${trackingLink}
                     >
                       {Object.values(RepairStatus).map(st => (
                         <option key={st} value={st}>
-                          {statusConfig[st].text}
+                          {statusConfig[st]?.text ?? st}
                         </option>
                       ))}
                     </select>
@@ -1498,7 +1498,7 @@ ${trackingLink}
                           return timelineSortOrder === "desc" ? dateB - dateA : dateA - dateB;
                         })
                         .map((evt) => {
-                          const meta = EVENT_TYPE_LABELS[evt.eventType] || { label: evt.eventType, class: "bg-gray-800 text-gray-300 border-gray-700" };
+                          const meta = EVENT_TYPE_LABELS[evt.eventType] || { label: evt.eventType || "حدث صيانة", badgeClass: "bg-gray-800 text-gray-300 border-gray-700" };
                           return (
                             <div key={evt.id} className="relative group">
                               {/* Dot */}
@@ -1506,7 +1506,7 @@ ${trackingLink}
 
                               <div className="bg-[#16192a] border border-[#2a2d42] p-4 rounded-xl space-y-2 hover:border-cyan-500/40 transition">
                                 <div className="flex flex-wrap justify-between items-center gap-2">
-                                  <span className={`px-2.5 py-1 rounded-md text-[11px] font-bold border ${meta.class}`}>
+                                  <span className={`px-2.5 py-1 rounded-md text-[11px] font-bold border ${meta.badgeClass || (meta as any).class || 'bg-gray-800 text-gray-300'}`}>
                                     {meta.label}
                                   </span>
                                   <span className="text-[11px] text-gray-400 font-mono">
@@ -1591,7 +1591,7 @@ ${trackingLink}
                           {selectedOrder.auditLogs
                             .filter(log => auditFilter === "all" || log.actionType === auditFilter)
                             .map((log) => {
-                              const meta = AUDIT_ACTION_LABELS[log.actionType] || { label: log.actionType, class: "bg-gray-800 text-gray-300" };
+                              const meta = AUDIT_ACTION_LABELS[log.actionType] || { label: log.actionType || "تعديل", badgeClass: "bg-gray-800 text-gray-300" };
                               return (
                                 <tr key={log.id} className="hover:bg-[#16192a]/80 transition">
                                   <td className="p-2.5 font-bold text-purple-300 whitespace-nowrap">
@@ -1601,7 +1601,7 @@ ${trackingLink}
                                     {new Date(log.timestamp).toLocaleString("ar-EG")}
                                   </td>
                                   <td className="p-2.5 whitespace-nowrap">
-                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${meta.class}`}>
+                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${meta.badgeClass || (meta as any).class || 'bg-gray-800 text-gray-300'}`}>
                                       {meta.label}
                                     </span>
                                   </td>
