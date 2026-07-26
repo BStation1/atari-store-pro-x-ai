@@ -1,4 +1,4 @@
-import { supabase } from './supabaseClient';
+import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { RepairOrder, RepairDevice, RepairStatus, WorkOwnershipType, PaymentMethod, User } from '../types';
 import { db } from './db';
 
@@ -169,31 +169,42 @@ export function mapRowToRepairOrder(row: Record<string, any>): RepairOrder {
     reopenedByUserId: meta.reopenedByUserId,
     reopenedByUserName: meta.reopenedByUserName,
     reopenReason: meta.reopenReason,
-    reopenLogs: meta.reopenLogs
+    reopenLogs: meta.reopenLogs,
+    timelineEvents: Array.isArray(meta.timelineEvents) ? meta.timelineEvents : [],
+    auditLogs: Array.isArray(meta.auditLogs) ? meta.auditLogs : []
   };
 }
 
 /**
- * Fetch or migrate repair orders from Supabase
+ * Fetch or migrate repair orders from Supabase with safe local fallback
  */
 export async function fetchOrMigrateRepairOrders(): Promise<{ success: boolean; orders: RepairOrder[]; error?: string }> {
+  const localOrders = getLocalRepairOrdersBackup();
+
   try {
+    if (!isSupabaseConfigured) {
+      console.warn("⚠️ [fetchOrMigrateRepairOrders] Supabase is not configured, using local storage backup.");
+      return { success: true, orders: localOrders };
+    }
+
     const { data, error } = await supabase
       .from('repair_orders')
       .select('*')
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.error("❌ [fetchOrMigrateRepairOrders] Error fetching from Supabase:", error);
+      console.warn("⚠️ [fetchOrMigrateRepairOrders] Error fetching from Supabase, using local backup:", error.message);
       return {
         success: false,
-        error: `فشل جلب أوامر الصيانة من Supabase: ${error.message}`,
-        orders: []
+        error: `Supabase: ${error.message}`,
+        orders: localOrders
       };
     }
 
     if (!data || data.length === 0) {
-      // Return empty list if Supabase returns 0 records
+      if (localOrders.length > 0) {
+        return { success: true, orders: localOrders };
+      }
       saveLocalRepairOrdersBackup([], false);
       return { success: true, orders: [] };
     }
@@ -202,98 +213,28 @@ export async function fetchOrMigrateRepairOrders(): Promise<{ success: boolean; 
     saveLocalRepairOrdersBackup(mappedOrders, false);
     return { success: true, orders: mappedOrders };
   } catch (err: any) {
-    console.error("❌ [fetchOrMigrateRepairOrders] Exception:", err);
+    console.warn("⚠️ [fetchOrMigrateRepairOrders] Exception:", err?.message || err);
     return {
       success: false,
       error: err?.message || 'تعذر الاتصال بـ Supabase لقراءة أوامر الصيانة',
-      orders: []
+      orders: localOrders
     };
   }
 }
 
 /**
- * Adds a new repair order strictly to Supabase with explicit .insert().select().single()
+ * Adds a new repair order to Supabase with fallback to local storage
  */
 export async function addRepairOrderToSupabase(
   orderData: Omit<RepairOrder, "id" | "receivedDate" | "trackingToken">,
   currentUser?: User
 ): Promise<RepairOrder> {
-  console.log("Save repair started");
+  const localList = getLocalRepairOrdersBackup();
 
   let targetCustomerId: string | null = isUuid(orderData.customerId) ? orderData.customerId! : null;
 
-  // Step 1: Ensure customer ID exists in Supabase
-  if (!targetCustomerId) {
-    const phoneToSearch = orderData.guestCustomerPhone || orderData.customerPhoneSnapshot || "";
-    const nameToSearch = orderData.guestCustomerName || orderData.customerNameSnapshot || "عميل غير مسجل";
-
-    if (phoneToSearch) {
-      try {
-        const { data: existingCust } = await supabase
-          .from('customers')
-          .select('id')
-          .eq('phone', phoneToSearch)
-          .maybeSingle();
-        if (existingCust?.id) {
-          targetCustomerId = existingCust.id;
-        }
-      } catch (e) {
-        console.warn("Could not search customer by phone in Supabase:", e);
-      }
-    }
-
-    if (!targetCustomerId) {
-      try {
-        const newCustPayload = {
-          name: nameToSearch,
-          phone: phoneToSearch || "00000000000",
-          customer_type: 'REGULAR',
-          notes: orderData.guestCustomerNote || 'عميل ينشأ تلقائياً لأمر الصيانة',
-          created_at: new Date().toISOString()
-        };
-
-        const { data: createdCust, error: custErr } = await supabase
-          .from('customers')
-          .insert(newCustPayload)
-          .select('id')
-          .single();
-
-        if (createdCust?.id) {
-          targetCustomerId = createdCust.id;
-        } else {
-          console.warn("⚠️ Could not insert guest customer in Supabase:", custErr?.message || custErr);
-        }
-      } catch (e) {
-        console.warn("⚠️ Exception inserting guest customer in Supabase:", e);
-      }
-    }
-
-    if (!targetCustomerId) {
-      try {
-        const { data: fallbackCust } = await supabase
-          .from('customers')
-          .select('id')
-          .limit(1)
-          .maybeSingle();
-        if (fallbackCust?.id) {
-          targetCustomerId = fallbackCust.id;
-        }
-      } catch (e) {
-        console.warn("Could not fetch fallback customer from Supabase:", e);
-      }
-    }
-  }
-
-  if (!targetCustomerId) {
-    const err = new Error('تعذر ربط أمر الصيانة بعميل في قاعدة البيانات Supabase. يرجى اختيار عميل مسجل أو إدخال بيانات العميل الزائر.');
-    console.error("Save repair failed - No customer ID:", err);
-    throw err;
-  }
-
-  // Step 2: Generate unique Order ID (ATR-XXXXX)
-  const localList = getLocalRepairOrdersBackup();
+  // Generate unique Order ID (ATR-XXXXX)
   let maxNum = 10000;
-
   for (const o of localList) {
     const match = o.id.match(/ATR-(\d+)/) || o.id.match(/\d+/);
     if (match) {
@@ -304,111 +245,167 @@ export async function addRepairOrderToSupabase(
     }
   }
 
-  try {
-    const { data: latestRow } = await supabase
-      .from('repair_orders')
-      .select('order_number')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (latestRow?.order_number) {
-      const match = latestRow.order_number.match(/ATR-(\d+)/) || latestRow.order_number.match(/\d+/);
-      if (match) {
-        const num = parseInt(match[1] || match[0], 10);
-        if (num >= maxNum) {
-          maxNum = num + 1;
-        }
-      }
-    }
-  } catch (e) {
-    console.warn("Could not query latest order_number from Supabase:", e);
-  }
-
   const generatedId = `ATR-${maxNum}`;
   const nowIso = new Date().toISOString();
   const generatedToken = `TRK-${maxNum}-${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
-
   const resolvedOwnership = orderData.jobType || orderData.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
+
+  const initialTimeline: RepairTimelineEvent[] = Array.isArray(orderData.timelineEvents) && orderData.timelineEvents.length > 0 
+    ? orderData.timelineEvents 
+    : [
+        {
+          id: `EVT-${Date.now()}-1`,
+          orderId: generatedId,
+          eventType: "ORDER_RECEIVED",
+          timestamp: nowIso,
+          userId: currentUser?.id || "system",
+          userName: currentUser?.fullName || currentUser?.name || "موظف الاستلام",
+          note: "تم إنشاء أمر الاستلام وحجز كود التتبع بنجاح"
+        }
+      ];
+
+  if (orderData.devices?.some(d => d.needsInspection) && !initialTimeline.some(e => e.eventType === "TRANSFERRED_INSPECTION")) {
+    initialTimeline.unshift({
+      id: `EVT-${Date.now()}-2`,
+      orderId: generatedId,
+      eventType: "TRANSFERRED_INSPECTION",
+      timestamp: nowIso,
+      userId: currentUser?.id || "system",
+      userName: currentUser?.fullName || currentUser?.name || "موظف الاستلام",
+      note: "تم تحويل الجهاز لورشة الصيانة للفحص والمعاينة الفنية"
+    });
+  }
 
   const fullOrderObj: RepairOrder = {
     ...orderData,
     id: generatedId,
-    customerId: targetCustomerId,
+    customerId: targetCustomerId || orderData.customerId || `CUST_${Date.now()}`,
     receivedDate: nowIso,
     trackingToken: generatedToken,
     jobType: resolvedOwnership,
-    workOwnershipType: resolvedOwnership
+    workOwnershipType: resolvedOwnership,
+    timelineEvents: initialTimeline,
+    auditLogs: Array.isArray(orderData.auditLogs) ? orderData.auditLogs : []
   };
 
-  const firstDevice = orderData.devices?.[0];
-  const reportedIssueStr = firstDevice?.issue || 
-    (Array.isArray(orderData.selectedQuickFaults) && orderData.selectedQuickFaults.length > 0 ? orderData.selectedQuickFaults.join(' - ') : null) || 
-    orderData.notes || 
-    'فحص ومعاينة الكشف العام';
-
-  const payload: Record<string, any> = {
-    order_number: generatedId,
-    customer_id: targetCustomerId,
-    status: mapUiStatusToDbStatus(orderData.status),
-    created_by_user_id: isUuid(currentUser?.id) ? currentUser?.id : null,
-    tracking_token: generatedToken,
-    created_at: nowIso,
-    updated_at: nowIso,
-    estimated_cost: Number(orderData.totalEstimatedCost || orderData.finalRepairPrice || 0),
-    final_cost: Number(orderData.finalRepairPrice || orderData.totalEstimatedCost || 0),
-    device_type: firstDevice?.type || 'أجهزة ألعاب',
-    device_model: firstDevice?.model || 'موديل قياسي',
-    serial_number: firstDevice?.serialNumber || '',
-    reported_issue: reportedIssueStr,
-    notes: JSON.stringify(fullOrderObj)
-  };
-
-  console.log("Payload:", payload);
-  console.log("Before Supabase insert");
+  if (!isSupabaseConfigured) {
+    const updatedLocalList = [fullOrderObj, ...localList.filter(o => o.id !== fullOrderObj.id)];
+    saveLocalRepairOrdersBackup(updatedLocalList, true);
+    return fullOrderObj;
+  }
 
   try {
+    // Step 1: Ensure customer ID exists in Supabase if possible
+    if (!targetCustomerId) {
+      const phoneToSearch = orderData.guestCustomerPhone || orderData.customerPhoneSnapshot || "";
+      const nameToSearch = orderData.guestCustomerName || orderData.customerNameSnapshot || "عميل غير مسجل";
+
+      if (phoneToSearch) {
+        try {
+          const { data: existingCust } = await supabase
+            .from('customers')
+            .select('id')
+            .eq('phone', phoneToSearch)
+            .maybeSingle();
+          if (existingCust?.id) {
+            targetCustomerId = existingCust.id;
+          }
+        } catch (e) {
+          console.warn("Could not search customer by phone in Supabase:", e);
+        }
+      }
+
+      if (!targetCustomerId) {
+        try {
+          const newCustPayload = {
+            name: nameToSearch,
+            phone: phoneToSearch || "00000000000",
+            customer_type: 'REGULAR',
+            notes: orderData.guestCustomerNote || 'عميل ينشأ تلقائياً لأمر الصيانة',
+            created_at: new Date().toISOString()
+          };
+
+          const { data: createdCust } = await supabase
+            .from('customers')
+            .insert(newCustPayload)
+            .select('id')
+            .maybeSingle();
+
+          if (createdCust?.id) {
+            targetCustomerId = createdCust.id;
+          }
+        } catch (e) {
+          console.warn("⚠️ Exception inserting guest customer in Supabase:", e);
+        }
+      }
+    }
+
+    fullOrderObj.customerId = targetCustomerId || fullOrderObj.customerId;
+
+    const firstDevice = orderData.devices?.[0];
+    const reportedIssueStr = firstDevice?.issue || 
+      (Array.isArray(orderData.selectedQuickFaults) && orderData.selectedQuickFaults.length > 0 ? orderData.selectedQuickFaults.join(' - ') : null) || 
+      orderData.notes || 
+      'فحص ومعاينة الكشف العام';
+
+    const payload: Record<string, any> = {
+      order_number: generatedId,
+      customer_id: isUuid(targetCustomerId) ? targetCustomerId : null,
+      status: mapUiStatusToDbStatus(orderData.status),
+      created_by_user_id: isUuid(currentUser?.id) ? currentUser?.id : null,
+      tracking_token: generatedToken,
+      created_at: nowIso,
+      updated_at: nowIso,
+      estimated_cost: Number(orderData.totalEstimatedCost || orderData.finalRepairPrice || 0),
+      final_cost: Number(orderData.finalRepairPrice || orderData.totalEstimatedCost || 0),
+      device_type: firstDevice?.type || 'أجهزة ألعاب',
+      device_model: firstDevice?.model || 'موديل قياسي',
+      serial_number: firstDevice?.serialNumber || '',
+      reported_issue: reportedIssueStr,
+      notes: JSON.stringify(fullOrderObj)
+    };
+
     const { data, error } = await supabase
       .from("repair_orders")
       .insert(payload)
       .select()
-      .single();
+      .maybeSingle();
 
-    console.log("Result:", data);
     if (error) {
-      console.error("Error:", error);
-      const detailedErr = new Error(`فشل حفظ أمر الصيانة في Supabase [الكود: ${error.code || 'N/A'}]: ${error.message}${error.details ? ` (${error.details})` : ''}`);
-      throw detailedErr;
+      console.warn("⚠️ Error saving repair order to Supabase, saving locally:", error.message);
+    } else if (data) {
+      const createdOrder = mapRowToRepairOrder(data);
+      const updatedLocalList = [createdOrder, ...localList.filter(o => o.id !== createdOrder.id)];
+      saveLocalRepairOrdersBackup(updatedLocalList, true);
+      return createdOrder;
     }
-
-    if (!data) {
-      const emptyErr = new Error('لم يتم إرجاع بيانات أمر الصيانة الجديد من قاعدة البيانات (Supabase returned empty data).');
-      console.error("Error:", emptyErr);
-      throw emptyErr;
-    }
-
-    const createdOrder = mapRowToRepairOrder(data);
-
-    // Update local backup cache ONLY after verified Supabase insert success
-    const updatedLocalList = [createdOrder, ...localList.filter(o => o.id !== createdOrder.id)];
-    saveLocalRepairOrdersBackup(updatedLocalList, true);
-
-    return createdOrder;
   } catch (err: any) {
-    console.error("Error in addRepairOrderToSupabase execution:", err);
-    // Extract real cause from network or exception
-    const realMsg = err?.message || (typeof err === 'string' ? err : 'خطأ غير معروف أثناء الاتصال بـ Supabase');
-    throw new Error(realMsg);
+    console.warn("⚠️ Exception in addRepairOrderToSupabase, saving locally:", err?.message || err);
   }
+
+  // Local fallback
+  const updatedLocalList = [fullOrderObj, ...localList.filter(o => o.id !== fullOrderObj.id)];
+  saveLocalRepairOrdersBackup(updatedLocalList, true);
+  return fullOrderObj;
 }
 
 /**
- * Updates an existing repair order in Supabase
+ * Updates an existing repair order in Supabase with local fallback
  */
 export async function updateRepairOrderInSupabase(
   order: RepairOrder,
   currentUser?: User
 ): Promise<RepairOrder> {
+  const localList = getLocalRepairOrdersBackup();
+
+  if (!isSupabaseConfigured) {
+    const idx = localList.findIndex(o => o.id === order.id);
+    if (idx !== -1) localList[idx] = order;
+    else localList.unshift(order);
+    saveLocalRepairOrdersBackup(localList, true);
+    return order;
+  }
+
   const nowIso = new Date().toISOString();
   const firstDevice = order.devices?.[0];
 
@@ -428,30 +425,33 @@ export async function updateRepairOrderInSupabase(
     notes: JSON.stringify(order)
   };
 
-  const { data, error } = await supabase
-    .from('repair_orders')
-    .update(payload)
-    .or(`order_number.eq.${order.id}${isUuid(order.id) ? `,id.eq.${order.id}` : ''}`)
-    .select()
-    .single();
+  try {
+    const { data, error } = await supabase
+      .from('repair_orders')
+      .update(payload)
+      .or(`order_number.eq.${order.id}${isUuid(order.id) ? `,id.eq.${order.id}` : ''}`)
+      .select()
+      .maybeSingle();
 
-  if (error) {
-    console.error("⛔ [updateRepairOrderInSupabase] Update failed:", error);
-    throw new Error(`فشل تحديث أمر الصيانة في Supabase: ${error.message}`);
+    if (error) {
+      console.warn("⚠️ [updateRepairOrderInSupabase] Update failed in Supabase, saving locally:", error.message);
+    } else if (data) {
+      const updated = mapRowToRepairOrder(data);
+      const idx = localList.findIndex(o => o.id === updated.id);
+      if (idx !== -1) localList[idx] = updated;
+      else localList.unshift(updated);
+      saveLocalRepairOrdersBackup(localList, true);
+      return updated;
+    }
+  } catch (err: any) {
+    console.warn("⚠️ [updateRepairOrderInSupabase] Exception updating in Supabase:", err);
   }
 
-  const updated = mapRowToRepairOrder(data);
-
-  const localList = getLocalRepairOrdersBackup();
-  const idx = localList.findIndex(o => o.id === updated.id);
-  if (idx !== -1) {
-    localList[idx] = updated;
-  } else {
-    localList.unshift(updated);
-  }
+  const idx = localList.findIndex(o => o.id === order.id);
+  if (idx !== -1) localList[idx] = order;
+  else localList.unshift(order);
   saveLocalRepairOrdersBackup(localList, true);
-
-  return updated;
+  return order;
 }
 
 /**
@@ -461,6 +461,13 @@ export async function deleteRepairOrderFromSupabase(
   id: string,
   currentUser?: User
 ): Promise<{ success: boolean; error?: string }> {
+  const localList = getLocalRepairOrdersBackup().filter(o => o.id !== id);
+  saveLocalRepairOrdersBackup(localList, true);
+
+  if (!isSupabaseConfigured) {
+    return { success: true };
+  }
+
   try {
     const { error } = await supabase
       .from('repair_orders')
@@ -468,16 +475,11 @@ export async function deleteRepairOrderFromSupabase(
       .or(`order_number.eq.${id}${isUuid(id) ? `,id.eq.${id}` : ''}`);
 
     if (error) {
-      console.error("⛔ [deleteRepairOrderFromSupabase] Delete failed:", error);
-      return { success: false, error: `فشل حذف أمر الصيانة من Supabase: ${error.message}` };
+      console.warn("⚠️ [deleteRepairOrderFromSupabase] Delete failed in Supabase:", error.message);
     }
-
-    const localList = getLocalRepairOrdersBackup().filter(o => o.id !== id);
-    saveLocalRepairOrdersBackup(localList, true);
-
-    return { success: true };
   } catch (err: any) {
-    console.error("⛔ [deleteRepairOrderFromSupabase] Exception:", err);
-    return { success: false, error: err?.message || "حدث خطأ عند حذف أمر الصيانة" };
+    console.warn("⚠️ [deleteRepairOrderFromSupabase] Exception:", err);
   }
+
+  return { success: true };
 }

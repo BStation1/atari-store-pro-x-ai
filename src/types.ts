@@ -86,6 +86,102 @@ export type WarrantyDurationOption =
   | "YEAR_1"        // سنة
   | "CUSTOM";       // مدة مخصصة
 
+export interface SelectedRepairItem {
+  id: string;
+  name: string;
+  quantity: number;
+  costPrice: number;
+  repairPrice: number;
+  productId?: string;
+  isCustom?: boolean;
+}
+
+export interface RepairTemplateItem {
+  id: string;
+  deviceTypeId?: string;  // e.g. "PS5", "Controller PS5", etc.
+  deviceModelId?: string; // e.g. "DM-001" or category-wide
+  nameAr: string;
+  nameEn?: string;
+  productId?: string;     // Linked product ID from inventory
+  defaultCostPrice: number;
+  defaultRepairPrice: number;
+  sortOrder: number;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface QuickFaultItem {
+  id: string;
+  label: string;
+  defaultSellingPrice: number;
+}
+
+export const QUICK_FAULTS_LIST: QuickFaultItem[] = [
+  { id: "hdmi", label: "تغيير سوكت HDMI", defaultSellingPrice: 400 },
+  { id: "cleaning", label: "تنظيف صيانة دورية + معجون حراري", defaultSellingPrice: 300 },
+  { id: "power", label: "إصلاح باور", defaultSellingPrice: 500 },
+  { id: "fan", label: "تغيير مروحة التبريد", defaultSellingPrice: 350 },
+  { id: "analog", label: "تغيير أنالوج / عصا التحكم", defaultSellingPrice: 150 },
+  { id: "charging_port", label: "تغيير سوكت شحن اليد", defaultSellingPrice: 100 },
+  { id: "battery", label: "تغيير بطارية اليد", defaultSellingPrice: 200 }
+];
+
+export interface RepairTimelineEvent {
+  id: string;
+  orderId: string;
+  deviceId?: string;
+  eventType: 
+    | "ORDER_RECEIVED"
+    | "TRANSFERRED_INSPECTION"
+    | "INSPECTION_STARTED"
+    | "DIAGNOSIS_SET"
+    | "PROCEDURE_ADDED"
+    | "PROCEDURE_REMOVED"
+    | "PART_ADDED"
+    | "PART_QTY_CHANGED"
+    | "PART_REMOVED"
+    | "PRICE_CHANGED"
+    | "REPAIR_APPROVED"
+    | "REPAIR_COMPLETED"
+    | "READY_FOR_DELIVERY"
+    | "DELIVERED_TO_CUSTOMER"
+    | "STATUS_CHANGED"
+    | "TECHNICIAN_CHANGED"
+    | "NOTE_ADDED";
+  timestamp: string;
+  userId?: string;
+  userName?: string;
+  note?: string;
+  details?: Record<string, any>;
+}
+
+export interface RepairAuditLogRecord {
+  id: string;
+  orderId: string;
+  deviceId?: string;
+  userId: string;
+  userName: string;
+  userRole?: string;
+  timestamp: string;
+  actionType:
+    | "ADD_PART"
+    | "DELETE_PART"
+    | "CHANGE_PART_QTY"
+    | "CHANGE_SELL_PRICE"
+    | "CHANGE_COST_PRICE"
+    | "ADD_PROCEDURE"
+    | "DELETE_PROCEDURE"
+    | "CHANGE_DIAGNOSIS"
+    | "CHANGE_STATUS"
+    | "CHANGE_TECHNICIAN"
+    | "OTHER_EDIT";
+  fieldName?: string;
+  oldValue?: string | number | null;
+  newValue?: string | number | null;
+  notes?: string;
+}
+
 export interface RepairDevice {
   id: string;
   type: DeviceType;
@@ -93,7 +189,12 @@ export interface RepairDevice {
   serialNumber: string;
   color: string;
   accessories: string; // e.g., "كابل، ذراع، بدون علبة"
-  issue: string;
+  issue: string; // Summary of customer complaint
+  reportedFaults?: string[]; // Explicit array of customer reported faults/complaints
+  diagnosisText?: string; // Technical diagnosis recorded by technician
+  technicalProcedures?: SelectedRepairItem[]; // Technical repair actions performed by technician
+  needsInspection?: boolean;
+  selectedRepairItems?: SelectedRepairItem[];
   selectedQuickFaults?: string[];
   suggestedRepairPrice?: number;
   finalRepairPrice?: number;
@@ -145,6 +246,9 @@ export interface DeliveryReopenLog {
 export interface RepairOrder {
   id: string; // e.g., ATR-10000
   customerId?: string;
+  customerName?: string;
+  customerPhone?: string;
+  customerAltPhone?: string;
   customerType?: "GUEST" | "REGISTERED";
   guestCustomerName?: string;
   guestCustomerPhone?: string;
@@ -200,6 +304,9 @@ export interface RepairOrder {
   reopenedByUserName?: string;
   reopenReason?: string;
   reopenLogs?: DeliveryReopenLog[];
+  // Repair Timeline & Technical Audit Log Fields
+  timelineEvents?: RepairTimelineEvent[];
+  auditLogs?: RepairAuditLogRecord[];
 }
 
 export interface Product {

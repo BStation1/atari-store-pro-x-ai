@@ -66,6 +66,7 @@ import {
   DefaultPrice,
   ReceivedAccessory,
   DeviceCondition,
+  RepairTemplateItem,
   Partner,
   PartnerLedgerEntry,
   PartnerSettlement,
@@ -187,7 +188,7 @@ export function useRepairOrders() {
         if (active) {
           console.warn("⚠️ Error fetching repair orders from Supabase:", err);
           setError(err?.message || "تعذر الاتصال بـ Supabase لقراءة أوامر الصيانة");
-          setOrders([]);
+          setOrders(getLocalRepairOrdersBackup());
           setLoading(false);
         }
       });
@@ -744,6 +745,29 @@ export function useDeviceConditions() {
   };
 
   return { deviceConditions, addDeviceCondition, updateDeviceCondition, deleteDeviceCondition };
+}
+
+export function useRepairTemplates() {
+  const trigger = useDbTrigger();
+  const [repairTemplates, setRepairTemplates] = useState<RepairTemplateItem[]>([]);
+
+  useEffect(() => {
+    setRepairTemplates(db.getRepairTemplates());
+  }, [trigger]);
+
+  const addRepairTemplateItem = (item: Omit<RepairTemplateItem, "id">) => {
+    return db.addRepairTemplateItem(item);
+  };
+
+  const updateRepairTemplateItem = (item: RepairTemplateItem) => {
+    db.updateRepairTemplateItem(item);
+  };
+
+  const deleteRepairTemplateItem = (id: string) => {
+    return db.deleteRepairTemplateItem(id);
+  };
+
+  return { repairTemplates, addRepairTemplateItem, updateRepairTemplateItem, deleteRepairTemplateItem };
 }
 
 export function usePartners() {

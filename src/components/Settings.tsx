@@ -70,6 +70,7 @@ import { authStore, hashPassword } from "../lib/authStore";
 import { CustomerType, OperationalResetOptions, SystemResetSecurityLog } from "../types";
 import OperationalResetPanel from "./OperationalResetPanel";
 import BackupManagementPanel from "./BackupManagementPanel";
+import RepairTemplatesTab from "./RepairTemplatesTab";
 
 export default function SettingsView() {
   const dialog = useDialog();
@@ -87,7 +88,7 @@ export default function SettingsView() {
   const { deviceConditions, addDeviceCondition, updateDeviceCondition, deleteDeviceCondition } = useDeviceConditions();
 
   // Settings Sub-Tabs
-  const [activeTab, setActiveTab] = useState<"general" | "categories" | "devices" | "pricing" | "configurators" | "system-reset" | "data-management" | "backup-management">("general");
+  const [activeTab, setActiveTab] = useState<"general" | "categories" | "devices" | "pricing" | "configurators" | "repair-templates" | "system-reset" | "data-management" | "backup-management">("general");
 
   // Loading and Error Handling States for System Settings Data
   const [isLoadingSettings, setIsLoadingSettings] = useState(true);
@@ -748,6 +749,17 @@ export default function SettingsView() {
         >
           الخدمات، الملحقات والظروف
           {activeTab === "configurators" && <span className="absolute bottom-0 right-0 left-0 h-0.5 bg-indigo-500"></span>}
+        </button>
+
+        <button
+          onClick={() => setActiveTab("repair-templates")}
+          className={`pb-3 text-sm font-bold transition-colors cursor-pointer relative flex items-center gap-1.5 ${
+            activeTab === "repair-templates" ? "text-indigo-400" : "text-gray-400 hover:text-white"
+          }`}
+        >
+          <Wrench className="w-4 h-4 text-indigo-400" />
+          <span>قوالب الصيانة (Repair Templates)</span>
+          {activeTab === "repair-templates" && <span className="absolute bottom-0 right-0 left-0 h-0.5 bg-indigo-500"></span>}
         </button>
 
         {canResetOperationalData(currentUser) && (
@@ -2145,6 +2157,11 @@ export default function SettingsView() {
           </div>
         </div>
       )}
+
+      {/* ====================================================
+          TAB 5.5: REPAIR TEMPLATES MANAGEMENT
+          ==================================================== */}
+      {activeTab === "repair-templates" && <RepairTemplatesTab />}
 
       {/* ====================================================
           TAB 6: OPERATIONAL DATA RESET / DATA MANAGEMENT

@@ -30,6 +30,7 @@ import {
   DefaultPrice,
   ReceivedAccessory,
   DeviceCondition,
+  RepairTemplateItem,
   WorkOwnershipType,
   Partner,
   PartnerLedgerEntry,
@@ -76,7 +77,8 @@ const KEYS = {
   SETTLEMENT_AUDIT_LOGS: "atari_settlement_audit_logs",
   AUDIT_LOGS: "atari_audit_logs",
   READ_NOTIFICATIONS: "atari_read_notifications",
-  SYSTEM_RESET_SECURITY_LOGS: "atari_system_reset_security_logs"
+  SYSTEM_RESET_SECURITY_LOGS: "atari_system_reset_security_logs",
+  REPAIR_TEMPLATES: "atari_repair_templates"
 };
 
 // Default seed data
@@ -257,6 +259,42 @@ const DEFAULT_DEVICE_CONDITIONS: DeviceCondition[] = [
   { id: "DC-020", nameAr: "تم فتحه في مركز صيانة آخر", sortOrder: 20 },
   { id: "DC-021", nameAr: "الجهاز مفكوك أو ناقص مسامير", sortOrder: 21 },
   { id: "DC-022", nameAr: "كسر أو خدش في الهيكل", sortOrder: 22 }
+];
+
+const DEFAULT_REPAIR_TEMPLATES: RepairTemplateItem[] = [
+  // PS5 Templates
+  { id: "RPT-001", deviceTypeId: "PS5", nameAr: "HDMI", defaultCostPrice: 150, defaultRepairPrice: 500, sortOrder: 1, isActive: true },
+  { id: "RPT-002", deviceTypeId: "PS5", nameAr: "USB", defaultCostPrice: 50, defaultRepairPrice: 300, sortOrder: 2, isActive: true },
+  { id: "RPT-003", deviceTypeId: "PS5", nameAr: "مروحة", defaultCostPrice: 250, defaultRepairPrice: 600, sortOrder: 3, isActive: true },
+  { id: "RPT-004", deviceTypeId: "PS5", nameAr: "كولر", defaultCostPrice: 100, defaultRepairPrice: 350, sortOrder: 4, isActive: true },
+  { id: "RPT-005", deviceTypeId: "PS5", nameAr: "باور", defaultCostPrice: 200, defaultRepairPrice: 700, sortOrder: 5, isActive: true },
+  { id: "RPT-006", deviceTypeId: "PS5", nameAr: "WiFi", defaultCostPrice: 100, defaultRepairPrice: 400, sortOrder: 6, isActive: true },
+  { id: "RPT-007", deviceTypeId: "PS5", nameAr: "تنظيف", defaultCostPrice: 20, defaultRepairPrice: 200, sortOrder: 7, isActive: true },
+  { id: "RPT-008", deviceTypeId: "PS5", nameAr: "معجون حراري", defaultCostPrice: 50, defaultRepairPrice: 300, sortOrder: 8, isActive: true },
+
+  // Controller PS5 (يد PS5)
+  { id: "RPT-009", deviceTypeId: "Controller PS5", nameAr: "أنالوج", defaultCostPrice: 40, defaultRepairPrice: 150, sortOrder: 1, isActive: true },
+  { id: "RPT-010", deviceTypeId: "Controller PS5", nameAr: "سوكت شحن", defaultCostPrice: 25, defaultRepairPrice: 120, sortOrder: 2, isActive: true },
+  { id: "RPT-011", deviceTypeId: "Controller PS5", nameAr: "بطارية", defaultCostPrice: 60, defaultRepairPrice: 180, sortOrder: 3, isActive: true },
+  { id: "RPT-012", deviceTypeId: "Controller PS5", nameAr: "موتور", defaultCostPrice: 30, defaultRepairPrice: 100, sortOrder: 4, isActive: true },
+  { id: "RPT-013", deviceTypeId: "Controller PS5", nameAr: "أزرار", defaultCostPrice: 15, defaultRepairPrice: 80, sortOrder: 5, isActive: true },
+  { id: "RPT-014", deviceTypeId: "Controller PS5", nameAr: "ربر", defaultCostPrice: 15, defaultRepairPrice: 70, sortOrder: 6, isActive: true },
+  { id: "RPT-015", deviceTypeId: "Controller PS5", nameAr: "فلاتة", defaultCostPrice: 20, defaultRepairPrice: 90, sortOrder: 7, isActive: true },
+
+  // Controller PS4 (يد PS4)
+  { id: "RPT-016", deviceTypeId: "Controller PS4", nameAr: "أنالوج", defaultCostPrice: 30, defaultRepairPrice: 100, sortOrder: 1, isActive: true },
+  { id: "RPT-017", deviceTypeId: "Controller PS4", nameAr: "سوكت شحن", defaultCostPrice: 15, defaultRepairPrice: 80, sortOrder: 2, isActive: true },
+  { id: "RPT-018", deviceTypeId: "Controller PS4", nameAr: "بطارية", defaultCostPrice: 40, defaultRepairPrice: 120, sortOrder: 3, isActive: true },
+  { id: "RPT-019", deviceTypeId: "Controller PS4", nameAr: "أزرار", defaultCostPrice: 15, defaultRepairPrice: 60, sortOrder: 4, isActive: true },
+  { id: "RPT-020", deviceTypeId: "Controller PS4", nameAr: "ربر", defaultCostPrice: 15, defaultRepairPrice: 60, sortOrder: 5, isActive: true },
+  { id: "RPT-021", deviceTypeId: "Controller PS4", nameAr: "فلاتة", defaultCostPrice: 15, defaultRepairPrice: 70, sortOrder: 6, isActive: true },
+
+  // PS4 / PS4 Slim / PS4 Pro
+  { id: "RPT-022", deviceTypeId: "PS4", nameAr: "HDMI", defaultCostPrice: 100, defaultRepairPrice: 400, sortOrder: 1, isActive: true },
+  { id: "RPT-023", deviceTypeId: "PS4", nameAr: "USB", defaultCostPrice: 30, defaultRepairPrice: 200, sortOrder: 2, isActive: true },
+  { id: "RPT-024", deviceTypeId: "PS4", nameAr: "تنظيف ومعجون حراري", defaultCostPrice: 40, defaultRepairPrice: 250, sortOrder: 3, isActive: true },
+  { id: "RPT-025", deviceTypeId: "PS4", nameAr: "باور", defaultCostPrice: 150, defaultRepairPrice: 500, sortOrder: 4, isActive: true },
+  { id: "RPT-026", deviceTypeId: "PS4", nameAr: "هارد ديسك", defaultCostPrice: 150, defaultRepairPrice: 400, sortOrder: 5, isActive: true }
 ];
 
 const DEFAULT_PARTNERS: Partner[] = [
@@ -1130,6 +1168,36 @@ export const db = {
   deleteDeviceCondition: (id: string) => {
     const list = db.getDeviceConditions().filter(x => x.id !== id);
     db.saveDeviceConditions(list);
+  },
+
+  // --- REPAIR TEMPLATES ---
+  getRepairTemplates: (): RepairTemplateItem[] => {
+    return getStorageItem<RepairTemplateItem[]>(KEYS.REPAIR_TEMPLATES, DEFAULT_REPAIR_TEMPLATES);
+  },
+  saveRepairTemplates: (data: RepairTemplateItem[]) => {
+    setStorageItem(KEYS.REPAIR_TEMPLATES, data);
+  },
+  addRepairTemplateItem: (item: Omit<RepairTemplateItem, "id">): RepairTemplateItem => {
+    const list = db.getRepairTemplates();
+    const newItem: RepairTemplateItem = {
+      ...item,
+      id: `RPT-${String(list.length + 101).padStart(3, "0")}`
+    };
+    list.push(newItem);
+    db.saveRepairTemplates(list);
+    return newItem;
+  },
+  updateRepairTemplateItem: (item: RepairTemplateItem) => {
+    const list = db.getRepairTemplates();
+    const index = list.findIndex(x => x.id === item.id);
+    if (index !== -1) {
+      list[index] = item;
+      db.saveRepairTemplates(list);
+    }
+  },
+  deleteRepairTemplateItem: (id: string) => {
+    const list = db.getRepairTemplates().filter(x => x.id !== id);
+    db.saveRepairTemplates(list);
   },
 
   deleteProduct: (id: string): { success: boolean; error?: string } => {
