@@ -141,6 +141,7 @@ CREATE TABLE IF NOT EXISTS public.products (
     min_quantity INTEGER NOT NULL DEFAULT 5 CHECK (min_quantity >= 0),
     location TEXT,
     is_spare_part BOOLEAN NOT NULL DEFAULT false,
+    is_archived BOOLEAN NOT NULL DEFAULT false,
     stock_ownership stock_ownership_enum NOT NULL DEFAULT 'SHARED',
     compatible_models TEXT[] DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

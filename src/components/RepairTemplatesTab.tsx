@@ -368,7 +368,7 @@ export default function RepairTemplatesTab() {
                   className="w-full bg-[#181a29] border border-[#2a2d42] text-white rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-indigo-500 transition"
                 >
                   <option value="">بدون ربط بمخزون (إجراء خدمي فقط)</option>
-                  {products.filter(p => !p.isArchived && p.isActive !== false).map(p => (
+                  {products.filter(p => !p.isArchived).map(p => (
                     <option key={p.id} value={p.id}>
                       {p.name} (المتاح: {p.quantity} | تكلفة: {p.purchasePrice} ج.م)
                     </option>

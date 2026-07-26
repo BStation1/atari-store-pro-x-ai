@@ -110,7 +110,7 @@ export default function Inventory() {
     
     let matchesStatus = true;
     if (statusFilter === "active") {
-      matchesStatus = !p.isArchived && p.isActive !== false;
+      matchesStatus = !p.isArchived;
     } else if (statusFilter === "archived") {
       matchesStatus = !!p.isArchived;
     }
@@ -164,7 +164,7 @@ export default function Inventory() {
     setPLoc(prod.location || "");
     setPUnit(prod.unit || "قطعة");
     setPNotes(prod.notes || "");
-    setPIsActive(prod.isActive !== false);
+    setPIsActive(!prod.isArchived);
     setPSupplier(prod.supplier || "");
     setPCompTypes(prod.compatibleDeviceTypes || []);
     setPCompModels(prod.compatibleModels || []);
@@ -196,7 +196,7 @@ export default function Inventory() {
     setPLoc(prod.location || "");
     setPUnit(prod.unit || "قطعة");
     setPNotes(prod.notes || "");
-    setPIsActive(prod.isActive !== false);
+    setPIsActive(!prod.isArchived);
     setPSupplier(prod.supplier || "");
     setPCompTypes(prod.compatibleDeviceTypes || []);
     setPCompModels(prod.compatibleModels || []);
@@ -243,7 +243,7 @@ export default function Inventory() {
       location: pLoc,
       unit: pUnit,
       notes: pNotes,
-      isActive: pIsActive,
+      isArchived: !pIsActive,
       supplier: pSupplier,
       compatibleDeviceTypes: pCompTypes,
       compatibleModels: pCompModels,
@@ -296,8 +296,7 @@ export default function Inventory() {
     try {
       await updateProduct({
         ...prod,
-        isArchived: willArchive,
-        isActive: !willArchive
+        isArchived: willArchive
       });
       showNotification(willArchive ? `تم نقل الصنف ${prod.name} للأرشيف بنجاح` : `تم استعادة الصنف ${prod.name} من الأرشيف`);
     } catch (err: any) {
@@ -335,8 +334,7 @@ export default function Inventory() {
         if (prod) {
           updateProduct({
             ...prod,
-            isArchived: true,
-            isActive: false
+            isArchived: true
           });
         }
       });

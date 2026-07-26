@@ -691,7 +691,7 @@ export default function Accounting({ openInvoiceModal = false }: AccountingProps
                         className="w-full bg-gray-950 border border-[#2a2d42] rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-bold"
                       >
                         <option value="">-- اختر صنفاً من المخزون --</option>
-                        {products.filter(p => !p.isArchived && p.isActive !== false).map(p => (
+                        {products.filter(p => !p.isArchived).map(p => (
                           <option key={p.id} value={p.id}>
                             {p.name} ({p.sellPrice} ج.م - متبقي {p.quantity})
                           </option>

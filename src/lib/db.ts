@@ -1211,7 +1211,6 @@ export const db = {
     // If used, archive instead
     if (isUsedInInvoices) {
       prod.isArchived = true;
-      prod.isActive = false;
       db.updateProduct(prod);
       db.logActivity("U-101", "أحمد محمد", "أرشفة منتج", `تم أرشفة المنتج ${prod.name} لتعلقه بعمليات بيع أو فواتير سابقة`);
       return { success: true, error: "تم أرشفة المنتج بنجاح لتعلقه بفواتير سابقة." };

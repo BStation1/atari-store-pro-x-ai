@@ -76,8 +76,7 @@ export function mapRowToProduct(row: Record<string, any>): Product {
     compatibleDeviceTypes: meta.compatibleDeviceTypes || [],
     compatibleModels: row.compatible_models || meta.compatibleModels || [],
     notes: meta.notes || '',
-    isActive: row.is_active !== undefined ? Boolean(row.is_active) : (meta.isActive !== false),
-    isArchived: Boolean(meta.isArchived || row.is_archived || false),
+    isArchived: Boolean(row.is_archived || meta.isArchived || false),
     stockOwnership: (row.stock_ownership as any) || meta.stockOwnership || 'SHARED',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -109,7 +108,6 @@ export function mapProductToRow(
     wholesalePrice: prod.wholesalePrice || 0,
     minSellPrice: prod.minSellPrice || 0,
     compatibleDeviceTypes: prod.compatibleDeviceTypes || [],
-    isActive: prod.isActive !== false,
     isArchived: Boolean(prod.isArchived),
     stockOwnership: prod.stockOwnership || 'SHARED',
   };
@@ -133,7 +131,6 @@ export function mapProductToRow(
     location: prod.location || null,
     stock_ownership: prod.stockOwnership || 'SHARED',
     compatible_models: prod.compatibleModels || [],
-    is_active: prod.isActive !== false,
     is_archived: Boolean(prod.isArchived),
     description: JSON.stringify(meta),
     updated_at: new Date().toISOString(),
@@ -537,39 +534,23 @@ export async function deleteProductFromSupabase(
   if (isReferenced) {
     console.log(`📌 [DeleteProduct] Product ${id} is referenced in (${referenceReason}). Executing archive flow...`);
 
-    const currentBackup = getLocalProductsBackup();
-    const targetProd = currentBackup.find(p => p.id === id);
+    const { data, error } = await supabase
+      .from('products')
+      .update({ is_archived: true })
+      .eq('id', id)
+      .select();
 
-    let archiveSuccess = false;
-    let archiveError = '';
-
-    if (targetProd) {
-      try {
-        const archivedProd: Product = {
-          ...targetProd,
-          isArchived: true,
-          isActive: false,
-        };
-        await updateProductInSupabase(archivedProd, currentUser?.id, `أرشفة تلقائية لربطه بـ: ${referenceReason}`);
-        archiveSuccess = true;
-      } catch (err: any) {
-        archiveError = err?.message || 'خطأ أثناء أرشفة المنتج في Supabase';
-      }
-    } else {
-      // Fallback direct update in Supabase
-      const categoryMap = await getCategoryUuidMap();
-      const row = mapProductToRow({ id, isArchived: true, isActive: false }, categoryMap);
-      const { error: updErr } = await supabase.from('products').update(row).eq('id', id);
-      if (updErr) {
-        archiveError = updErr.message;
-      } else {
-        archiveSuccess = true;
-      }
+    if (error) {
+      console.error('❌ [DeleteProduct] Archiving failed:', error);
+      return { success: false, error: `تعذر أرشفة المنتج في Supabase: ${error.message}` };
     }
 
-    if (!archiveSuccess) {
-      console.error('❌ [DeleteProduct] Archiving failed:', archiveError);
-      return { success: false, error: `تعذر أرشفة المنتج في Supabase: ${archiveError}` };
+    // Update local backup
+    const currentBackup = getLocalProductsBackup();
+    const targetProd = currentBackup.find(p => p.id === id);
+    if (targetProd) {
+      targetProd.isArchived = true;
+      setLocalProductsBackup(currentBackup);
     }
 
     // Refresh products list directly from Supabase
@@ -578,7 +559,7 @@ export async function deleteProductFromSupabase(
     return {
       success: true,
       isArchived: true,
-      message: `المنتج مرتبط بسجلات سابقة (${referenceReason}). تم أرشفة المنتج وتعطيله بنجاح بدلاً من الحذف النهائي للحفاظ على التاريخ المحاسبي والمخزني.`,
+      message: `المنتج مرتبط بسجلات سابقة (${referenceReason}). تم أرشفة المنتج بنجاح بدلاً من الحذف النهائي للحفاظ على التاريخ المحاسبي والمخزني.`,
     };
   }
 
@@ -614,14 +595,16 @@ export async function deleteProductFromSupabase(
     if (error.code === '23503') {
       console.warn('⚠️ [DeleteProduct] Foreign Key constraint (23503) caught. Falling back to archiving...');
 
+      await supabase
+        .from('products')
+        .update({ is_archived: true })
+        .eq('id', id);
+
       const currentBackup = getLocalProductsBackup();
       const targetProd = currentBackup.find(p => p.id === id);
       if (targetProd) {
-        await updateProductInSupabase(
-          { ...targetProd, isArchived: true, isActive: false },
-          currentUser?.id,
-          'أرشفة تلقائية بسبب قيد Foreign Key في قاعدة البيانات'
-        ).catch(() => {});
+        targetProd.isArchived = true;
+        setLocalProductsBackup(currentBackup);
       }
 
       await getProductsFromSupabase().catch(() => {});

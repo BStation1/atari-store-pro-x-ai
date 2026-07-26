@@ -1383,7 +1383,7 @@ ${trackingLink}
                                 {selectedPartIndex === devIdx && partSearch.trim() && (
                                   <div className="absolute right-0 left-0 bg-[#11131e] border border-[#2a2d42] mt-1 rounded-xl max-h-[160px] overflow-y-auto z-40 divide-y divide-[#2a2d42] shadow-2xl">
                                     {products
-                                      .filter(p => !p.isArchived && p.isActive !== false && (p.name.includes(partSearch) || p.category.includes("قطع غيار")))
+                                      .filter(p => !p.isArchived && (p.name.includes(partSearch) || p.category.includes("قطع غيار")))
                                       .map(p => (
                                         <button
                                           key={p.id}
