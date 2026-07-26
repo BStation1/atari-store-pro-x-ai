@@ -806,7 +806,7 @@ export function useRepairTemplates() {
   };
 
   const updateRepairTemplateItem = (item: RepairTemplateItem) => {
-    updateRepairTemplateInSupabase(item);
+    return updateRepairTemplateInSupabase(item);
   };
 
   const deleteRepairTemplateItem = (id: string) => {

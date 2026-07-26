@@ -123,10 +123,16 @@ export function mapDeviceModelToRow(m: Partial<DBDeviceModel>): Record<string, a
 }
 
 export function mapRowToRepairTemplate(row: Record<string, any>): RepairTemplateItem {
+  const typeId = String(row.device_type_id || row.category_id || row.deviceTypeId || row.categoryId || '');
+  const rawModelId = row.device_model_id || row.model_id || row.deviceModelId || row.modelId || undefined;
+  const modelId = (rawModelId && String(rawModelId).trim() !== '') ? String(rawModelId) : undefined;
+
   return {
     id: String(row.id || ''),
-    deviceTypeId: String(row.device_type_id || row.category_id || row.deviceTypeId || ''),
-    deviceModelId: row.device_model_id || row.model_id || row.deviceModelId || '',
+    deviceTypeId: typeId,
+    categoryId: typeId,
+    deviceModelId: modelId,
+    modelId: modelId,
     nameAr: row.name_ar || row.nameAr || '',
     nameEn: row.name_en || row.nameEn || '',
     productId: row.product_id || row.productId || undefined,
@@ -140,11 +146,15 @@ export function mapRowToRepairTemplate(row: Record<string, any>): RepairTemplate
 }
 
 export function mapRepairTemplateToRow(item: Partial<RepairTemplateItem>): Record<string, any> {
+  const typeId = item.deviceTypeId || item.categoryId || null;
+  const rawModelId = item.deviceModelId || item.modelId || null;
+  const modelId = (rawModelId && String(rawModelId).trim() !== '') ? String(rawModelId) : null;
+
   const row: Record<string, any> = {
-    device_type_id: item.deviceTypeId || null,
-    category_id: item.deviceTypeId || null,
-    device_model_id: item.deviceModelId || null,
-    model_id: item.deviceModelId || null,
+    device_type_id: typeId,
+    category_id: typeId,
+    device_model_id: modelId,
+    model_id: modelId,
     product_id: item.productId || null,
     name_ar: item.nameAr,
     name_en: item.nameEn || '',

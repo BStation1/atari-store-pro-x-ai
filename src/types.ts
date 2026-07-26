@@ -98,8 +98,10 @@ export interface SelectedRepairItem {
 
 export interface RepairTemplateItem {
   id: string;
-  deviceTypeId?: string;  // e.g. "PS5", "Controller PS5", etc.
+  deviceTypeId?: string;  // e.g. "DT-001"
+  categoryId?: string;    // Alias for deviceTypeId
   deviceModelId?: string; // e.g. "DM-001" or category-wide
+  modelId?: string;       // Alias for deviceModelId
   nameAr: string;
   nameEn?: string;
   productId?: string;     // Linked product ID from inventory

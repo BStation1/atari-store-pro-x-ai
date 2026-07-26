@@ -29,13 +29,13 @@ export default function RepairTemplatesTab() {
   const [templateMode, setTemplateMode] = useState<"faults" | "procedures">("faults");
 
   // Filter state
-  const [selectedDeviceType, setSelectedDeviceType] = useState<string>("PS5");
+  const [selectedDeviceType, setSelectedDeviceType] = useState<string>("");
   const [selectedDeviceModel, setSelectedDeviceModel] = useState<string>("");
 
   // Form state for Procedure Templates
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [itemNameAr, setItemNameAr] = useState("");
-  const [formDeviceType, setFormDeviceType] = useState("PS5");
+  const [formDeviceType, setFormDeviceType] = useState("");
   const [formDeviceModel, setFormDeviceModel] = useState("");
   const [linkedProductId, setLinkedProductId] = useState("");
   const [costPrice, setCostPrice] = useState<number>(0);
@@ -45,33 +45,41 @@ export default function RepairTemplatesTab() {
   // Notification state
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  const showNotification = (msg: string) => {
+  const showNotification = (msg: string, isError = false) => {
     setSuccessMsg(msg);
     setTimeout(() => setSuccessMsg(null), 3000);
   };
 
+  // Helper to match device type against selected filter
+  const isTypeMatch = (typeId: string | undefined, filter: string) => {
+    if (!filter) return true;
+    if (!typeId) return false;
+    if (typeId === filter) return true;
+    
+    const dtObj = deviceTypes.find(d => d.id === filter || d.nameAr === filter);
+    if (dtObj) {
+      if (typeId === dtObj.id || typeId === dtObj.nameAr || typeId === dtObj.nameEn) return true;
+    }
+    return typeId.toLowerCase().includes(filter.toLowerCase()) || filter.toLowerCase().includes(typeId.toLowerCase());
+  };
+
+  // Helper to match device model against selected filter
+  const isModelMatch = (modelId: string | undefined, filter: string) => {
+    if (!filter) return true;
+    if (!modelId) return true; // Category-wide templates match any model filter in that category
+    return modelId === filter;
+  };
+
   // Filtered Fault Templates (قوالب الأعطال والشكاوى)
   const filteredFaults = commonFaults.filter(item => {
-    if (!selectedDeviceType) return true;
-    const matchType = (item.deviceTypeId || "").toLowerCase().includes(selectedDeviceType.toLowerCase()) ||
-                      selectedDeviceType.toLowerCase().includes((item.deviceTypeId || "").toLowerCase());
-    if (!matchType) return false;
-    if (selectedDeviceModel && item.deviceModelId) {
-      return item.deviceModelId === selectedDeviceModel;
-    }
-    return true;
+    return isTypeMatch(item.deviceTypeId, selectedDeviceType) &&
+           isModelMatch(item.deviceModelId, selectedDeviceModel);
   }).sort((a, b) => (a.sortOrder || 1) - (b.sortOrder || 1));
 
   // Filtered Procedure Templates (قوالب الإجراءات الفنية)
   const filteredProcedures = repairTemplates.filter(item => {
-    if (!selectedDeviceType) return true;
-    const matchType = (item.deviceTypeId || "").toLowerCase().includes(selectedDeviceType.toLowerCase()) ||
-                      selectedDeviceType.toLowerCase().includes((item.deviceTypeId || "").toLowerCase());
-    if (!matchType) return false;
-    if (selectedDeviceModel && item.deviceModelId) {
-      return item.deviceModelId === selectedDeviceModel;
-    }
-    return true;
+    return isTypeMatch(item.deviceTypeId || item.categoryId, selectedDeviceType) &&
+           isModelMatch(item.deviceModelId || item.modelId, selectedDeviceModel);
   }).sort((a, b) => a.sortOrder - b.sortOrder);
 
   // Auto-fill prices when linking a product
@@ -92,8 +100,8 @@ export default function RepairTemplatesTab() {
   const handleEditProcedure = (item: RepairTemplateItem) => {
     setEditingItemId(item.id);
     setItemNameAr(item.nameAr);
-    setFormDeviceType(item.deviceTypeId || selectedDeviceType || "PS5");
-    setFormDeviceModel(item.deviceModelId || "");
+    setFormDeviceType(item.deviceTypeId || item.categoryId || selectedDeviceType || "");
+    setFormDeviceModel(item.deviceModelId || item.modelId || "");
     setLinkedProductId(item.productId || "");
     setCostPrice(item.defaultCostPrice || 0);
     setRepairPrice(item.defaultRepairPrice || 0);
@@ -103,7 +111,7 @@ export default function RepairTemplatesTab() {
   const handleEditFault = (fault: CommonFault) => {
     setEditingItemId(fault.id);
     setItemNameAr(fault.nameAr);
-    setFormDeviceType(fault.deviceTypeId || selectedDeviceType || "PS5");
+    setFormDeviceType(fault.deviceTypeId || selectedDeviceType || "");
     setFormDeviceModel(fault.deviceModelId || "");
     setRepairPrice(fault.defaultRepairPrice || 0);
     setSortOrder(fault.sortOrder || 1);
@@ -112,79 +120,92 @@ export default function RepairTemplatesTab() {
   const handleCancelEdit = () => {
     setEditingItemId(null);
     setItemNameAr("");
+    setFormDeviceType("");
+    setFormDeviceModel("");
     setLinkedProductId("");
     setCostPrice(0);
     setRepairPrice(0);
     setSortOrder(1);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!itemNameAr.trim()) {
       dialog.alert({ message: "يرجى كتابة اسم العنصر بشكل صحيح", variant: "warning" });
       return;
     }
 
-    if (templateMode === "faults") {
-      // Fault Template CRUD
-      if (editingItemId) {
-        const existing = commonFaults.find(f => f.id === editingItemId);
-        if (existing) {
-          updateCommonFault({
-            ...existing,
+    const effectiveDeviceType = formDeviceType || selectedDeviceType || (deviceTypes.filter(d => !d.isArchived)[0]?.id || "");
+    const effectiveModelId = formDeviceModel || undefined;
+
+    try {
+      if (templateMode === "faults") {
+        // Fault Template CRUD
+        if (editingItemId) {
+          const existing = commonFaults.find(f => f.id === editingItemId);
+          if (existing) {
+            await updateCommonFault({
+              ...existing,
+              nameAr: itemNameAr,
+              deviceTypeId: effectiveDeviceType,
+              deviceModelId: effectiveModelId,
+              defaultRepairPrice: Number(repairPrice) || 0,
+              sortOrder: Number(sortOrder) || 1
+            });
+            showNotification("تم تحديث قالب العطل بنجاح");
+          }
+        } else {
+          await addCommonFault({
             nameAr: itemNameAr,
-            deviceTypeId: formDeviceType,
-            deviceModelId: formDeviceModel || undefined,
+            nameEn: "",
+            deviceTypeId: effectiveDeviceType,
+            deviceModelId: effectiveModelId,
             defaultRepairPrice: Number(repairPrice) || 0,
-            sortOrder: Number(sortOrder) || 1
+            sortOrder: Number(sortOrder) || (filteredFaults.length + 1),
+            isActive: true
           });
-          showNotification("تم تحديث قالب العطل بنجاح");
+          showNotification("تم إضافة قالب عطل وشكوى جديد بنجاح");
         }
       } else {
-        addCommonFault({
-          nameAr: itemNameAr,
-          nameEn: "",
-          deviceTypeId: formDeviceType || selectedDeviceType,
-          deviceModelId: formDeviceModel || undefined,
-          defaultRepairPrice: Number(repairPrice) || 0,
-          sortOrder: Number(sortOrder) || (filteredFaults.length + 1),
-          isActive: true
-        });
-        showNotification("تم إضافة قالب عطل وشكوى جديد بنجاح");
-      }
-    } else {
-      // Procedure Template CRUD
-      if (editingItemId) {
-        const existing = repairTemplates.find(i => i.id === editingItemId);
-        if (existing) {
-          updateRepairTemplateItem({
-            ...existing,
+        // Procedure Template CRUD
+        if (editingItemId) {
+          const existing = repairTemplates.find(i => i.id === editingItemId);
+          if (existing) {
+            await updateRepairTemplateItem({
+              ...existing,
+              nameAr: itemNameAr,
+              deviceTypeId: effectiveDeviceType,
+              categoryId: effectiveDeviceType,
+              deviceModelId: effectiveModelId,
+              modelId: effectiveModelId,
+              productId: linkedProductId || undefined,
+              defaultCostPrice: Number(costPrice) || 0,
+              defaultRepairPrice: Number(repairPrice) || 0,
+              sortOrder: Number(sortOrder) || 1
+            });
+            showNotification("تم تحديث قالب الإجراء الفني بنجاح");
+          }
+        } else {
+          await addRepairTemplateItem({
             nameAr: itemNameAr,
-            deviceTypeId: formDeviceType,
-            deviceModelId: formDeviceModel || undefined,
+            deviceTypeId: effectiveDeviceType,
+            categoryId: effectiveDeviceType,
+            deviceModelId: effectiveModelId,
+            modelId: effectiveModelId,
             productId: linkedProductId || undefined,
             defaultCostPrice: Number(costPrice) || 0,
             defaultRepairPrice: Number(repairPrice) || 0,
-            sortOrder: Number(sortOrder) || 1
+            sortOrder: Number(sortOrder) || (filteredProcedures.length + 1),
+            isActive: true
           });
-          showNotification("تم تحديث قالب الإجراء الفني بنجاح");
+          showNotification("تم إضافة قالب إجراء فني وإصلاح جديد بنجاح");
         }
-      } else {
-        addRepairTemplateItem({
-          nameAr: itemNameAr,
-          deviceTypeId: formDeviceType || selectedDeviceType,
-          deviceModelId: formDeviceModel || undefined,
-          productId: linkedProductId || undefined,
-          defaultCostPrice: Number(costPrice) || 0,
-          defaultRepairPrice: Number(repairPrice) || 0,
-          sortOrder: Number(sortOrder) || (filteredProcedures.length + 1),
-          isActive: true
-        });
-        showNotification("تم إضافة قالب إجراء فني وإصلاح جديد بنجاح");
       }
-    }
 
-    handleCancelEdit();
+      handleCancelEdit();
+    } catch (err: any) {
+      showNotification(err?.message || "حدث خطأ أثناء الحفظ", true);
+    }
   };
 
   const handleDeleteFault = async (id: string, name: string) => {
@@ -337,14 +358,33 @@ export default function RepairTemplatesTab() {
             <div>
               <label className="block text-xs font-bold text-gray-300 mb-1">قسم/نوع الجهاز المستهدف:</label>
               <select
-                value={formDeviceType}
-                onChange={(e) => setFormDeviceType(e.target.value)}
+                value={formDeviceType || selectedDeviceType}
+                onChange={(e) => {
+                  setFormDeviceType(e.target.value);
+                  setFormDeviceModel("");
+                }}
                 className="w-full bg-[#181a29] border border-[#2a2d42] text-white rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-indigo-500 transition"
               >
                 <option value="">اختر القسم</option>
                 {deviceTypes.filter(dt => !dt.isArchived).map((dt) => (
                   <option key={dt.id} value={dt.id}>{dt.nameAr} {dt.brand ? `(${dt.brand})` : ''}</option>
                 ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-gray-300 mb-1">تحديد موديل خاص (اختياري):</label>
+              <select
+                value={formDeviceModel}
+                onChange={(e) => setFormDeviceModel(e.target.value)}
+                className="w-full bg-[#181a29] border border-[#2a2d42] text-white rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-indigo-500 transition"
+              >
+                <option value="">عام (جميع موديلات هذا القسم)</option>
+                {deviceModels
+                  .filter(m => !m.isArchived && (!(formDeviceType || selectedDeviceType) || m.deviceTypeId === (formDeviceType || selectedDeviceType) || m.categoryId === (formDeviceType || selectedDeviceType)))
+                  .map((m) => (
+                    <option key={m.id} value={m.id}>{m.nameAr} {m.modelCode ? `(${m.modelCode})` : ''}</option>
+                  ))}
               </select>
             </div>
 
