@@ -148,7 +148,7 @@ export function mapCustomerToRow(c: Partial<Customer>): Record<string, any> {
     updated_at: new Date().toISOString()
   };
 
-  // Only pass id if valid UUID format
+  // Only pass id if it is a strictly valid UUID format to avoid Postgres 22P02 syntax errors
   if (c.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(c.id)) {
     row.id = c.id;
   }

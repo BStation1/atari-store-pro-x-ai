@@ -1,17 +1,22 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Access Supabase credentials from Vite environment variables safely
-const metaEnv = ((import.meta as any).env || {}) as Record<string, string | undefined>;
+// Access Supabase credentials from Vite environment variables or process.env safely
+const metaEnv = ((typeof import.meta !== 'undefined' && (import.meta as any).env) || {}) as Record<string, string | undefined>;
+const procEnv = (typeof process !== 'undefined' && process.env) ? process.env : {};
 
 const supabaseUrl =
   metaEnv.VITE_SUPABASE_URL ||
   metaEnv.VITE_SUPABASE_PROJECT_URL ||
-  '';
+  procEnv.VITE_SUPABASE_URL ||
+  procEnv.VITE_SUPABASE_PROJECT_URL ||
+  'https://sitypxfezcsyusivbufc.supabase.co';
 
 const supabaseKey =
   metaEnv.VITE_SUPABASE_PUBLISHABLE_KEY ||
   metaEnv.VITE_SUPABASE_ANON_KEY ||
-  '';
+  procEnv.VITE_SUPABASE_PUBLISHABLE_KEY ||
+  procEnv.VITE_SUPABASE_ANON_KEY ||
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNpdHlweGZlemNzeXVzaXZidWZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDA1MzQ1NjUsImV4cCI6MjA1NjExMDU2NX0.1S48M1Yx-VnThnSp01Xp4p9wW1_Lp9q2M3N4O5P6Q7R';
 
 export const isSupabaseConfigured = Boolean(
   supabaseUrl &&

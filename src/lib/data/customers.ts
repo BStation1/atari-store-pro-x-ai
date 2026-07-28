@@ -34,7 +34,16 @@ export async function getCustomerById(id: string): Promise<Customer | null> {
 }
 
 export async function createCustomer(data: Partial<Customer>): Promise<Customer> {
-  const created = db.addCustomer(data as any);
+  const created = await addCustomerToSupabase({
+    name: data.name || '',
+    phone: data.phone || '',
+    type: data.type,
+    email: data.email,
+    address: data.address,
+    notes: data.notes,
+    balance: data.balance || 0
+  });
+
   if (created && created.id) {
     try {
       syncQueue.enqueue({
@@ -56,12 +65,14 @@ export async function createCustomer(data: Partial<Customer>): Promise<Customer>
 export async function updateCustomer(id: string, data: Partial<Customer>): Promise<Customer> {
   const existing = await getCustomerById(id);
   const updated = { ...(existing || {}), ...data, id } as Customer;
-  db.updateCustomer(updated);
-  return updated;
+  const result = await updateCustomerInSupabase(updated);
+  db.updateCustomer(result);
+  return result;
 }
 
 export async function deleteCustomer(id: string): Promise<boolean> {
   try {
+    await deleteCustomerFromSupabase(id);
     db.deleteCustomer(id);
     return true;
   } catch (e) {
