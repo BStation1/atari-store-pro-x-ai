@@ -212,13 +212,26 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
   const [copiedCode, setCopiedCode] = useState(false);
 
   // Filter customers
-  const filteredCustomers = searchQuery.trim()
-    ? customers.filter(
-        c =>
-          c.name.includes(searchQuery) ||
-          c.phone.includes(normalizePhoneNumber(searchQuery))
-      )
-    : [];
+  const query = searchQuery.trim().toLowerCase();
+  const cleanPhoneQuery = normalizePhoneNumber(query);
+
+  const filteredCustomers = !query
+    ? customers
+    : customers.filter(c => {
+        const nameMatch = c.name ? c.name.toLowerCase().includes(query) : false;
+
+        const phoneRawMatch = c.phone ? c.phone.toLowerCase().includes(query) : false;
+        const phoneNormalizedMatch =
+          cleanPhoneQuery.length > 0 && c.phone
+            ? (c.phone.includes(cleanPhoneQuery) || normalizePhoneNumber(c.phone).includes(cleanPhoneQuery))
+            : false;
+        const phoneMatch = phoneRawMatch || phoneNormalizedMatch;
+
+        const custCode = (c as any).code || (c as any).customerCode || c.id || '';
+        const codeMatch = custCode ? custCode.toLowerCase().includes(query) : false;
+
+        return nameMatch || phoneMatch || codeMatch;
+      });
 
   const handleSelectCustomer = (cust: Customer) => {
     setSelectedCustomer(cust);
@@ -746,7 +759,7 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
                     />
                   </div>
 
-                  {filteredCustomers.length > 0 && (
+                  {filteredCustomers.length > 0 ? (
                     <div className="max-h-40 overflow-y-auto bg-[#161827] border border-[#2a2d42] rounded-xl divide-y divide-[#2a2d42]">
                       {filteredCustomers.map(cust => (
                         <div
@@ -759,7 +772,11 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
                         </div>
                       ))}
                     </div>
-                  )}
+                  ) : searchQuery.trim() ? (
+                    <div className="bg-[#161827] border border-[#2a2d42] rounded-xl p-3 text-center text-xs text-gray-400">
+                      لا يوجد عميل مطابق
+                    </div>
+                  ) : null}
                 </div>
               )}
             </div>

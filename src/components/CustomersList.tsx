@@ -161,11 +161,14 @@ export default function CustomersList({
     const q = searchQuery.toLowerCase().trim();
     const cleanSearchDigits = q.replace(/[^0-9]/g, "");
 
+    const custCode = (cust as any).code || (cust as any).customerCode || cust.id || "";
+
     const matchesSearch =
       !q ||
-      cust.name.toLowerCase().includes(q) ||
-      cust.phone.includes(q) ||
-      (cleanSearchDigits.length > 0 && normalizePhoneNumber(cust.phone).includes(cleanSearchDigits)) ||
+      (cust.name && cust.name.toLowerCase().includes(q)) ||
+      (cust.phone && cust.phone.toLowerCase().includes(q)) ||
+      (cleanSearchDigits.length > 0 && cust.phone && normalizePhoneNumber(cust.phone).includes(cleanSearchDigits)) ||
+      (custCode && custCode.toLowerCase().includes(q)) ||
       (cust.email && cust.email.toLowerCase().includes(q));
 
     const matchesType = filterType === "all" || cust.type === filterType;
