@@ -31,7 +31,7 @@ import DeleteSaleModal from "./DeleteSaleModal";
 import ProfitsSummary from "./partner-accounting/ProfitsSummary";
 import { canDeleteSale, canDeleteAccountingTransaction } from "../lib/authPermissions";
 import { getInvoiceCustomerName, getInvoiceCustomerBadge } from "../lib/customerDisplayHelper";
-import { db } from "../lib/db";
+import { db } from "../lib/data";
 
 interface AccountingProps {
   openInvoiceModal?: boolean;

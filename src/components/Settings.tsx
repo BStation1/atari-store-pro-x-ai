@@ -42,7 +42,8 @@ import {
   Radio,
   RotateCcw,
   Users,
-  HardDrive
+  HardDrive,
+  Activity
 } from "lucide-react";
 import { 
   useSettings,
@@ -56,11 +57,13 @@ import {
   useDeviceConditions,
   useCurrentUser
 } from "../hooks/useData";
-import { db } from "../lib/db";
-import { runCategoriesTestSuite } from "../lib/supabaseCategories";
-import { runProductsTestSuite } from "../lib/supabaseProducts";
-import { runCustomersAndSuppliersTestSuite } from "../lib/supabaseCustomersSuppliersTest";
-import { runInvoicesTestSuite } from "../lib/supabaseInvoicesTest";
+import {
+  db,
+  runCategoriesTestSuite,
+  runProductsTestSuite,
+  runCustomersAndSuppliersTestSuite,
+  runInvoicesTestSuite
+} from "../lib/data";
 import { runAccountingTestSuite } from "../lib/accountingEngineTest";
 import { runPartnerLedgerTestSuite } from "../lib/partnerLedgerEngineTest";
 import { runMonthlySettlementTestSuite } from "../lib/monthlySettlementEngineTest";
@@ -71,6 +74,7 @@ import { CustomerType, OperationalResetOptions, SystemResetSecurityLog } from ".
 import OperationalResetPanel from "./OperationalResetPanel";
 import BackupManagementPanel from "./BackupManagementPanel";
 import RepairTemplatesTab from "./RepairTemplatesTab";
+import SystemHealth from "./SystemHealth";
 
 export default function SettingsView() {
   const dialog = useDialog();
@@ -88,7 +92,7 @@ export default function SettingsView() {
   const { deviceConditions, addDeviceCondition, updateDeviceCondition, deleteDeviceCondition } = useDeviceConditions();
 
   // Settings Sub-Tabs
-  const [activeTab, setActiveTab] = useState<"general" | "categories" | "devices" | "pricing" | "configurators" | "repair-templates" | "system-reset" | "data-management" | "backup-management">("general");
+  const [activeTab, setActiveTab] = useState<"general" | "categories" | "devices" | "pricing" | "configurators" | "repair-templates" | "system-health" | "system-reset" | "data-management" | "backup-management">("general");
 
   // Loading and Error Handling States for System Settings Data
   const [isLoadingSettings, setIsLoadingSettings] = useState(true);
@@ -792,6 +796,17 @@ export default function SettingsView() {
           <HardDrive className="w-4 h-4 text-indigo-400" />
           <span>النسخ الاحتياطي للبيانات</span>
           {activeTab === "backup-management" && <span className="absolute bottom-0 right-0 left-0 h-0.5 bg-indigo-500"></span>}
+        </button>
+
+        <button
+          onClick={() => setActiveTab("system-health")}
+          className={`pb-3 text-sm font-bold transition-colors cursor-pointer relative flex items-center gap-1.5 ${
+            activeTab === "system-health" ? "text-emerald-400" : "text-gray-400 hover:text-white"
+          }`}
+        >
+          <Activity className="w-4 h-4 text-emerald-400" />
+          <span>حالة النظام والبيانات (System Health)</span>
+          {activeTab === "system-health" && <span className="absolute bottom-0 right-0 left-0 h-0.5 bg-emerald-500"></span>}
         </button>
       </div>
 
@@ -2196,6 +2211,11 @@ export default function SettingsView() {
           TAB 7: BACKUP MANAGEMENT
           ==================================================== */}
       {activeTab === "backup-management" && <BackupManagementPanel />}
+
+      {/* ====================================================
+          TAB 8: SYSTEM HEALTH & READ-ONLY DATA INSPECTOR
+          ==================================================== */}
+      {activeTab === "system-health" && <SystemHealth />}
     </div>
   );
 }

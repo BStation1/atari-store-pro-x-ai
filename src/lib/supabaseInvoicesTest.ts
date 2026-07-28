@@ -3,7 +3,7 @@ import {
   addInvoiceToSupabase,
   cancelInvoiceInSupabase,
   getLocalInvoicesBackup
-} from './supabaseInvoices';
+} from './data';
 import { PaymentMethod, User } from '../types';
 
 export interface InvoiceTestResult {

@@ -18,7 +18,7 @@ import {
   Info
 } from "lucide-react";
 import { SystemNotification } from "../types";
-import { db } from "../lib/db";
+import { db } from "../lib/data";
 
 interface NotificationsDrawerProps {
   isOpen: boolean;

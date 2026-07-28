@@ -1,4 +1,4 @@
-import { db } from "./db";
+import { db } from "./data";
 import { WorkOwnershipType, RepairOrder, RepairStatus, DeviceType } from "../types";
 
 function runPartnerAccountingTests() {

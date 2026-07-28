@@ -10,7 +10,7 @@ import {
   ShieldCheck,
   CheckCircle2
 } from "lucide-react";
-import { db } from "../lib/db";
+import { db } from "../lib/data";
 import { useCurrentUser } from "../hooks/useData";
 import { canResetOperationalData } from "../lib/authPermissions";
 

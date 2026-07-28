@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <rect width="200" height="200" rx="24" fill="#0b0e1a"/>
+  <!-- Left Joycon -->
+  <path d="M35,65 C35,60 40,55 50,55 L65,55 L65,145 L50,145 C40,145 35,140 35,135 Z" fill="#ef4444"/>
+  <!-- Screen -->
+  <rect x="65" y="55" width="70" height="90" fill="#020617" stroke="#334155" stroke-width="2"/>
+  <!-- Right Joycon -->
+  <path d="M135,55 L150,55 C160,55 165,60 165,65 L165,135 C165,140 160,145 150,145 L135,145 Z" fill="#06b6d4"/>
+  <circle cx="50" cy="75" r="5" fill="#7f1d1d"/>
+  <circle cx="150" cy="115" r="5" fill="#164e63"/>
+</svg>

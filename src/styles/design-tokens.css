@@ -1,0 +1,70 @@
+/**
+ * Design Tokens (Phase 3UI.0 - Premium Design System)
+ * Central visual identity values for dark theme, RTL alignment, typography, and surface colors.
+ * @license Apache-2.0
+ */
+
+:root {
+  /* Surface & Background Colors */
+  --app-bg: #070913;
+  --sidebar-bg: #0d0f19;
+  --card-bg: #141724;
+  --surface-elevated: #1b1e2e;
+  --border-color: rgba(255, 255, 255, 0.08);
+  --border-color-hover: rgba(255, 255, 255, 0.16);
+
+  /* Accent & Status Colors */
+  --color-primary: #6366f1; /* Indigo */
+  --color-secondary: #06b6d4; /* Cyan */
+  --color-success: #10b981; /* Emerald */
+  --color-warning: #f59e0b; /* Amber */
+  --color-danger: #f43f5e; /* Rose/Red */
+  --color-accent: #a855f7; /* Purple */
+
+  /* Text Colors */
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+
+  /* Spacing Scale */
+  --page-padding: 1.5rem;
+  --section-gap: 1.5rem;
+  --card-padding: 1.25rem;
+  --component-gap: 1rem;
+
+  /* Border Radii */
+  --card-radius: 1rem;
+  --button-radius: 0.75rem;
+  --input-radius: 0.75rem;
+
+  /* Shadows & FX */
+  --card-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.5);
+  --hover-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6);
+  --focus-glow: 0 0 0 2px rgba(99, 102, 241, 0.4);
+
+  /* Typography Sizes */
+  --font-page-title: 1.25rem;
+  --font-section-title: 1rem;
+  --font-card-title: 0.875rem;
+  --font-kpi-value: 1.5rem;
+  --font-body: 0.875rem;
+  --font-caption: 0.75rem;
+
+  /* Smooth Transitions */
+  --transition-default: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-sidebar: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-menu: background-color 0.15s ease, color 0.15s ease;
+}
+
+/* Glassmorphism Surface Utility */
+.glass-surface {
+  background: rgba(20, 23, 36, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* Focus Ring Customization */
+.focus-ring-custom:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-glow);
+}

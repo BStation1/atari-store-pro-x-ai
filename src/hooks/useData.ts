@@ -4,31 +4,25 @@
  */
 
 import { useState, useEffect } from "react";
-import { db } from "../lib/db";
-import { fetchOrMigrateStoreSettings } from "../lib/supabaseSettings";
 import {
+  db,
+  fetchOrMigrateStoreSettings,
   fetchOrMigrateCategories,
   getCategoriesFromSupabase,
   addCategoryToSupabase,
   updateCategoryInSupabase,
   deleteCategoryFromSupabase,
-  getLocalCategoriesBackup
-} from "../lib/supabaseCategories";
-import {
+  getLocalCategoriesBackup,
   fetchOrMigrateProducts,
   addProductToSupabase,
   updateProductInSupabase,
   deleteProductFromSupabase,
-  getLocalProductsBackup
-} from "../lib/supabaseProducts";
-import {
+  getLocalProductsBackup,
   fetchOrMigrateCustomers,
   addCustomerToSupabase,
   updateCustomerInSupabase,
   deleteCustomerFromSupabase,
-  getLocalCustomersBackup
-} from "../lib/supabaseCustomers";
-import {
+  getLocalCustomersBackup,
   fetchDeviceTypesFromSupabase,
   addDeviceTypeToSupabase,
   updateDeviceTypeInSupabase,
@@ -43,28 +37,22 @@ import {
   addRepairTemplateToSupabase,
   updateRepairTemplateInSupabase,
   deleteRepairTemplateInSupabase,
-  getRepairTemplatesSync
-} from "../lib/supabaseDeviceManager";
-import {
+  getRepairTemplatesSync,
   fetchOrMigrateSuppliers,
   addSupplierToSupabase,
   updateSupplierInSupabase,
   deleteSupplierFromSupabase,
-  getLocalSuppliersBackup
-} from "../lib/supabaseSuppliers";
-import {
+  getLocalSuppliersBackup,
   fetchOrMigrateInvoices,
   addInvoiceToSupabase,
   cancelInvoiceInSupabase,
-  getLocalInvoicesBackup
-} from "../lib/supabaseInvoices";
-import {
+  getLocalInvoicesBackup,
   fetchOrMigrateRepairOrders,
   addRepairOrderToSupabase,
   updateRepairOrderInSupabase,
   deleteRepairOrderFromSupabase,
   getLocalRepairOrdersBackup
-} from "../lib/supabaseRepairOrders";
+} from "../lib/data";
 import {
   Customer,
   RepairOrder,

@@ -193,6 +193,7 @@ export interface RepairDevice {
   model: string;
   serialNumber: string;
   color: string;
+  imageUrl?: string;
   accessories: string; // e.g., "كابل، ذراع، بدون علبة"
   issue: string; // Summary of customer complaint
   reportedFaults?: string[]; // Explicit array of customer reported faults/complaints

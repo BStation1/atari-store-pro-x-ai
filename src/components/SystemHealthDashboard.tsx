@@ -35,7 +35,7 @@ import {
 } from "../lib/systemHealthEngine";
 import { getAuditLogs, clearAuditLogs } from "../lib/auditLogger";
 import { getErrorLogs, clearErrorLogs } from "../lib/errorLogger";
-import { db } from "../lib/db";
+import { db } from "../lib/data";
 import { useDialog } from "../context/DialogContext";
 import { useCurrentUser } from "../hooks/useData";
 import { canResetOperationalData } from "../lib/authPermissions";

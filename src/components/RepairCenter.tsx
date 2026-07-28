@@ -47,7 +47,7 @@ import DeliverDeviceModal from "./DeliverDeviceModal";
 import ReopenOrderModal from "./ReopenOrderModal";
 import CancelWarrantyModal from "./CancelWarrantyModal";
 import { canDeliverDevice, canReopenDeliveredOrder, canCancelWarranty } from "../lib/authPermissions";
-import { db } from "../lib/db";
+import { db } from "../lib/data";
 import { 
   addTimelineEventHelper, 
   addAuditLogRecordHelper, 

@@ -3,15 +3,13 @@ import {
   addCustomerToSupabase,
   updateCustomerInSupabase,
   deleteCustomerFromSupabase,
-  getLocalCustomersBackup
-} from './supabaseCustomers';
-import {
+  getLocalCustomersBackup,
   fetchOrMigrateSuppliers,
   addSupplierToSupabase,
   updateSupplierInSupabase,
   deleteSupplierFromSupabase,
   getLocalSuppliersBackup
-} from './supabaseSuppliers';
+} from './data';
 import { CustomerType, User } from '../types';
 
 export interface TestResult {

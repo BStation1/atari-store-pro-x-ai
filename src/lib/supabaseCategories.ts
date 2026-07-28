@@ -1,4 +1,4 @@
-import { supabase } from './supabaseClient';
+import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { ProductCategory, Product } from '../types';
 
 const CATEGORIES_STORAGE_KEY = 'atari_categories';
@@ -129,6 +129,15 @@ export async function fetchOrMigrateCategories(): Promise<{
   const localCategories = getLocalCategoriesBackup();
   const localCount = localCategories.length;
 
+  if (!isSupabaseConfigured) {
+    return {
+      categories: localCategories,
+      localCount,
+      uploadedCount: 0,
+      totalSupabaseCount: localCategories.length,
+    };
+  }
+
   try {
     const response = await supabase
       .from('categories')
@@ -136,7 +145,7 @@ export async function fetchOrMigrateCategories(): Promise<{
       .order('sort_order', { ascending: true });
 
     if (response.error) {
-      console.error('⚠️ Could not fetch categories from Supabase:', {
+      console.warn('⚠️ Could not fetch categories from Supabase (using local fallback):', {
         code: response.error.code,
         message: response.error.message,
         details: response.error.details,
