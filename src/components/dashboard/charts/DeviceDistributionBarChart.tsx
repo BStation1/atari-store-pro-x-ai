@@ -47,7 +47,7 @@ export const DeviceDistributionBarChart: React.FC<DeviceDistributionBarChartProp
       <EmptyState
         title="لا توجد أجهزة مسجلة"
         description="سيتم عرض توزيع الأجهزة هنا فور إضافة طلبات صيانة جديدة."
-        icon={Gamepad2}
+        icon={<Gamepad2 className="w-8 h-8 text-slate-500" />}
       />
     );
   }

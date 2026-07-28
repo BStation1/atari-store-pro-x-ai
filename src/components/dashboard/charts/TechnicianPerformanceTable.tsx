@@ -19,7 +19,7 @@ export const TechnicianPerformanceTable: React.FC<TechnicianPerformanceTableProp
       <EmptyState
         title="لا توجد بيانات فنيين مسجلة"
         description="سيتم احتساب مؤشرات أداء الفنيين عند إسناد وإنجاز أجهزة الصيانة."
-        icon={Users}
+        icon={<Users className="w-8 h-8 text-slate-500" />}
       />
     );
   }

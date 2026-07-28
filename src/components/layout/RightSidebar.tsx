@@ -116,7 +116,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
               {!isCollapsed && (
                 <div className="min-w-0">
                   <h1 className="text-base font-extrabold text-white tracking-tight truncate font-sans">
-                    {companyName}
+                    {typeof companyName === 'string' ? companyName : String((companyName as any)?.companyName || (companyName as any)?.company_name || 'Atari Store')}
                   </h1>
                   <span className="text-[10px] font-mono text-indigo-400 block font-bold tracking-wider uppercase mt-0.5">
                     PRO X AI

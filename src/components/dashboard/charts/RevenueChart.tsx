@@ -55,7 +55,7 @@ export const RevenueChart: React.FC<RevenueChartProps> = ({ data }) => {
       <EmptyState
         title="لا توجد بيانات إيرادات للفترة المحددة"
         description="سيتم عرض تحليل الإيرادات هنا فور تسجيل عمليات بيع أو صيانة جديدة."
-        icon={DollarSign}
+        icon={<DollarSign className="w-8 h-8 text-slate-500" />}
       />
     );
   }

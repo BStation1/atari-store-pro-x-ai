@@ -20,7 +20,7 @@ export const ProfitBreakdownCard: React.FC<ProfitBreakdownCardProps> = ({ data }
       <EmptyState
         title="لا توجد بيانات أرباح للفترة المحددة"
         description="سيتم حساب الأرباح والمصروفات فور تنفيذ صيانة أو مبيعات."
-        icon={Landmark}
+        icon={<Landmark className="w-8 h-8 text-slate-500" />}
       />
     );
   }

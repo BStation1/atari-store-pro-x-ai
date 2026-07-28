@@ -44,7 +44,7 @@ export const RepairStatusDonutChart: React.FC<RepairStatusDonutChartProps> = ({ 
       <EmptyState
         title="لا توجد بيانات حالات صيانة"
         description="سيتم عرض التوزيع البياني هنا عند إدخال طلبات صيانة."
-        icon={Wrench}
+        icon={<Wrench className="w-8 h-8 text-slate-500" />}
       />
     );
   }

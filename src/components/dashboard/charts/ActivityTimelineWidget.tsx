@@ -19,7 +19,7 @@ export const ActivityTimelineWidget: React.FC<ActivityTimelineWidgetProps> = ({ 
       <EmptyState
         title="لا يوجد سجل أنشطة مؤخراً"
         description="سيتم تتبع وتوثيق جميع عمليات الصيانة والمبيعات في التايم لاين تلقائياً."
-        icon={History}
+        icon={<History className="w-8 h-8 text-slate-500" />}
       />
     );
   }
