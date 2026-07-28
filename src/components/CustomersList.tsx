@@ -19,7 +19,8 @@ import {
   Download,
   CheckCircle,
   Briefcase,
-  Loader2
+  Loader2,
+  UserCheck
 } from "lucide-react";
 import { useDialog } from "../context/DialogContext";
 import { useCustomers, useRepairOrders, useInvoices } from "../hooks/useData";
@@ -156,8 +157,25 @@ export default function CustomersList({
     }
   };
 
+  const [categoryTab, setCategoryTab] = useState<'REGISTERED' | 'GUEST'>('REGISTERED');
+
+  // Helper to identify guest customers
+  const isGuestCustomer = (cust: Customer) =>
+    Boolean(
+      cust.isGuest === true ||
+      cust.customerType === 'GUEST' ||
+      cust.type === CustomerType.Guest ||
+      cust.name === 'عميل غير مسجل' ||
+      (cust.notes && cust.notes.includes('عميل ينشأ تلقائياً لأمر الصيانة'))
+    );
+
+  const registeredCustomers = customers.filter(c => !isGuestCustomer(c));
+  const guestCustomers = customers.filter(c => isGuestCustomer(c));
+
+  const targetList = categoryTab === 'REGISTERED' ? registeredCustomers : guestCustomers;
+
   // Filter list
-  const filteredCustomers = customers.filter(cust => {
+  const filteredCustomers = targetList.filter(cust => {
     const q = searchQuery.toLowerCase().trim();
     const cleanSearchDigits = q.replace(/[^0-9]/g, "");
 
@@ -175,10 +193,10 @@ export default function CustomersList({
     return matchesSearch && matchesType;
   });
 
-  // Calculate stats
-  const vipCount = customers.filter(c => c.type === CustomerType.VIP).length;
-  const shopCount = customers.filter(c => c.type === CustomerType.Shop).length;
-  const totalBalance = customers.reduce((sum, c) => sum + (c.balance || 0), 0);
+  // Calculate stats strictly for registered customers
+  const vipCount = registeredCustomers.filter(c => c.type === CustomerType.VIP).length;
+  const shopCount = registeredCustomers.filter(c => c.type === CustomerType.Shop).length;
+  const totalBalance = registeredCustomers.reduce((sum, c) => sum + (c.balance || 0), 0);
 
   // Customer transactions calculations inside the Drawer
   const getCustomerRepairs = (custID: string): RepairOrder[] => {
@@ -231,7 +249,7 @@ export default function CustomersList({
           </div>
           <div>
             <p className="text-gray-400 text-[11px]">إجمالي العملاء المسجلين</p>
-            <h4 className="text-lg font-bold text-white mt-0.5">{customers.length}</h4>
+            <h4 className="text-lg font-bold text-white mt-0.5">{registeredCustomers.length}</h4>
           </div>
         </div>
 
@@ -255,6 +273,28 @@ export default function CustomersList({
           </div>
         </div>
       </div>
+
+      {/* 2.5 Tab Switcher for Registered vs Guest Customers */}
+      {guestCustomers.length > 0 && (
+        <div className="flex border-b border-[#2a2d42] gap-4 pt-2">
+          <button
+            onClick={() => setCategoryTab('REGISTERED')}
+            className={`pb-3 px-3 text-xs font-bold transition-all relative cursor-pointer ${
+              categoryTab === 'REGISTERED' ? 'text-indigo-400 border-b-2 border-indigo-500' : 'text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            دليل العملاء المسجلين ({registeredCustomers.length})
+          </button>
+          <button
+            onClick={() => setCategoryTab('GUEST')}
+            className={`pb-3 px-3 text-xs font-bold transition-all relative cursor-pointer ${
+              categoryTab === 'GUEST' ? 'text-amber-400 border-b-2 border-amber-500' : 'text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            سجلات الزوار غير المسجلين ({guestCustomers.length})
+          </button>
+        </div>
+      )}
 
       {/* 3. Search & Filters Bar */}
       <div className="bg-[#11131e] border border-[#2a2d42] p-4 rounded-xl flex flex-col md:flex-row justify-between items-center gap-4">
@@ -363,7 +403,35 @@ export default function CustomersList({
                       {new Date(cust.createdAt).toLocaleDateString("ar-EG")}
                     </td>
                     <td className="py-3.5 px-4 text-center" onClick={e => e.stopPropagation()}>
-                      <div className="flex justify-center gap-2">
+                      <div className="flex justify-center items-center gap-2">
+                        {isGuestCustomer(cust) && (
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              try {
+                                await updateCustomer({
+                                  ...cust,
+                                  isGuest: false,
+                                  customerType: 'REGISTERED',
+                                  type: CustomerType.Individual,
+                                  notes: cust.notes ? `${cust.notes} (تم تحويله إلى عميل دائم)` : 'تم تحويله إلى عميل دائم'
+                                });
+                                await dialog.alert({
+                                  title: 'تم الحفظ كعميل دائم',
+                                  message: `تم تحويل العميل (${cust.name}) إلى عميل دائم وإضافته إلى دليل العملاء المسجلين بنجاح.`,
+                                  variant: 'success'
+                                });
+                              } catch (err: any) {
+                                await dialog.alert({ message: err?.message || 'فشل تحويل العميل', variant: 'error' });
+                              }
+                            }}
+                            title="حفظ كعميل دائم"
+                            className="px-2.5 py-1 text-[11px] font-bold text-amber-300 bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20 rounded-lg transition-colors cursor-pointer flex items-center gap-1"
+                          >
+                            <UserCheck className="w-3.5 h-3.5" />
+                            حفظ كعميل دائم
+                          </button>
+                        )}
                         <button
                           onClick={e => handleOpenEditModal(cust, e)}
                           title="تعديل العميل"

@@ -73,6 +73,8 @@ export interface Customer {
   balance: number; // outstanding balance
   isActive?: boolean;
   isArchived?: boolean;
+  isGuest?: boolean;
+  customerType?: 'REGISTERED' | 'GUEST';
 }
 
 export type WarrantyDurationOption =

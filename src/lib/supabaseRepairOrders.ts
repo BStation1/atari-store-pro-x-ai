@@ -296,10 +296,9 @@ export async function addRepairOrderToSupabase(
   }
 
   try {
-    // Step 1: Ensure customer ID exists in Supabase if possible
+    // Step 1: Link to existing registered customer if phone matches, otherwise keep as guest without inserting into customers directory
     if (!targetCustomerId) {
       const phoneToSearch = orderData.guestCustomerPhone || orderData.customerPhoneSnapshot || "";
-      const nameToSearch = orderData.guestCustomerName || orderData.customerNameSnapshot || "عميل غير مسجل";
 
       if (phoneToSearch) {
         try {
@@ -313,30 +312,6 @@ export async function addRepairOrderToSupabase(
           }
         } catch (e) {
           console.warn("Could not search customer by phone in Supabase:", e);
-        }
-      }
-
-      if (!targetCustomerId) {
-        try {
-          const newCustPayload = {
-            name: nameToSearch,
-            phone: phoneToSearch || "00000000000",
-            customer_type: 'REGULAR',
-            notes: orderData.guestCustomerNote || 'عميل ينشأ تلقائياً لأمر الصيانة',
-            created_at: new Date().toISOString()
-          };
-
-          const { data: createdCust } = await supabase
-            .from('customers')
-            .insert(newCustPayload)
-            .select('id')
-            .maybeSingle();
-
-          if (createdCust?.id) {
-            targetCustomerId = createdCust.id;
-          }
-        } catch (e) {
-          console.warn("⚠️ Exception inserting guest customer in Supabase:", e);
         }
       }
     }

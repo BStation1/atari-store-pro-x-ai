@@ -106,6 +106,14 @@ export function mapRowToCustomer(row: Record<string, any>): Customer {
 
   const cleanNotes = meta.notes !== undefined ? meta.notes : (typeof row.notes === 'string' && !row.notes.startsWith('{') ? row.notes : '');
 
+  const isGuest = Boolean(
+    meta.isGuest === true ||
+    meta.customerType === 'GUEST' ||
+    row.customer_type === 'GUEST' ||
+    row.name === 'عميل غير مسجل' ||
+    (typeof cleanNotes === 'string' && cleanNotes.includes('عميل ينشأ تلقائياً لأمر الصيانة'))
+  );
+
   return {
     id: String(row.id || ''),
     name: row.name || '',
@@ -118,19 +126,24 @@ export function mapRowToCustomer(row: Record<string, any>): Customer {
     updatedAt: row.updated_at || meta.updatedAt,
     balance: typeof row.balance === 'number' ? row.balance : Number(row.balance || 0),
     isActive: meta.isActive !== false,
-    isArchived: Boolean(meta.isArchived || false)
+    isArchived: Boolean(meta.isArchived || false),
+    isGuest,
+    customerType: isGuest ? 'GUEST' : 'REGISTERED'
   };
 }
 
 export function mapCustomerToRow(c: Partial<Customer>): Record<string, any> {
   const uiType = c.type || CustomerType.Individual;
   const enumType = CUSTOMER_TYPE_TO_DB[uiType] || 'REGULAR';
+  const isGuest = Boolean(c.isGuest || c.customerType === 'GUEST' || c.type === CustomerType.Guest);
 
   const meta = {
     type: uiType,
     notes: c.notes || '',
     isActive: c.isActive !== false,
     isArchived: Boolean(c.isArchived),
+    isGuest,
+    customerType: isGuest ? 'GUEST' : 'REGISTERED',
     createdAt: c.createdAt || new Date().toISOString(),
     email: c.email || '',
     address: c.address || '',
