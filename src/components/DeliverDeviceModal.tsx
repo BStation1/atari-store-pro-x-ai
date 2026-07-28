@@ -145,7 +145,8 @@ export default function DeliverDeviceModal({
   };
 
   const handleCopyTrackingLink = () => {
-    const trackingLink = `https://atari-store-pro-x.web.app/track?orderId=${order.id}`;
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const trackingLink = `${origin}/track?token=${order.trackingToken || ""}`;
     navigator.clipboard.writeText(trackingLink);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 3000);

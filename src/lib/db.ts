@@ -13,6 +13,7 @@ import {
   getRepairTemplatesSync, fetchRepairTemplatesFromSupabase, addRepairTemplateToSupabase, updateRepairTemplateInSupabase, deleteRepairTemplateInSupabase
 } from './supabaseDeviceManager';
 import { canDeliverDevice, canReopenDeliveredOrder, canDeleteSale, canDeleteAccountingTransaction, canCancelWarranty, canResetOperationalData } from "./authPermissions";
+import { generateSecureTrackingToken } from "./trackingToken";
 import {
   Customer,
   CustomerType,
@@ -428,7 +429,7 @@ export const db = {
       workOwnershipType: resolvedOwnership,
       id: `ATR-${maxNum}`,
       receivedDate: new Date().toISOString(),
-      trackingToken: `TRK-${maxNum}-${Math.random().toString(36).substring(2, 5).toUpperCase()}`
+      trackingToken: generateSecureTrackingToken()
     };
 
     // Unshift to put latest on top

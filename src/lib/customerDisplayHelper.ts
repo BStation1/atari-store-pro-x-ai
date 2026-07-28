@@ -1,4 +1,44 @@
 import { Customer, Invoice } from '../types';
+import { getDeviceTypesSync, getDeviceModelsSync } from './supabaseDeviceManager';
+
+export function getDeviceTypeName(typeRaw?: string): string {
+  if (!typeRaw) return '';
+  const trimmed = typeRaw.trim();
+  if (trimmed.startsWith('DT-') || trimmed.length > 10) {
+    const types = getDeviceTypesSync();
+    const found = types.find((t) => t.id === trimmed);
+    if (found) return found.nameAr || found.nameEn || '';
+    return ''; // Do not leak raw internal IDs if not found in catalog
+  }
+  return trimmed;
+}
+
+export function getDeviceModelName(modelRaw?: string): string {
+  if (!modelRaw) return '';
+  const trimmed = modelRaw.trim();
+  if (trimmed.startsWith('DM-') || trimmed.length > 10) {
+    const models = getDeviceModelsSync();
+    const found = models.find((m) => m.id === trimmed);
+    if (found) return found.nameAr || found.modelCode || found.nameEn || '';
+    return ''; // Do not leak raw internal IDs if not found in catalog
+  }
+  return trimmed;
+}
+
+export function getDeviceDisplayName(device?: { type?: string; model?: string }): string {
+  if (!device) return 'جهاز صيانة';
+  const tName = getDeviceTypeName(device.type);
+  const mName = getDeviceModelName(device.model);
+
+  if (tName && mName) {
+    if (mName.toLowerCase().includes(tName.toLowerCase()) || tName.toLowerCase().includes(mName.toLowerCase())) {
+      return mName;
+    }
+    return `${tName} ${mName}`.trim();
+  }
+
+  return tName || mName || 'جهاز صيانة';
+}
 
 export function getInvoiceCustomerName(
   invoice: Partial<Invoice> | null | undefined,

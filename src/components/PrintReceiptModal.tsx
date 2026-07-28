@@ -14,7 +14,8 @@ import {
   getInvoiceCustomerBadge,
   getInvoicePaymentMethodLabel,
   getCustomerNameHelper,
-  getCustomerPhoneHelper
+  getCustomerPhoneHelper,
+  getDeviceDisplayName
 } from "../lib/customerDisplayHelper";
 
 interface PrintReceiptModalProps {
@@ -163,7 +164,8 @@ export default function PrintReceiptModal({
   };
 
   // Safe QR generation link via public dynamic API
-  const trackingLink = `https://atari-store-pro-x.web.app/track?orderId=${order?.id || ""}`;
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const trackingLink = `${origin}/track?token=${order?.trackingToken || ""}`;
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(trackingLink)}`;
 
   return (
@@ -278,7 +280,7 @@ export default function PrintReceiptModal({
                   order.devices.map(dev => (
                     <tr key={dev.id} className="border-b border-gray-100">
                       <td className="py-1">
-                        <span className="font-bold">{dev.type}</span> - {dev.model}
+                        <span className="font-bold">{getDeviceDisplayName(dev)}</span>
                         <div className="text-[9px] text-gray-700 leading-snug">العطل: {dev.issue}</div>
                       </td>
                       <td className="py-1 text-center font-bold">١</td>

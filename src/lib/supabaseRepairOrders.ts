@@ -1,6 +1,7 @@
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { RepairOrder, RepairDevice, RepairStatus, WorkOwnershipType, PaymentMethod, User, RepairTimelineEvent } from '../types';
 import { db } from './db';
+import { generateSecureTrackingToken } from './trackingToken';
 
 const REPAIR_ORDERS_STORAGE_KEY = 'atari_repair_orders';
 
@@ -143,7 +144,7 @@ export function mapRowToRepairOrder(row: Record<string, any>): RepairOrder {
     completionDate: meta.completionDate,
     notes: meta.notes || (typeof row.notes === 'string' && !row.notes.startsWith('{') ? row.notes : ''),
     isPaid: Boolean(meta.isPaid || row.status === 'DELIVERED'),
-    trackingToken: row.tracking_token || meta.trackingToken || `TRK-${orderId}`,
+    trackingToken: row.tracking_token || meta.trackingToken || generateSecureTrackingToken(),
     workOwnershipType: resolvedOwnership,
     jobType: resolvedOwnership,
     workOwnerPartnerId: meta.workOwnerPartnerId,
@@ -247,7 +248,7 @@ export async function addRepairOrderToSupabase(
 
   const generatedId = `ATR-${maxNum}`;
   const nowIso = new Date().toISOString();
-  const generatedToken = `TRK-${maxNum}-${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
+  const generatedToken = generateSecureTrackingToken();
   const resolvedOwnership = orderData.jobType || orderData.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
 
   const initialTimeline: RepairTimelineEvent[] = Array.isArray(orderData.timelineEvents) && orderData.timelineEvents.length > 0 

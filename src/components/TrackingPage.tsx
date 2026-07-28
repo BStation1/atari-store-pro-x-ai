@@ -33,7 +33,7 @@ import {
 import { useRepairOrders, useCustomers, useSettings } from "../hooks/useData";
 import { RepairStatus, RepairOrder, Customer } from "../types";
 
-import { getCustomerNameHelper, getCustomerPhoneHelper, getCustomerBadgeHelper } from "../lib/customerDisplayHelper";
+import { getCustomerNameHelper, getCustomerPhoneHelper, getCustomerBadgeHelper, getDeviceDisplayName } from "../lib/customerDisplayHelper";
 import { PhoneDisplay } from "./PhoneDisplay";
 
 interface TrackingPageProps {
@@ -53,7 +53,7 @@ export default function TrackingPage({ initialQuery }: TrackingPageProps) {
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const [copiedToast, setCopiedToast] = useState(false);
 
-  // Verification helper function
+  // Verification helper function - Enforces BUG-005 security (Phone verification mandatory)
   const verifyAndExecuteSearch = (searchOrder: string, searchPhone: string, directToken?: string) => {
     setHasSearched(true);
     setVerificationError(null);
@@ -63,28 +63,32 @@ export default function TrackingPage({ initialQuery }: TrackingPageProps) {
     const cleanPhoneDigits = cleanPhone.replace(/\D/g, "");
     const cleanToken = directToken?.trim().toLowerCase();
 
-    if (!cleanOrder && !cleanPhone && !cleanToken) {
-      setVerificationError("يرجى إدخال رقم الطلب ورقم الهاتف المسجل معًا للتحقق من هوية صاحب الجهاز.");
+    const targetCode = cleanToken || cleanOrder;
+
+    if (!targetCode) {
+      setVerificationError("يرجى إدخال رقم الطلب أو كود التتبع ورقم الهاتف المسجل معًا للتحقق من هوية صاحب الجهاز.");
+      setMatchedOrders([]);
+      setSearchedOrder(null);
+      return;
+    }
+
+    if (!cleanPhoneDigits) {
+      setVerificationError("لأسباب أمنية، يرجى إدخال رقم الهاتف المسجل بالإيصال لفتح بيانات الصيانة.");
       setMatchedOrders([]);
       setSearchedOrder(null);
       return;
     }
 
     const verified = orders.filter(order => {
-      // Direct token verification (from generated customer tracking link)
-      if (cleanToken && order.trackingToken && order.trackingToken.toLowerCase() === cleanToken) {
-        return true;
-      }
-
-      // Check order ID or device code or tracking token match
+      // Order ID / Token / Serial match
       const isOrderMatch =
-        order.id.toLowerCase() === cleanOrder ||
-        order.trackingToken?.toLowerCase() === cleanOrder ||
-        order.devices.some(d => d.deviceCode?.toLowerCase() === cleanOrder || (d.serialNumber && d.serialNumber.toLowerCase() === cleanOrder));
+        order.id.toLowerCase() === targetCode ||
+        (order.trackingToken && order.trackingToken.toLowerCase() === targetCode) ||
+        order.devices.some(d => d.deviceCode?.toLowerCase() === targetCode || (d.serialNumber && d.serialNumber.toLowerCase() === targetCode));
 
       if (!isOrderMatch) return false;
 
-      // Check customer phone match for strict double-factor security
+      // Mandatory customer phone match for strict security
       const custPhone = getCustomerPhoneHelper(order, customers);
       if (!custPhone) return false;
 
@@ -104,22 +108,19 @@ export default function TrackingPage({ initialQuery }: TrackingPageProps) {
       setMatchedOrders([]);
       setSearchedOrder(null);
 
-      // Check if order exists to give specific error
-      const existsWithoutPhoneMatch = orders.some(
-        o => o.id.toLowerCase() === cleanOrder || o.trackingToken?.toLowerCase() === cleanOrder
+      const existsOrder = orders.some(
+        o => o.id.toLowerCase() === targetCode || (o.trackingToken && o.trackingToken.toLowerCase() === targetCode)
       );
 
-      if (existsWithoutPhoneMatch && cleanOrder && !cleanPhone) {
-        setVerificationError("رقم الطلب موجود، لكن لأسباب أمنية يتعين عليك إدخال رقم الهاتف المسجل لتأكيد الهوية.");
-      } else if (existsWithoutPhoneMatch) {
-        setVerificationError("رقم الهاتف المرفق لا يتطابق مع بيانات هذا الطلب. يرجى التأكد من رقم الهاتف المدون بالإيصال.");
+      if (existsOrder) {
+        setVerificationError("رقم الهاتف المدخل لا يتطابق مع بيانات هذا الطلب. يرجى التأكد من رقم الهاتف المدون بالإيصال.");
       } else {
         setVerificationError("لم نتمكن من العثور على أي طلب صيانة يطابق البيانات المدخلة. يرجى التحقق وإعادة المحاولة.");
       }
     }
   };
 
-  // Auto-search on mount if query provided via prop or URL params
+  // Auto-fill query on mount if provided in URL parameters
   useEffect(() => {
     if (typeof window !== "undefined") {
       const urlParams = new URLSearchParams(window.location.search);
@@ -127,11 +128,13 @@ export default function TrackingPage({ initialQuery }: TrackingPageProps) {
       const queryPhone = urlParams.get("phone") || urlParams.get("mobile") || "";
       const queryToken = urlParams.get("token") || "";
 
-      if (queryId) setOrderId(queryId);
+      const activeCode = queryToken || queryId;
+      if (activeCode) setOrderId(activeCode);
       if (queryPhone) setPhoneInput(queryPhone);
 
-      if ((queryId && queryPhone) || queryToken || (initialQuery && initialQuery.length > 3)) {
-        verifyAndExecuteSearch(queryId || initialQuery || "", queryPhone, queryToken);
+      // Only auto-execute search if BOTH order/token AND phone are provided in URL
+      if (activeCode && queryPhone) {
+        verifyAndExecuteSearch(activeCode, queryPhone);
       }
     }
   }, [initialQuery, orders]);
@@ -141,13 +144,11 @@ export default function TrackingPage({ initialQuery }: TrackingPageProps) {
     verifyAndExecuteSearch(orderId, phoneInput);
   };
 
-  // Get full customer direct tracking link
+  // Get full customer direct tracking link (BUG-006)
   const getCustomerTrackingLink = (order: RepairOrder): string => {
     const origin = typeof window !== "undefined" ? window.location.origin : "";
-    const cust = customers.find(c => c.id === order.customerId);
-    const phoneParam = cust?.phone ? `&phone=${encodeURIComponent(cust.phone)}` : "";
-    const tokenParam = order.trackingToken ? `&token=${encodeURIComponent(order.trackingToken)}` : "";
-    return `${origin}/?view=tracking&id=${order.id}${phoneParam}${tokenParam}`;
+    const token = order.trackingToken || "";
+    return `${origin}/track?token=${token}`;
   };
 
   // Helper to copy tracking URL to clipboard
@@ -500,7 +501,7 @@ export default function TrackingPage({ initialQuery }: TrackingPageProps) {
                         رمز الجهاز: {device.deviceCode || `${searchedOrder.id}-${idx + 1}`}
                       </span>
                       <h5 className="text-sm font-bold text-white mt-0.5">
-                        {device.type} ({device.model})
+                        {getDeviceDisplayName(device)}
                       </h5>
                     </div>
                     <span className="text-xs font-bold text-emerald-400 bg-emerald-950/40 border border-emerald-500/20 px-3 py-1 rounded-xl">

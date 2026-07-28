@@ -40,7 +40,7 @@ import {
 } from "lucide-react";
 import { useRepairOrders, useCustomers, useProducts, useSettings, useInvoices, useCurrentUser } from "../hooks/useData";
 import { RepairOrder, RepairDevice, RepairStatus, DeviceType, PaymentMethod, WorkOwnershipType, User as UserType, QUICK_FAULTS_LIST, SelectedRepairItem } from "../types";
-import { getCustomerNameHelper, getCustomerPhoneHelper, getCustomerBadgeHelper } from "../lib/customerDisplayHelper";
+import { getCustomerNameHelper, getCustomerPhoneHelper, getCustomerBadgeHelper, getDeviceDisplayName } from "../lib/customerDisplayHelper";
 import { PhoneDisplay } from "./PhoneDisplay";
 import PrintReceiptModal from "./PrintReceiptModal";
 import DeliverDeviceModal from "./DeliverDeviceModal";
@@ -135,7 +135,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
         reason: customReason || "مطلوب موافقة العميل على تفاصيل وتكلفة الصيانة",
         additionalCost: 0,
         newTotal: order.finalRepairPrice ?? order.totalEstimatedCost,
-        repairedItems: order.devices?.map(d => `${d.type} (${d.model}): ${d.issue}`).join(" + "),
+        repairedItems: order.devices?.map(d => `${getDeviceDisplayName(d)}: ${d.issue || "إصلاح بنجاح"}`).join(" + "),
         warrantyInfo: order.warrantyDays ? `ضمان لمدة ${order.warrantyDays} يوم` : "حسب الشروط المدونة بالإيصال"
       }
     });
@@ -778,7 +778,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
         customerId: updatedOrder.customerId,
         orderId: updatedOrder.id,
         items: updatedOrder.devices.map(d => ({
-          name: `صيانة ${d.type} (${d.model}) - ${d.issue}`,
+          name: `صيانة ${getDeviceDisplayName(d)} - ${d.issue}`,
           quantity: 1,
           price: d.estimatedCost,
           costPrice: d.partsCost || 0
@@ -917,7 +917,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                   <div className="space-y-1 mt-2 border-t border-[#2a2d42]/60 pt-2">
                     {order.devices.map((d, i) => (
                       <div key={i} className="flex justify-between items-center text-[11px] text-gray-300">
-                        <span className="font-semibold">{d.type} - {d.model}</span>
+                        <span className="font-semibold">{getDeviceDisplayName(d)}</span>
                         <span className="text-emerald-400 font-mono font-bold">{d.finalRepairPrice ?? d.estimatedCost} ج.م</span>
                       </div>
                     ))}

@@ -4,6 +4,8 @@
  */
 
 import { RepairOrder } from "../types";
+import { getDeviceDisplayName } from "./customerDisplayHelper";
+import { generateSecureTrackingToken } from "./trackingToken";
 
 export function formatEgyptianPhoneForWhatsApp(phone: string): string {
   if (!phone || typeof phone !== "string") return "";
@@ -120,13 +122,23 @@ export function markNotificationAsSent(dedupKey: string): void {
   }
 }
 
+/**
+ * Clean multi-byte variation selectors and zero-width characters that cause replacement chars (\uFFFD) in WhatsApp Web/App
+ */
+export function sanitizeWhatsAppMessage(text: string): string {
+  return text
+    .replace(/[\uFE0F\uFE0E\u200B\u200D\uFFFD]/g, "")
+    .trim();
+}
+
 export function openWhatsAppMessage(phone: string, text: string): boolean {
   const formatted = formatEgyptianPhoneForWhatsApp(phone);
   if (!formatted) {
     console.warn("رقم الهاتف غير صالح لإرسال رسالة WhatsApp");
     return false;
   }
-  const url = `https://wa.me/${formatted}?text=${encodeURIComponent(text)}`;
+  const cleanText = sanitizeWhatsAppMessage(text);
+  const url = `https://wa.me/${formatted}?text=${encodeURIComponent(cleanText)}`;
   if (typeof window !== "undefined" && window.open) {
     const win = window.open(url, "_blank");
     return Boolean(win);
@@ -155,9 +167,26 @@ export async function sendRepairNotificationWorkflow(params: {
   const phone = formatEgyptianPhoneForWhatsApp(rawPhone);
 
   const orderId = order.id || "N/A";
-  const devicesText =
-    order.devices?.map(d => `${d.type || ""} ${d.model || ""}`.trim()).join(" + ") || "الجهاز";
-  const trackingUrl = typeof window !== "undefined" ? `${window.location.origin}/track?id=${orderId}` : `/track?id=${orderId}`;
+
+  // Build clean device names without leaking raw internal IDs
+  const deviceList = (order.devices && order.devices.length > 0)
+    ? order.devices.map(d => getDeviceDisplayName(d))
+    : ["جهاز صيانة"];
+
+  const devicesHeader = deviceList.length > 1
+    ? `🎮 الأجهزة:\n• ${deviceList.join("\n• ")}`
+    : `🎮 الجهاز:\n${deviceList[0]}`;
+
+  // Fault description
+  const faultsList = (order.devices && order.devices.length > 0)
+    ? order.devices.map(d => d.issue || "فحص ومعاينة فنية").filter(Boolean)
+    : ["فحص ومعاينة فنية"];
+  const faultsText = faultsList.join(" + ");
+
+  // Tracking token URL (BUG-006)
+  const token = order.trackingToken || generateSecureTrackingToken();
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const trackingUrl = `${origin}/track?token=${token}`;
 
   // Deduplication Key Construction
   let dedupStateKey = `${orderId}_${template}`;
@@ -195,21 +224,31 @@ export async function sendRepairNotificationWorkflow(params: {
     };
   }
 
-  // Generate Message Body according to Template
+  // Cost handling (Only show estimated cost if > 0)
+  const estCost = extra?.newTotal ?? order.totalEstimatedCost ?? 0;
+  const costSection = estCost > 0 ? `💰 التكلفة المتوقعة:\n${estCost} ج.م\n\n` : "";
+
+  // Generate Message Body according to Template (BUG-007)
   let messageText = "";
 
   switch (template) {
     case "REPAIR_ORDER_CREATED": {
-      messageText = `مرحباً ${name} 👋
-تم استلام طلب الصيانة رقم [${orderId}] بنجاح لدى مركز الصيانة.
-📱 الجهاز: ${devicesText}
-💵 التكلفة المقدرة: ${order.totalEstimatedCost || 0} ج.م
-💳 المدفوع مقدمًا: ${order.advancePayment || 0} ج.م
+      messageText = `🎉 مرحبًا ${name}
 
-🔗 رابط التتبع الفوري:
+تم استلام جهازك بنجاح في Atari Store.
+
+📋 رقم الطلب:
+${orderId}
+
+${devicesHeader}
+
+🔧 العطل:
+${faultsText}
+
+${costSection}🔗 متابعة حالة الصيانة:
 ${trackingUrl}
 
-شكراً لثقتكم بنا! ✨`;
+شكراً لثقتك بنا ❤️`;
       break;
     }
 
@@ -218,35 +257,49 @@ ${trackingUrl}
       const addCost = extra?.additionalCost ?? 0;
       const newTot = extra?.newTotal ?? order.totalEstimatedCost;
 
-      messageText = `مرحباً ${name} 👋
-بخصوص طلب الصيانة رقم [${orderId}] للجهاز (${devicesText}):
+      messageText = `مرحبًا ${name} 👋
+
+بخصوص طلب الصيانة رقم [${orderId}]:
+${devicesHeader}
+
 يلزم موافقتك على المستجدات التالية:
 📌 السبب: ${reason}
 💰 التكلفة الإضافية: ${addCost} ج.م
 💵 الإجمالي الجديد: ${newTot} ج.م
 
 🔗 رابط المتابعة والموافقة:
-${trackingUrl}`;
+${trackingUrl}
+
+شكراً لتعاملك معنا ❤️`;
       break;
     }
 
     case "READY_FOR_PICKUP": {
       const repaired =
         extra?.repairedItems ||
-        order.devices?.map(d => d.issue || d.type).join(" + ") ||
+        faultsText ||
         "تمت الصيانة بنجاح";
       const finalPrice = extra?.newTotal ?? order.finalRepairPrice ?? order.totalEstimatedCost ?? 0;
       const paid = order.advancePayment || 0;
       const remaining = Math.max(0, finalPrice - paid);
 
-      messageText = `مرحباً ${name} 🎉
-جهازك (${devicesText}) رقم الطلب [${orderId}] أصبح **جاهزاً للتسليم** الآن!
-🛠️ ما تم إصلاحه: ${repaired}
+      messageText = `🎉 مرحبًا ${name}
+
+طلب الصيانة رقم [${orderId}] أصبح **جاهزاً للتسليم** الآن!
+
+${devicesHeader}
+
+🛠️ ما تم إصلاحه:
+${repaired}
+
 💰 السعر النهائي: ${finalPrice} ج.م
 💳 المدفوع: ${paid} ج.م
 💵 المتبقي للتحصيل: ${remaining} ج.م
 
-🔗 رابط التتبع: ${trackingUrl}`;
+🔗 متابعة حالة الصيانة:
+${trackingUrl}
+
+شكراً لثقتك بنا ❤️`;
       break;
     }
 
@@ -257,20 +310,26 @@ ${trackingUrl}`;
           ? `ضمان لمدة ${order.warrantyDays} يوم`
           : "الضمان حسب الشروط المدونة بالإيصال");
 
-      messageText = `مرحباً ${name} ✨
-شكراً لتعاملك معنا! تم تسليم طلب الصيانة رقم [${orderId}] بنجاح.
-📱 الجهاز: ${devicesText}
-🛡️ معلومات الضمان: ${warranty}
+      messageText = `✨ مرحبًا ${name}
 
-نتمنى لك تجربة استخدام ممتازة.`;
+شكراً لتعاملك معنا! تم تسليم طلب الصيانة رقم [${orderId}] بنجاح.
+
+${devicesHeader}
+
+🛡️ معلومات الضمان:
+${warranty}
+
+نتمنى لك تجربة استخدام ممتازة ❤️`;
       break;
     }
   }
 
+  const sanitizedMessage = sanitizeWhatsAppMessage(messageText);
+
   // Attempt to send (open WhatsApp window)
   try {
     if (autoOpenWindow) {
-      const opened = openWhatsAppMessage(phone, messageText);
+      const opened = openWhatsAppMessage(phone, sanitizedMessage);
       if (!opened) {
         throw new Error("تعذر فتح النافذة المباشرة للواتس آب");
       }
