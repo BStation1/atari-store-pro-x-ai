@@ -75,6 +75,7 @@ import OperationalResetPanel from "./OperationalResetPanel";
 import BackupManagementPanel from "./BackupManagementPanel";
 import RepairTemplatesTab from "./RepairTemplatesTab";
 import SystemHealth from "./SystemHealth";
+import { getWhatsAppLogs, clearWhatsAppLogs, WhatsAppLogEntry } from "../lib/whatsapp";
 
 export default function SettingsView() {
   const dialog = useDialog();
@@ -159,6 +160,7 @@ export default function SettingsView() {
   const [whatsAppTemplateReady, setWhatsAppTemplateReady] = useState(settings.whatsAppTemplateReady);
   const [whatsAppTemplateInvoice, setWhatsAppTemplateInvoice] = useState(settings.whatsAppTemplateInvoice);
   const [taxRate, setTaxRate] = useState(settings.taxRate);
+  const [waLogs, setWaLogs] = useState<WhatsAppLogEntry[]>(() => getWhatsAppLogs());
 
   const handleSaveGeneral = (e: React.FormEvent) => {
     e.preventDefault();
@@ -937,6 +939,87 @@ export default function SettingsView() {
                   onChange={e => setWhatsAppTemplateInvoice(e.target.value)}
                   className="w-full bg-gray-950 border border-[#2a2d42] rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500 h-20"
                 />
+              </div>
+
+              {/* WhatsApp Notification Log Table */}
+              <div className="pt-4 border-t border-[#2a2d42]/60 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <ClipboardList className="w-4 h-4 text-emerald-400" />
+                    سجل إشعارات الواتس آب (WhatsApp Notification Workflow Logs)
+                  </h4>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setWaLogs(getWhatsAppLogs())}
+                      className="text-[11px] bg-gray-800 hover:bg-gray-700 text-gray-200 px-2.5 py-1 rounded-lg border border-gray-700 flex items-center gap-1"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      تحديث السجل
+                    </button>
+                    {waLogs.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          clearWhatsAppLogs();
+                          setWaLogs([]);
+                        }}
+                        className="text-[11px] bg-red-900/30 hover:bg-red-900/50 text-red-300 px-2.5 py-1 rounded-lg border border-red-800/40 flex items-center gap-1"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        مسح السجل
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {waLogs.length === 0 ? (
+                  <p className="text-xs text-gray-400 py-3 text-center bg-gray-950 rounded-xl border border-dashed border-[#2a2d42]">
+                    لا توجد إشعارات واتس آب مسجلة حتى الآن.
+                  </p>
+                ) : (
+                  <div className="overflow-x-auto border border-[#2a2d42] rounded-xl max-h-60 overflow-y-auto">
+                    <table className="w-full text-[11px] text-right">
+                      <thead className="bg-gray-900 text-gray-300 font-bold sticky top-0">
+                        <tr className="border-b border-[#2a2d42]">
+                          <th className="p-2">تاريخ الإرسال</th>
+                          <th className="p-2">رقم الطلب</th>
+                          <th className="p-2">اسم العميل</th>
+                          <th className="p-2">رقم الهاتف</th>
+                          <th className="p-2">نوع الإشعار</th>
+                          <th className="p-2">الحالة</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#2a2d42]/60 text-gray-300 font-mono">
+                        {waLogs.map(log => (
+                          <tr key={log.id} className="hover:bg-gray-800/40">
+                            <td className="p-2 text-gray-400">{new Date(log.timestamp).toLocaleString("ar-EG")}</td>
+                            <td className="p-2 font-bold text-indigo-400">{log.orderId}</td>
+                            <td className="p-2 font-sans font-bold text-white">{log.customer}</td>
+                            <td className="p-2">{log.phone}</td>
+                            <td className="p-2 font-sans">
+                              {log.template === "REPAIR_ORDER_CREATED" && "إنشاء أمر صيانة"}
+                              {log.template === "APPROVAL_REQUIRED" && "طلب موافقة"}
+                              {log.template === "READY_FOR_PICKUP" && "جاهز للتسليم"}
+                              {log.template === "DELIVERED" && "تم التسليم"}
+                            </td>
+                            <td className="p-2 font-sans">
+                              {log.status === "SENT" ? (
+                                <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-bold">
+                                  تم الإرسال
+                                </span>
+                              ) : (
+                                <span className="bg-rose-500/10 text-rose-400 border border-rose-500/30 px-2 py-0.5 rounded-full font-bold" title={log.error}>
+                                  فشل الإرسال
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </div>
           </div>

@@ -23,6 +23,7 @@ import { canDeliverDevice } from "../lib/authPermissions";
 import { PhoneDisplay } from "./PhoneDisplay";
 import { formatPhoneDisplay } from "../utils/phone";
 import { getCustomerNameHelper, getCustomerPhoneHelper, getCustomerBadgeHelper } from "../lib/customerDisplayHelper";
+import { sendRepairNotificationWorkflow } from "../lib/whatsapp";
 
 interface DeliverDeviceModalProps {
   isOpen: boolean;
@@ -118,6 +119,21 @@ export default function DeliverDeviceModal({
           deliveredOrder: res.order,
           createdInvoice: res.invoice
         });
+
+        // Trigger WhatsApp DELIVERED notification after DB save
+        const waRes = await sendRepairNotificationWorkflow({
+          template: "DELIVERED",
+          order: res.order,
+          customerName: getCustomerNameHelper(res.order, customer ? [customer] : []),
+          customerPhone: getCustomerPhoneHelper(res.order, customer ? [customer] : []),
+          extra: {
+            warrantyInfo: res.order.warrantyDays ? `ضمان لمدة ${res.order.warrantyDays} يوم` : "حسب الشروط المدونة بالإيصال"
+          }
+        });
+
+        if (!waRes.success) {
+          setErrorMsg("تم تسليم الجهاز وتحديث البيانات بنجاح ولكن تعذر إرسال رسالة واتساب.");
+        }
       } else {
         setErrorMsg(res.error || "تعذر إتمام عملية التسليم.");
       }

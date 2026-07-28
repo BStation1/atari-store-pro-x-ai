@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { RepairOrder, Customer } from "../types";
+import { RepairOrder } from "../types";
 
 export function formatEgyptianPhoneForWhatsApp(phone: string): string {
   if (!phone || typeof phone !== "string") return "";
@@ -20,116 +20,292 @@ export function formatEgyptianPhoneForWhatsApp(phone: string): string {
   return cleaned;
 }
 
-export type WhatsAppTemplateType =
-  | "received"          // تم استلام الجهاز
-  | "diagnosing"        // الجهاز قيد الفحص
-  | "cost_determined"   // تم تحديد تكلفة الصيانة
-  | "ready"             // الجهاز جاهز للتسليم
-  | "due_amount"        // يوجد مبلغ مستحق
-  | "delivered"         // تم تسليم الجهاز
-  | "warranty_info"     // بيانات الضمان
-  | "rejected_cost"     // رفض العميل تكلفة الصيانة
-  | "custom";           // رسالة مخصصة
+export type WhatsAppWorkflowTemplate =
+  | "REPAIR_ORDER_CREATED"
+  | "APPROVAL_REQUIRED"
+  | "READY_FOR_PICKUP"
+  | "DELIVERED";
 
-export function getWhatsAppTemplateText(
-  type: WhatsAppTemplateType,
-  data: {
-    customerName?: string;
-    orderId?: string;
-    deviceType?: string;
-    deviceModel?: string;
-    status?: string;
-    totalCost?: number;
-    paidAmount?: number;
-    remainingAmount?: number;
-    warrantyEndDate?: string;
-    shopName?: string;
-    trackingLink?: string;
-    customText?: string;
-  }
-): string {
-  const shop = data.shopName || "مركز الصيانة الإيطالي (أحمد البنا)";
-  const cust = data.customerName || "عميلنا العزيز";
-  const device = `${data.deviceType || ""} ${data.deviceModel || ""}`.trim() || "الجهاز";
-  const orderId = data.orderId || "";
-  const tracking = data.trackingLink || "";
+export interface WhatsAppLogEntry {
+  id: string;
+  orderId: string;
+  customer: string;
+  phone: string;
+  template: WhatsAppWorkflowTemplate;
+  status: "SENT" | "FAILED";
+  error?: string;
+  timestamp: string;
+}
 
-  switch (type) {
-    case "received":
-      return `مرحباً ${cust} 👋
-تم استلام جهازك (${device}) بنجاح لدى ${shop}.
-رقم الطلب: [${orderId}]
-المدفوع مقدمًا: ${data.paidAmount || 0} ج.م
-التكلفة المبدئية: ${data.totalCost || 0} ج.م
+const WHATSAPP_LOGS_KEY = "atari_whatsapp_logs_v1";
+const WHATSAPP_SENT_KEYS = "atari_whatsapp_sent_keys_v1";
 
-يمكنك متابعة حالة الجهاز مباشرة عبر الرابط:
-${tracking}
+const inMemoryStore: Record<string, string> = {};
 
-شكراً لثقتكم بنا! ✨`;
+function storageGetItem(key: string): string | null {
+  try {
+    if (typeof localStorage !== "undefined" && localStorage) {
+      const val = localStorage.getItem(key);
+      if (val !== null) return val;
+    }
+  } catch {}
+  return inMemoryStore[key] || null;
+}
 
-    case "diagnosing":
-      return `مرحباً ${cust} 👋
-جهازك (${device}) رقم الطلب [${orderId}] قيد الفحص والتشخيص حالياً بواسطة المهندس المختص في ${shop}.
-سنوافيك بتقرير الفحص والتكلفة قريباً.
+function storageSetItem(key: string, value: string): void {
+  inMemoryStore[key] = value;
+  try {
+    if (typeof localStorage !== "undefined" && localStorage) {
+      localStorage.setItem(key, value);
+    }
+  } catch {}
+}
 
-رابط التتبع: ${tracking}`;
+function storageRemoveItem(key: string): void {
+  delete inMemoryStore[key];
+  try {
+    if (typeof localStorage !== "undefined" && localStorage) {
+      localStorage.removeItem(key);
+    }
+  } catch {}
+}
 
-    case "cost_determined":
-      return `مرحباً ${cust} 👋
-تم الانتهاء من فحص جهازك (${device}) رقم الطلب [${orderId}].
-تكلفة الإصلاح المطلوبة: ${data.totalCost || 0} ج.م
-يرجى إبلاغنا بقرارك للبدء في عملية الصيانة.
-
-رابط التتبع: ${tracking}`;
-
-    case "ready":
-      return `مرحباً ${cust} 🎉
-جهازك (${device}) رقم الطلب [${orderId}] أصبح **جاهزاً للتسليم** الآن لدى ${shop}!
-المبلغ المتبقي للتحصيل: ${data.remainingAmount || 0} ج.م
-
-يسعدنا تشريفك لمعاينة واستلام الجهاز.`;
-
-    case "due_amount":
-      return `مرحباً ${cust} 👋
-تذكير من ${shop}:
-يوجد مبلغ مستحق قدره (${data.remainingAmount || 0} ج.م) بخصوص جهازك (${device}) رقم الطلب [${orderId}].
-نرجو التكرم بالسداد في أقرب وقت. شاكرين تعاونك.`;
-
-    case "delivered":
-      return `مرحباً ${cust} ✨
-تم تسليم جهازك (${device}) رقم الطلب [${orderId}] بنجاح.
-نتمنى لك تجربة استخدام ممتازة مع ${shop}!
-في حال وجود أي استفسار نرجو التواصل معنا.`;
-
-    case "warranty_info":
-      return `مرحباً ${cust} 🛡️
-بيانات ضمان جهازك (${device}) رقم الطلب [${orderId}] من ${shop}:
-- حالة الضمان: داخل فترة الضمان
-- تاريخ نهاية الضمان: ${data.warrantyEndDate || "غير محدد"}
-
-نحن دائماً في خدمتك!`;
-
-    case "rejected_cost":
-      return `مرحباً ${cust} 👋
-تم تسجيل عدم الموافقة على تكلفة صيانة جهازك (${device}) رقم الطلب [${orderId}].
-الجهاز جاهز للاستلام بدون صيانة لدى ${shop}.`;
-
-    case "custom":
-    default:
-      return data.customText || `مرحباً ${cust}، بخصوص طلب الصيانة [${orderId}] لدى ${shop}.`;
+export function getWhatsAppLogs(): WhatsAppLogEntry[] {
+  try {
+    const raw = storageGetItem(WHATSAPP_LOGS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (err) {
+    console.error("Failed to read WhatsApp logs:", err);
+    return [];
   }
 }
 
-export function openWhatsAppMessage(
-  phone: string,
-  text: string
-): boolean {
+export function addWhatsAppLog(entry: Omit<WhatsAppLogEntry, "id" | "timestamp">): WhatsAppLogEntry {
+  const newEntry: WhatsAppLogEntry = {
+    ...entry,
+    id: "WA-LOG-" + Date.now() + "-" + Math.floor(Math.random() * 1000),
+    timestamp: new Date().toISOString()
+  };
+  const current = getWhatsAppLogs();
+  const updated = [newEntry, ...current].slice(0, 1000);
+  storageSetItem(WHATSAPP_LOGS_KEY, JSON.stringify(updated));
+  return newEntry;
+}
+
+export function clearWhatsAppLogs(): void {
+  storageRemoveItem(WHATSAPP_LOGS_KEY);
+  storageRemoveItem(WHATSAPP_SENT_KEYS);
+}
+
+export function isNotificationAlreadySent(dedupKey: string): boolean {
+  try {
+    const raw = storageGetItem(WHATSAPP_SENT_KEYS);
+    const keys: string[] = raw ? JSON.parse(raw) : [];
+    return keys.includes(dedupKey);
+  } catch {
+    return false;
+  }
+}
+
+export function markNotificationAsSent(dedupKey: string): void {
+  try {
+    const raw = storageGetItem(WHATSAPP_SENT_KEYS);
+    const keys: string[] = raw ? JSON.parse(raw) : [];
+    if (!keys.includes(dedupKey)) {
+      keys.push(dedupKey);
+      storageSetItem(WHATSAPP_SENT_KEYS, JSON.stringify(keys.slice(-500)));
+    }
+  } catch (err) {
+    console.error("Failed to mark notification key:", err);
+  }
+}
+
+export function openWhatsAppMessage(phone: string, text: string): boolean {
   const formatted = formatEgyptianPhoneForWhatsApp(phone);
   if (!formatted) {
     console.warn("رقم الهاتف غير صالح لإرسال رسالة WhatsApp");
     return false;
   }
   const url = `https://wa.me/${formatted}?text=${encodeURIComponent(text)}`;
-  window.open(url, "_blank");
+  if (typeof window !== "undefined" && window.open) {
+    const win = window.open(url, "_blank");
+    return Boolean(win);
+  }
   return true;
+}
+
+export async function sendRepairNotificationWorkflow(params: {
+  template: WhatsAppWorkflowTemplate;
+  order: RepairOrder;
+  customerName?: string;
+  customerPhone?: string;
+  extra?: {
+    reason?: string;
+    additionalCost?: number;
+    newTotal?: number;
+    repairedItems?: string;
+    warrantyInfo?: string;
+  };
+  autoOpenWindow?: boolean;
+}): Promise<{ success: boolean; isDuplicate?: boolean; message: string; log?: WhatsAppLogEntry }> {
+  const { template, order, customerName, customerPhone, extra, autoOpenWindow = true } = params;
+
+  const name = customerName || order.customerName || "عميلنا العزيز";
+  const rawPhone = customerPhone || order.customerPhone || "";
+  const phone = formatEgyptianPhoneForWhatsApp(rawPhone);
+
+  const orderId = order.id || "N/A";
+  const devicesText =
+    order.devices?.map(d => `${d.type || ""} ${d.model || ""}`.trim()).join(" + ") || "الجهاز";
+  const trackingUrl = typeof window !== "undefined" ? `${window.location.origin}/track?id=${orderId}` : `/track?id=${orderId}`;
+
+  // Deduplication Key Construction
+  let dedupStateKey = `${orderId}_${template}`;
+  if (template === "APPROVAL_REQUIRED") {
+    dedupStateKey += `_${extra?.additionalCost || 0}_${extra?.newTotal || order.totalEstimatedCost}`;
+  } else if (template === "READY_FOR_PICKUP" || template === "DELIVERED") {
+    dedupStateKey += `_${order.status}_${order.finalRepairPrice || order.totalEstimatedCost}`;
+  }
+
+  // Prevent sending duplicate message if already sent for this exact state
+  if (isNotificationAlreadySent(dedupStateKey)) {
+    console.warn(`[WhatsApp Workflow] Notification ${dedupStateKey} already sent. Skipping duplicate.`);
+    return {
+      success: true,
+      isDuplicate: true,
+      message: "تم إرسال الإشعار سابقاً (منع التكرار)"
+    };
+  }
+
+  // Validate Phone
+  if (!phone) {
+    const errorMsg = "رقم الهاتف غير مسجل أو غير صالح لإرسال الواتس آب";
+    const log = addWhatsAppLog({
+      orderId,
+      customer: name,
+      phone: rawPhone || "N/A",
+      template,
+      status: "FAILED",
+      error: errorMsg
+    });
+    return {
+      success: false,
+      message: "تم حفظ العملية ولكن تعذر إرسال رسالة واتساب.",
+      log
+    };
+  }
+
+  // Generate Message Body according to Template
+  let messageText = "";
+
+  switch (template) {
+    case "REPAIR_ORDER_CREATED": {
+      messageText = `مرحباً ${name} 👋
+تم استلام طلب الصيانة رقم [${orderId}] بنجاح لدى مركز الصيانة.
+📱 الجهاز: ${devicesText}
+💵 التكلفة المقدرة: ${order.totalEstimatedCost || 0} ج.م
+💳 المدفوع مقدمًا: ${order.advancePayment || 0} ج.م
+
+🔗 رابط التتبع الفوري:
+${trackingUrl}
+
+شكراً لثقتكم بنا! ✨`;
+      break;
+    }
+
+    case "APPROVAL_REQUIRED": {
+      const reason = extra?.reason || "تغيير في قطع الغيار أو تكلفة الصيانة";
+      const addCost = extra?.additionalCost ?? 0;
+      const newTot = extra?.newTotal ?? order.totalEstimatedCost;
+
+      messageText = `مرحباً ${name} 👋
+بخصوص طلب الصيانة رقم [${orderId}] للجهاز (${devicesText}):
+يلزم موافقتك على المستجدات التالية:
+📌 السبب: ${reason}
+💰 التكلفة الإضافية: ${addCost} ج.م
+💵 الإجمالي الجديد: ${newTot} ج.م
+
+🔗 رابط المتابعة والموافقة:
+${trackingUrl}`;
+      break;
+    }
+
+    case "READY_FOR_PICKUP": {
+      const repaired =
+        extra?.repairedItems ||
+        order.devices?.map(d => d.issue || d.type).join(" + ") ||
+        "تمت الصيانة بنجاح";
+      const finalPrice = extra?.newTotal ?? order.finalRepairPrice ?? order.totalEstimatedCost ?? 0;
+      const paid = order.advancePayment || 0;
+      const remaining = Math.max(0, finalPrice - paid);
+
+      messageText = `مرحباً ${name} 🎉
+جهازك (${devicesText}) رقم الطلب [${orderId}] أصبح **جاهزاً للتسليم** الآن!
+🛠️ ما تم إصلاحه: ${repaired}
+💰 السعر النهائي: ${finalPrice} ج.م
+💳 المدفوع: ${paid} ج.م
+💵 المتبقي للتحصيل: ${remaining} ج.م
+
+🔗 رابط التتبع: ${trackingUrl}`;
+      break;
+    }
+
+    case "DELIVERED": {
+      const warranty =
+        extra?.warrantyInfo ||
+        (order.warrantyDays
+          ? `ضمان لمدة ${order.warrantyDays} يوم`
+          : "الضمان حسب الشروط المدونة بالإيصال");
+
+      messageText = `مرحباً ${name} ✨
+شكراً لتعاملك معنا! تم تسليم طلب الصيانة رقم [${orderId}] بنجاح.
+📱 الجهاز: ${devicesText}
+🛡️ معلومات الضمان: ${warranty}
+
+نتمنى لك تجربة استخدام ممتازة.`;
+      break;
+    }
+  }
+
+  // Attempt to send (open WhatsApp window)
+  try {
+    if (autoOpenWindow) {
+      const opened = openWhatsAppMessage(phone, messageText);
+      if (!opened) {
+        throw new Error("تعذر فتح النافذة المباشرة للواتس آب");
+      }
+    }
+
+    markNotificationAsSent(dedupStateKey);
+
+    const log = addWhatsAppLog({
+      orderId,
+      customer: name,
+      phone,
+      template,
+      status: "SENT"
+    });
+
+    return {
+      success: true,
+      message: "تم تجهيز وإرسال رسالة الواتس آب بنجاح",
+      log
+    };
+  } catch (err: any) {
+    const errorMsg = err?.message || "فشل إرسال رسالة الواتس آب";
+    const log = addWhatsAppLog({
+      orderId,
+      customer: name,
+      phone,
+      template,
+      status: "FAILED",
+      error: errorMsg
+    });
+
+    return {
+      success: false,
+      message: "تم حفظ العملية ولكن تعذر إرسال رسالة واتساب.",
+      log
+    };
+  }
 }

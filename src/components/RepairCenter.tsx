@@ -48,6 +48,7 @@ import ReopenOrderModal from "./ReopenOrderModal";
 import CancelWarrantyModal from "./CancelWarrantyModal";
 import { canDeliverDevice, canReopenDeliveredOrder, canCancelWarranty } from "../lib/authPermissions";
 import { db } from "../lib/data";
+import { sendRepairNotificationWorkflow } from "../lib/whatsapp";
 import { 
   addTimelineEventHelper, 
   addAuditLogRecordHelper, 
@@ -111,44 +112,41 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     }
   };
 
-  const handleSendWhatsAppUpdate = (order: RepairOrder) => {
+  const handleSendWhatsAppUpdate = async (order: RepairOrder, customReason?: string) => {
     const custName = getCustomerNameHelper(order, customers);
     const custPhone = getCustomerPhoneHelper(order, customers);
 
-    if (!custPhone || custPhone === "بدون رقم") {
-      dialog.alert({ message: "لا يوجد رقم هاتف مسجل لهذا العميل لإرسال الواتس آب!", variant: "warning" });
-      return;
+    let template: "REPAIR_ORDER_CREATED" | "APPROVAL_REQUIRED" | "READY_FOR_PICKUP" | "DELIVERED" = "REPAIR_ORDER_CREATED";
+
+    if (order.status === RepairStatus.Ready) {
+      template = "READY_FOR_PICKUP";
+    } else if (order.status === RepairStatus.WaitingCustomerApproval) {
+      template = "APPROVAL_REQUIRED";
+    } else if (order.status === RepairStatus.Delivered) {
+      template = "DELIVERED";
     }
 
-    const statusHeader = (order.status && statusConfig[order.status]?.text) || order.status || "غير محدد";
-    const remaining = Math.max(0, (order.finalRepairPrice ?? order.totalEstimatedCost) - order.advancePayment);
-    const trackingLink = `${window.location.origin}/track?id=${order.id}`;
+    const waRes = await sendRepairNotificationWorkflow({
+      template,
+      order,
+      customerName: custName,
+      customerPhone: custPhone,
+      extra: {
+        reason: customReason || "مطلوب موافقة العميل على تفاصيل وتكلفة الصيانة",
+        additionalCost: 0,
+        newTotal: order.finalRepairPrice ?? order.totalEstimatedCost,
+        repairedItems: order.devices?.map(d => `${d.type} (${d.model}): ${d.issue}`).join(" + "),
+        warrantyInfo: order.warrantyDays ? `ضمان لمدة ${order.warrantyDays} يوم` : "حسب الشروط المدونة بالإيصال"
+      }
+    });
 
-    const devicesListText = order.devices.map(d => `- ${d.type} (${d.model}): ${d.issue}`).join("\n");
-
-    const msg = `تحديث حالة الصيانة - Atari Store Pro X 🎮🛠️
-
-العميل العزيز: ${custName}
-
-نود إعلامك بتحديث جديد لحالة أجهزة الصيانة الخاصة بك (طلب رقم: ${order.id}):
-
-الأجهزة:
-${devicesListText}
-
-📌 المرحلة الحالية: [ ${statusHeader} ]
-
-💰 إجمالي التكلفة: ${order.totalEstimatedCost} ج.م
-💳 المدفوع مقدمًا: ${order.advancePayment} ج.م
-بقيمة متبقية: ${remaining} ج.م
-
-🔗 رابط تتبع حالة الصيانة الفوري:
-${trackingLink}
-
-شكراً لتعاملك معنا!`;
-
-    const formattedPhone = custPhone.startsWith("2") ? custPhone : "2" + custPhone;
-    const url = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(msg)}`;
-    window.open(url, "_blank");
+    if (!waRes.success) {
+      dialog.alert({
+        title: "تنبيه الإشعارات",
+        message: "تم حفظ العملية ولكن تعذر إرسال رسالة واتساب.",
+        variant: "warning"
+      });
+    }
   };
 
   // Parts Used Search state
@@ -803,16 +801,20 @@ ${trackingLink}
       }
     }
 
-    // WhatsApp status step alert trigger
-    const sendWa = await dialog.confirm({
-      title: "إرسال إشعار إنجاز",
-      message: `تم تحديث حالة الطلب إلى "${statusConfig[status]?.text || status || "غير محدد"}". هل تود إرسال إشعار فوري للعميل عبر الواتس آب؟`,
-      confirmText: "إرسال واتساب",
-      cancelText: "تخطي"
-    });
+    // WhatsApp notification workflow trigger after DB save
+    if (isReady || status === RepairStatus.WaitingCustomerApproval || isDelivered) {
+      await handleSendWhatsAppUpdate(updatedOrder);
+    } else {
+      const sendWa = await dialog.confirm({
+        title: "إرسال إشعار إنجاز",
+        message: `تم تحديث حالة الطلب إلى "${statusConfig[status]?.text || status || "غير محدد"}". هل تود إرسال إشعار فوري للعميل عبر الواتس آب؟`,
+        confirmText: "إرسال واتساب",
+        cancelText: "تخطي"
+      });
 
-    if (sendWa) {
-      handleSendWhatsAppUpdate(updatedOrder);
+      if (sendWa) {
+        await handleSendWhatsAppUpdate(updatedOrder);
+      }
     }
   };
 

@@ -49,6 +49,7 @@ import { Customer, CustomerType, RepairStatus, RepairDevice, RepairOrder, WorkOw
 import { normalizePhoneNumber } from "../utils/phone";
 import { PhoneDisplay } from "./PhoneDisplay";
 import PrintReceiptModal from "./PrintReceiptModal";
+import { sendRepairNotificationWorkflow } from "../lib/whatsapp";
 
 const getLockCodeConfig = (typeStr: string = "", modelStr: string = "") => {
   const combined = `${typeStr} ${modelStr}`.toLowerCase();
@@ -533,7 +534,19 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
         balance: 0
       });
 
-      setSuccessMsg("تم حفظ أمر الاستلام بنجاح!");
+      // Send WhatsApp Notification after successful DB save
+      const waRes = await sendRepairNotificationWorkflow({
+        template: "REPAIR_ORDER_CREATED",
+        order: createdOrder,
+        customerName: finalCustomerName,
+        customerPhone: finalCustomerPhone
+      });
+
+      if (!waRes.success) {
+        setSuccessMsg("تم حفظ العملية ولكن تعذر إرسال رسالة واتساب.");
+      } else {
+        setSuccessMsg("تم حفظ أمر الاستلام بنجاح!");
+      }
 
       // Reset Form for next order
       setGuestName("");
