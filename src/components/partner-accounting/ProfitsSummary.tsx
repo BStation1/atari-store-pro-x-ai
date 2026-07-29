@@ -293,7 +293,42 @@ export default function ProfitsSummary({
     });
   });
 
-  // A2. From Direct Inventory Movements (Partner Withdrawals)
+  // A2. From Repair Orders with device parts cost (where standalone partUsages is empty)
+  filteredOrders.forEach((o) => {
+    const orderParts = partUsages.filter(
+      (pu) => pu.repairOrderId === o.id && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
+    );
+    if (orderParts.length === 0) {
+      const devicePartsCost = o.devices?.reduce((sum, d) => sum + (Number(d.partsCost) || 0), 0) || 0;
+      if (devicePartsCost > 0) {
+        const ownership = o.jobType || o.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
+        let partyLabel: 'SHOP' | 'AHMED' | 'ABDO' = 'SHOP';
+        if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) partyLabel = 'AHMED';
+        else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) partyLabel = 'ABDO';
+
+        const orderNum = (o as any).orderNumber || o.id;
+        const customerName = o.customerNameSnapshot || o.guestCustomerName || 'عميل صيانة';
+        const dateStr = o.receivedDate;
+
+        allWithdrawalTransactions.push({
+          id: `ord-parts-${o.id}`,
+          partName: 'قطع غيار صيانة مسجلة بالأوردر',
+          quantity: 1,
+          unitCost: devicePartsCost,
+          totalCost: devicePartsCost,
+          refNum: `أمر صيانة #${orderNum}`,
+          customerName,
+          date: formatDateISO(dateStr),
+          ownership,
+          partyLabel,
+          partyNameArabic: partyLabel === 'AHMED' ? 'أحمد' : partyLabel === 'ABDO' ? 'عبده' : 'المحل',
+          sourceType: 'REPAIR_ORDER'
+        });
+      }
+    }
+  });
+
+  // A3. From Direct Inventory Movements (Partner Withdrawals)
   try {
     const rawMovements = db.getInventoryMovements() || [];
     rawMovements.forEach((m: any, mIdx: number) => {
@@ -820,7 +855,7 @@ export default function ProfitsSummary({
             </span>
           </div>
           <h4 className="text-xl font-black text-rose-300 mt-1">
-            {totalPartsCost.toLocaleString('ar-EG')}{' '}
+            {totalWithdrawnCost.toLocaleString('ar-EG')}{' '}
             <span className="text-[10px] text-gray-400">{currencySymbol}</span>
           </h4>
           <span className="text-[10px] text-rose-400/80 block mt-0.5 font-bold">
