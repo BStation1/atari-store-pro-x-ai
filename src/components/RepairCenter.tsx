@@ -69,6 +69,31 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
   const { settings } = useSettings();
   const { invoices, addInvoice } = useInvoices();
 
+  console.log("=== Repair Center: Component rendered ===");
+  console.log("=== Repair Center: Orders count ===", orders.length);
+
+  useEffect(() => {
+    const handleDbChanged = (e: any) => {
+      console.log("=== Repair Center: Event received ===", e?.detail);
+    };
+    window.addEventListener("atari_db_changed", handleDbChanged);
+    return () => window.removeEventListener("atari_db_changed", handleDbChanged);
+  }, []);
+
+  useEffect(() => {
+    console.log("=== Repair Center: Orders after refetch ===", orders.length);
+    if (orders.length > 0) {
+      const latest = orders[0];
+      console.log("Latest created Repair Order ID:", latest.id);
+      console.log("Latest status:", latest.status);
+      console.log("Latest branch_id:", (latest as any).branch_id || (latest as any).branchId || "N/A");
+      console.log("Latest customer_id:", latest.customerId || "N/A");
+      console.log("Latest guest_name:", latest.guestCustomerName || latest.guest_name || latest.customerNameSnapshot || "N/A");
+      console.log("Latest guest_phone:", latest.guestCustomerPhone || latest.guest_phone || latest.customerPhoneSnapshot || "N/A");
+      console.log("Latest created_at:", latest.receivedDate || "N/A");
+    }
+  }, [orders]);
+
   const [activeTab, setActiveTab] = useState<string>(initialStatusFilter || "active_all");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedOrder, setSelectedOrder] = useState<RepairOrder | null>(
@@ -900,6 +925,9 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
   });
 
   const filteredOrders = statusFilteredOrders.filter(o => matchesWorkshopSearch(o, searchQuery));
+
+  console.log("=== Repair Center: Orders after filter ===", statusFilteredOrders.length);
+  console.log("=== Repair Center: Displayed orders ===", filteredOrders.length);
 
   return (
     <div className="space-y-6 text-right">

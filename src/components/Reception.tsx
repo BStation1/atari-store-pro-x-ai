@@ -507,6 +507,9 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
 
       const totalEstimatedCost = preparedDevices.reduce((sum, dev) => sum + dev.estimatedCost, 0);
 
+      console.log("=== Reception: Before save ===");
+      console.log("Saving payload:", { finalCustomerId, finalCustomerName, finalCustomerPhone, totalEstimatedCost });
+
       const createdOrder = await addRepairOrder({
         customerId: finalCustomerId,
         customerName: finalCustomerName,
@@ -532,6 +535,10 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
         warrantyDays: warrantyOption === "CUSTOM" ? customWarrantyDays : undefined,
         status: preparedDevices.some(d => d.needsInspection) ? RepairStatus.Diagnosing : RepairStatus.Received
       });
+
+      console.log("=== Reception: After Supabase insert ===");
+      console.log("=== Reception: Returned order ===", createdOrder);
+      console.log("=== Reception: Dispatch event ===");
 
       setLastSavedOrder(createdOrder);
       setLastSavedCustomer(selectedCustomer || {

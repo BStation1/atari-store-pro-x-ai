@@ -215,8 +215,22 @@ export async function fetchOrMigrateRepairOrders(): Promise<{ success: boolean; 
     }
 
     const mappedOrders = data.map(mapRowToRepairOrder);
-    saveLocalRepairOrdersBackup(mappedOrders, false);
-    return { success: true, orders: mappedOrders };
+
+    // Merge local orders with remote orders so newly added/unsynced local orders are retained
+    const mergedMap = new Map<string, RepairOrder>();
+    mappedOrders.forEach(o => mergedMap.set(o.id, o));
+    localOrders.forEach(o => {
+      if (!mergedMap.has(o.id)) {
+        mergedMap.set(o.id, o);
+      }
+    });
+
+    const mergedOrders = Array.from(mergedMap.values()).sort((a, b) => {
+      return new Date(b.receivedDate || 0).getTime() - new Date(a.receivedDate || 0).getTime();
+    });
+
+    saveLocalRepairOrdersBackup(mergedOrders, false);
+    return { success: true, orders: mergedOrders };
   } catch (err: any) {
     console.warn("⚠️ [fetchOrMigrateRepairOrders] Exception:", err?.message || err);
     return {
