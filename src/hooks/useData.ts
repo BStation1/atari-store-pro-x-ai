@@ -18,6 +18,8 @@ import {
   addProductToSupabase,
   updateProductInSupabase,
   deleteProductFromSupabase,
+  withdrawProductForPartner,
+  getInventoryMovements,
   getLocalProductsBackup,
   fetchOrMigrateCustomers,
   addCustomerToSupabase,
@@ -382,7 +384,55 @@ export function useProducts() {
     return res;
   };
 
-  return { products, loading, error, addProduct, updateProduct, deleteProduct };
+  const withdrawProduct = async (params: {
+    productId: string;
+    quantity: number;
+    partnerId: string;
+    notes?: string;
+    userId?: string;
+  }) => {
+    const res = await withdrawProductForPartner(params);
+    if (res.success) {
+      setProducts(prev =>
+        prev.map(p => (p.id === params.productId ? { ...p, quantity: res.newQuantity } : p))
+      );
+    }
+    return res;
+  };
+
+  return { products, loading, error, addProduct, updateProduct, deleteProduct, withdrawProduct };
+}
+
+export function useInventoryMovements(productId?: string) {
+  const trigger = useDbTrigger();
+  const [movements, setMovements] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+
+    getInventoryMovements(productId)
+      .then(movs => {
+        if (active) {
+          setMovements(movs);
+          setLoading(false);
+        }
+      })
+      .catch(err => {
+        if (active) {
+          console.warn("⚠️ Error fetching inventory movements:", err);
+          setMovements(db.getInventoryMovements ? db.getInventoryMovements() : []);
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [trigger, productId]);
+
+  return { movements, loading };
 }
 
 export function useSuppliers() {

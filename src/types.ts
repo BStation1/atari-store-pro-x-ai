@@ -354,7 +354,7 @@ export interface Product {
 export interface InventoryMovement {
   id: string;
   productId: string;
-  movementType: 'SALE' | 'PURCHASE' | 'RETURN' | 'REPAIR_USAGE' | 'ADJUSTMENT' | 'DELETION_RESTORE';
+  movementType: 'SALE' | 'PURCHASE' | 'RETURN' | 'REPAIR_USAGE' | 'ADJUSTMENT' | 'DELETION_RESTORE' | 'PARTNER_WITHDRAWAL';
   quantityChange: number;
   previousQuantity: number;
   newQuantity: number;
@@ -928,6 +928,7 @@ export interface RepairPartUsage {
   createdAt: string;
   employeeName?: string;
   warehouse?: string;
+  notes?: string;
 }
 
 export interface SettlementAuditLog {

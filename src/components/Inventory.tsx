@@ -27,7 +27,8 @@ import {
   Eye,
   Archive,
   CheckSquare,
-  Square
+  Square,
+  PackageMinus
 } from "lucide-react";
 import { useDialog } from "../context/DialogContext";
 import { 
@@ -35,13 +36,14 @@ import {
   useSuppliers, 
   useCategories, 
   useDeviceTypes, 
-  useDeviceModels 
+  useDeviceModels,
+  useInventoryMovements
 } from "../hooks/useData";
 import { Product, Supplier } from "../types";
 
 export default function Inventory() {
   const dialog = useDialog();
-  const { products, addProduct, updateProduct, deleteProduct } = useProducts();
+  const { products, addProduct, updateProduct, deleteProduct, withdrawProduct } = useProducts();
   const { suppliers, addSupplier, updateSupplier, deleteSupplier } = useSuppliers();
   const { categories } = useCategories();
   const { deviceTypes } = useDeviceTypes();
@@ -63,6 +65,13 @@ export default function Inventory() {
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [viewingProduct, setViewingProduct] = useState<Product | null>(null);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+
+  // Partner Inventory Withdrawal Modal state
+  const [withdrawModalProduct, setWithdrawModalProduct] = useState<Product | null>(null);
+  const [withdrawPartnerId, setWithdrawPartnerId] = useState<string>("P-002");
+  const [withdrawQty, setWithdrawQty] = useState<number>(1);
+  const [withdrawNotes, setWithdrawNotes] = useState<string>("");
+  const [isSubmittingWithdraw, setIsSubmittingWithdraw] = useState<boolean>(false);
 
   // Form Fields State
   const [pName, setPName] = useState("");
@@ -488,6 +497,58 @@ export default function Inventory() {
     }
   };
 
+  // Open Partner Inventory Withdrawal Modal
+  const handleOpenPartnerWithdrawal = (prod: Product, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setWithdrawModalProduct(prod);
+    setWithdrawQty(1);
+    setWithdrawNotes("");
+    setWithdrawPartnerId("P-002");
+  };
+
+  // Confirm Partner Withdrawal
+  const handleConfirmPartnerWithdrawal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!withdrawModalProduct) return;
+
+    if (withdrawQty <= 0) {
+      await dialog.alert({ message: "يرجى إدخال كمية سحب صالحة أكبر من صفر", variant: "warning" });
+      return;
+    }
+    if (withdrawQty > withdrawModalProduct.quantity) {
+      await dialog.alert({
+        message: `عذراً، الكمية المطلوبة للسحب (${withdrawQty}) أكبر من الرصيد المتوفر حالياً بالمخزن (${withdrawModalProduct.quantity} قطعة).`,
+        variant: "warning"
+      });
+      return;
+    }
+
+    setIsSubmittingWithdraw(true);
+    try {
+      const res = await withdrawProduct({
+        productId: withdrawModalProduct.id,
+        quantity: withdrawQty,
+        partnerId: withdrawPartnerId,
+        notes: withdrawNotes.trim()
+      });
+
+      if (res.success) {
+        await dialog.alert({ message: res.message, variant: "success" });
+        showNotification(res.message);
+        setWithdrawModalProduct(null);
+        setWithdrawQty(1);
+        setWithdrawNotes("");
+      }
+    } catch (err: any) {
+      await dialog.alert({
+        message: err?.message || "فشل تنفيذ عملية سحب البضاعة لشريك",
+        variant: "error"
+      });
+    } finally {
+      setIsSubmittingWithdraw(false);
+    }
+  };
+
   return (
     <div className="space-y-6 text-right">
       {/* Header */}
@@ -788,6 +849,15 @@ export default function Inventory() {
                               <Plus className="w-3.5 h-3.5" />
                             </button>
 
+                            {/* Partner withdrawal shortcut */}
+                            <button
+                              onClick={(e) => handleOpenPartnerWithdrawal(p, e)}
+                              title="إذن سحب بضاعة لشريك"
+                              className="p-1.5 bg-[#2a2d42]/40 hover:bg-cyan-600/20 hover:text-cyan-400 text-gray-400 rounded-lg transition-colors cursor-pointer"
+                            >
+                              <PackageMinus className="w-3.5 h-3.5" />
+                            </button>
+
                             <button
                               onClick={() => handleOpenViewProduct(p)}
                               title="عرض التفاصيل الكاملة"
@@ -1034,6 +1104,9 @@ export default function Inventory() {
                   <p className="text-xs text-gray-300 leading-relaxed mt-1">{viewingProduct.notes}</p>
                 </div>
               )}
+
+              {/* Product Movement History */}
+              <ProductMovementHistorySection productId={viewingProduct.id} />
             </div>
 
             <div className="px-6 py-4 border-t border-[#2a2d42] bg-gray-950/40 flex justify-end gap-2">
@@ -1476,6 +1549,154 @@ export default function Inventory() {
           </div>
         </div>
       )}
+
+      {/* Partner Inventory Withdrawal Modal */}
+      {withdrawModalProduct && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-[#11131e] border border-[#2a2d42] rounded-2xl max-w-md w-full p-6 shadow-2xl text-white">
+            <div className="flex items-center justify-between pb-4 border-b border-[#2a2d42]">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-cyan-500/10 border border-cyan-500/30 rounded-xl text-cyan-400">
+                  <PackageMinus className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-white">إذن سحب بضاعة لشريك</h3>
+                  <p className="text-xs text-gray-400 mt-0.5">{withdrawModalProduct.nameAr || withdrawModalProduct.name}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setWithdrawModalProduct(null)}
+                className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-[#2a2d42] transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmPartnerWithdrawal} className="mt-5 space-y-4">
+              <div className="bg-[#181b2a] border border-[#2a2d42] p-3 rounded-xl text-xs space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-gray-400">الرصيد المتاح بالمخزن:</span>
+                  <span className="text-emerald-400 font-bold">{withdrawModalProduct.quantity} قطعة</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-400">سعر التكلفة للقطعة:</span>
+                  <span className="text-indigo-400 font-bold">{withdrawModalProduct.purchasePrice} ج.م.</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-300 mb-1.5">الشريك المستلم *</label>
+                <select
+                  value={withdrawPartnerId}
+                  onChange={e => setWithdrawPartnerId(e.target.value)}
+                  className="w-full bg-[#181b2a] border border-[#2a2d42] rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-cyan-500"
+                >
+                  <option value="P-002">عبده (ABDO)</option>
+                  <option value="P-001">أحمد البنا (AHMED)</option>
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-300 mb-1.5">الكمية المسحوبة *</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max={withdrawModalProduct.quantity}
+                    value={withdrawQty}
+                    onChange={e => setWithdrawQty(Math.max(1, parseInt(e.target.value) || 1))}
+                    className="w-full bg-[#181b2a] border border-[#2a2d42] rounded-xl px-3 py-2.5 text-sm font-bold text-cyan-400 focus:outline-none focus:border-cyan-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-gray-300 mb-1.5">إجمالي التكلفة</label>
+                  <div className="px-3 py-2.5 bg-[#181b2a] border border-[#2a2d42] rounded-xl text-xs font-bold text-emerald-400">
+                    {(withdrawQty * withdrawModalProduct.purchasePrice).toLocaleString('ar-EG')} ج.م.
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-300 mb-1.5">سبب أو ملاحظات السحب</label>
+                <input
+                  type="text"
+                  value={withdrawNotes}
+                  onChange={e => setWithdrawNotes(e.target.value)}
+                  placeholder="مثال: سحب بضاعة شخصية للاستخدام أو البيع..."
+                  className="w-full bg-[#181b2a] border border-[#2a2d42] rounded-xl px-3 py-2.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#2a2d42]">
+                <button
+                  type="button"
+                  onClick={() => setWithdrawModalProduct(null)}
+                  disabled={isSubmittingWithdraw}
+                  className="px-4 py-2 rounded-xl text-xs font-medium text-gray-300 hover:bg-[#2a2d42] transition disabled:opacity-50"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingWithdraw}
+                  className="px-5 py-2 rounded-xl text-xs font-bold bg-cyan-500 hover:bg-cyan-600 text-slate-950 flex items-center gap-2 transition disabled:opacity-50"
+                >
+                  {isSubmittingWithdraw ? "جاري الخصم..." : "تأكيد خصم السحب"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProductMovementHistorySection({ productId }: { productId: string }) {
+  const { movements, loading } = useInventoryMovements(productId);
+
+  if (loading) {
+    return <p className="text-xs text-gray-400 p-2">جاري تحميل سجل الحركة...</p>;
+  }
+
+  if (!movements || movements.length === 0) {
+    return (
+      <div className="bg-gray-950/40 p-3 rounded-xl border border-[#2a2d42]/50">
+        <span className="text-[10px] text-gray-500 block font-bold mb-1">سجل حركات المخزون والتغييرات</span>
+        <p className="text-xs text-gray-500">لا توجد حركات مسجلة لهذا المنتج حتى الآن.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-gray-950/40 p-3 rounded-xl border border-[#2a2d42]/50 space-y-2">
+      <span className="text-[10px] text-gray-400 block font-bold">سجل حركات المخزون والتغييرات ({movements.length})</span>
+      <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+        {movements.map((m) => {
+          const isNegative = m.quantityChange < 0;
+          let label = "تعديل رصيد";
+          if (m.movementType === 'PARTNER_WITHDRAWAL') label = "مسحوبات بضاعة لشريك";
+          else if (m.movementType === 'SALE') label = "مبيعات مباشرة";
+          else if (m.movementType === 'REPAIR_USAGE') label = "استهلاك أمر صيانة";
+          else if (m.referenceId === 'OPENING_BALANCE') label = "رصيد افتتاحي";
+
+          return (
+            <div key={m.id} className="bg-[#181b2a] border border-[#2a2d42] p-2 rounded-lg text-[11px] flex justify-between items-center">
+              <div>
+                <span className="font-bold text-gray-200 block">{label}</span>
+                <span className="text-[10px] text-gray-400">{m.notes || ''} • {new Date(m.createdAt).toLocaleString('ar-EG')}</span>
+              </div>
+              <div className="text-left">
+                <span className={`font-bold ${isNegative ? 'text-rose-400' : 'text-emerald-400'}`}>
+                  {m.quantityChange > 0 ? `+${m.quantityChange}` : m.quantityChange} قطعة
+                </span>
+                <span className="text-[10px] text-gray-400 block">(الرصيد: {m.previousQuantity} → {m.newQuantity})</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

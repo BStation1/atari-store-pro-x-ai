@@ -10,7 +10,9 @@ import {
   updateProductInSupabase,
   deleteProductFromSupabase,
   getLocalProductsBackup,
-  runProductsTestSuite
+  runProductsTestSuite,
+  withdrawProductForPartner,
+  getInventoryMovements
 } from '../supabaseProducts';
 import { db } from '../db';
 import { IDataProvider } from './types';
@@ -84,5 +86,7 @@ export {
   updateProductInSupabase,
   deleteProductFromSupabase,
   getLocalProductsBackup,
-  runProductsTestSuite
+  runProductsTestSuite,
+  withdrawProductForPartner,
+  getInventoryMovements
 };
