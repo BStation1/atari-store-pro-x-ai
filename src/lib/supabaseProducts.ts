@@ -1080,3 +1080,155 @@ export async function withdrawProductForPartner(params: {
     message: `تم سحب ${qtyToWithdraw} قطعة من (${product.nameAr || product.name}) بنجاح للشريك ${partnerNameAr}. الرصيد المتبقي بالمخزن: ${newQty} قطعة.`,
   };
 }
+
+/**
+ * Atomic Partner Inventory Withdrawal Return:
+ * 1. Validates product and return quantity.
+ * 2. Increases product stock in Supabase & local state.
+ * 3. Inserts movement record with type 'PARTNER_WITHDRAWAL_RETURN' in inventory_movements.
+ * 4. Inserts credit partner_transaction record to reduce partner debt using unit cost snapshot.
+ * 5. Dispatches global data-changed events.
+ */
+export async function returnProductFromPartner(params: {
+  productId: string;
+  quantity: number;
+  partnerId: string;
+  notes?: string;
+  userId?: string;
+}): Promise<{
+  success: boolean;
+  newQuantity: number;
+  movementId: string;
+  message: string;
+}> {
+  const qtyToReturn = Math.floor(Number(params.quantity));
+  if (isNaN(qtyToReturn) || qtyToReturn <= 0) {
+    throw new Error('خطأ: يرجى إدخال كمية إرجاع صالحة أكبر من صفر.');
+  }
+
+  // Fetch product
+  let product: Product | null = null;
+  try {
+    const { data: pData } = await supabase
+      .from('products')
+      .select('*')
+      .eq('id', params.productId)
+      .single();
+    if (pData) {
+      product = mapRowToProduct(pData);
+    }
+  } catch (err) {
+    console.warn('Could not fetch product from Supabase for return:', err);
+  }
+
+  if (!product) {
+    const local = getLocalProductsBackup();
+    product = local.find(p => p.id === params.productId) || null;
+  }
+
+  if (!product) {
+    throw new Error('خطأ: المنتج المطلوب غير موجود في قاعدة البيانات.');
+  }
+
+  const previousQty = Number(product.quantity || 0);
+  const newQty = previousQty + qtyToReturn;
+  const unitCost = Number(product.purchasePrice || 0);
+  const totalCost = qtyToReturn * unitCost;
+
+  const isAbdo =
+    params.partnerId === 'P-002' ||
+    params.partnerId === 'ABDO' ||
+    (params.partnerId || '').includes('عبده');
+
+  const partnerCode = isAbdo ? 'ABDO' : 'AHMED';
+  const partnerIdCanonical = isAbdo ? 'P-002' : 'P-001';
+  const partnerNameAr = isAbdo ? 'عبده' : 'أحمد البنا';
+
+  // 1. Update product quantity in Supabase
+  const { data: updatedPData, error: updateErr } = await supabase
+    .from('products')
+    .update({ quantity: newQty, updated_at: new Date().toISOString() })
+    .eq('id', product.id)
+    .select()
+    .single();
+
+  if (updateErr) {
+    console.error('❌ Failed to increase product quantity in Supabase:', updateErr.message);
+    throw new Error(`تعذر زيادة الكمية في قاعدة البيانات: ${updateErr.message}`);
+  }
+
+  let movementId = `MOV-${Date.now()}`;
+
+  // 2. Insert inventory movement record in Supabase
+  const { data: movData, error: movErr } = await supabase
+    .from('inventory_movements')
+    .insert([
+      {
+        product_id: product.id,
+        movement_type: 'PARTNER_WITHDRAWAL_RETURN',
+        quantity_change: qtyToReturn,
+        previous_quantity: previousQty,
+        new_quantity: newQty,
+        cost_price_snapshot: unitCost,
+        selling_price_snapshot: Number(product.sellPrice || 0),
+        reference_id: partnerCode,
+        notes: params.notes || `مرتجع مسحوبات بضاعة من الشريك ${partnerNameAr}`,
+        created_by_user_id: params.userId || null,
+      },
+    ])
+    .select()
+    .single();
+
+  if (movErr) {
+    console.error('❌ Failed to insert inventory return movement record, rolling back stock addition:', movErr.message);
+    await supabase.from('products').update({ quantity: previousQty }).eq('id', product.id);
+    throw new Error(`فشل تسجيل حركة المرتجع. تم إلغاء العملية وإعادة الكمية السابقة (${previousQty}).`);
+  }
+
+  if (movData?.id) movementId = String(movData.id);
+
+  // 3. Update Local Database and Backups
+  try {
+    db.addPartnerTransaction({
+      partnerId: partnerIdCanonical,
+      type: 'MANUAL_ADJUSTMENT',
+      amount: -totalCost,
+      date: new Date().toISOString(),
+      reason: `مرتجع بضاعة للمخزن: ${product.nameAr || product.name} (عدد ${qtyToReturn} قطعة)`,
+      notes: `كود الصنف: ${product.sku} - ${params.notes || ''}`.trim(),
+      createdBy: params.userId || 'system',
+      approvedBy: params.userId || 'system',
+    });
+  } catch (err) {
+    console.warn('⚠️ Local db sync notice:', err);
+  }
+
+  // Update local product backup
+  const categoryMap = await getCategoryUuidMap();
+  const prodRow = mapProductToRow({ ...product, quantity: newQty }, categoryMap);
+  const updatedProductObj = mapRowToProduct(updatedPData || { ...prodRow, quantity: newQty });
+
+  const localBackup = getLocalProductsBackup();
+  const idx = localBackup.findIndex(p => p.id === product.id);
+  if (idx !== -1) {
+    localBackup[idx] = updatedProductObj;
+  } else {
+    localBackup.unshift(updatedProductObj);
+  }
+  setLocalProductsBackup(localBackup, false);
+
+  // 4. Dispatch global UI events for instant reactivity
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_inventory_movements' } }));
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_partner_transactions' } }));
+  }
+
+  return {
+    success: true,
+    newQuantity: newQty,
+    movementId,
+    message: `تم إرجاع ${qtyToReturn} قطعة من (${product.nameAr || product.name}) للمخزن بنجاح وتخفيض مديونية الشريك ${partnerNameAr} بمبلغ ${totalCost.toLocaleString('ar-EG')} ج.م. الرصيد الجديد: ${newQty} قطعة.`,
+  };
+}

@@ -12,6 +12,7 @@ import {
   getLocalProductsBackup,
   runProductsTestSuite,
   withdrawProductForPartner,
+  returnProductFromPartner,
   getInventoryMovements
 } from '../supabaseProducts';
 import { db } from '../db';
@@ -88,5 +89,6 @@ export {
   getLocalProductsBackup,
   runProductsTestSuite,
   withdrawProductForPartner,
+  returnProductFromPartner,
   getInventoryMovements
 };

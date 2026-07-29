@@ -19,10 +19,10 @@ export default function PartnerTransactionsModal({
   const dialog = useDialog();
   const { partners } = usePartners();
   const { addTransaction } = usePartnerTransactions();
-  const { products, withdrawProduct } = useProducts();
+  const { products, withdrawProduct, returnProduct } = useProducts();
 
   const [partnerId, setPartnerId] = useState(defaultPartnerId);
-  const [type, setType] = useState<"CASH_ADVANCE" | "CASH_WITHDRAWAL" | "INVENTORY_WITHDRAWAL" | "EXPENSE_CHARGE" | "MANUAL_ADJUSTMENT">("CASH_WITHDRAWAL");
+  const [type, setType] = useState<"CASH_ADVANCE" | "CASH_WITHDRAWAL" | "INVENTORY_WITHDRAWAL" | "INVENTORY_WITHDRAWAL_RETURN" | "EXPENSE_CHARGE" | "MANUAL_ADJUSTMENT">("CASH_WITHDRAWAL");
   const [amount, setAmount] = useState<number>(0);
   const [selectedProductId, setSelectedProductId] = useState<string>("");
   const [quantity, setQuantity] = useState<number>(1);
@@ -31,9 +31,9 @@ export default function PartnerTransactionsModal({
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  // When type changes to INVENTORY_WITHDRAWAL, auto select first available product if none selected
+  // When type changes to INVENTORY_WITHDRAWAL or INVENTORY_WITHDRAWAL_RETURN, auto select first product if none selected
   useEffect(() => {
-    if (type === "INVENTORY_WITHDRAWAL" && !selectedProductId && products.length > 0) {
+    if ((type === "INVENTORY_WITHDRAWAL" || type === "INVENTORY_WITHDRAWAL_RETURN") && !selectedProductId && products.length > 0) {
       const avail = products.find(p => p.quantity > 0) || products[0];
       if (avail) {
         setSelectedProductId(avail.id);
@@ -41,17 +41,18 @@ export default function PartnerTransactionsModal({
     }
   }, [type, products, selectedProductId]);
 
-  // Sync amount when product or quantity changes for INVENTORY_WITHDRAWAL
+  // Sync amount when product or quantity changes for INVENTORY_WITHDRAWAL or INVENTORY_WITHDRAWAL_RETURN
   useEffect(() => {
-    if (type === "INVENTORY_WITHDRAWAL" && selectedProductId) {
+    if ((type === "INVENTORY_WITHDRAWAL" || type === "INVENTORY_WITHDRAWAL_RETURN") && selectedProductId) {
       const prod = products.find(p => p.id === selectedProductId);
       if (prod) {
         const uCost = Number(prod.purchasePrice || 0);
         const qty = Math.max(1, Number(quantity || 1));
         const computedAmount = qty * uCost;
         setAmount(computedAmount);
-        if (!reason || reason.startsWith("سحب بضاعة:")) {
-          setReason(`سحب بضاعة: ${prod.nameAr || prod.name} (عدد ${qty} قطعة)`);
+        const prefix = type === "INVENTORY_WITHDRAWAL" ? "سحب بضاعة:" : "مرتجع بضاعة للمخزن:";
+        if (!reason || reason.startsWith("سحب بضاعة:") || reason.startsWith("مرتجع بضاعة للمخزن:")) {
+          setReason(`${prefix} ${prod.nameAr || prod.name} (عدد ${qty} قطعة)`);
         }
       }
     }
@@ -109,6 +110,54 @@ export default function PartnerTransactionsModal({
       } catch (err: any) {
         await dialog.alert({
           message: err?.message || "فشل تنفيذ عملية سحب البضاعة لشريك",
+          variant: "error"
+        });
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
+    if (type === "INVENTORY_WITHDRAWAL_RETURN") {
+      if (!selectedProductId) {
+        await dialog.alert({ message: "يرجى اختيار صنف من قائمة البضائع لملاحظة إرجاعه", variant: "warning" });
+        return;
+      }
+      const prod = products.find(p => p.id === selectedProductId);
+      if (!prod) {
+        await dialog.alert({ message: "الصنف المحدد غير موجود بالمخزن", variant: "warning" });
+        return;
+      }
+      const qtyNum = Number(quantity);
+      if (isNaN(qtyNum) || qtyNum <= 0) {
+        await dialog.alert({ message: "يرجى إدخال كمية إرجاع صالحة أكبر من صفر", variant: "warning" });
+        return;
+      }
+
+      setSubmitting(true);
+      try {
+        const res = await returnProduct({
+          productId: selectedProductId,
+          quantity: qtyNum,
+          partnerId,
+          notes: notes.trim(),
+          userId: currentUserId
+        });
+
+        if (res.success) {
+          await dialog.alert({
+            message: res.message || "تم تسجيل مرتجع البضاعة وإضافة الكمية للمخزون وتخفيض مديونية الشريك بنجاح",
+            variant: "success"
+          });
+          onClose();
+          setAmount(0);
+          setReason("");
+          setNotes("");
+          setQuantity(1);
+        }
+      } catch (err: any) {
+        await dialog.alert({
+          message: err?.message || "فشل تنفيذ عملية إرجاع البضاعة من الشريك",
           variant: "error"
         });
       } finally {
@@ -194,17 +243,18 @@ export default function PartnerTransactionsModal({
                 <option value="CASH_WITHDRAWAL">مسحوبات نقدية (Cash Withdrawal)</option>
                 <option value="CASH_ADVANCE">سلفة شخصية (Cash Advance)</option>
                 <option value="INVENTORY_WITHDRAWAL">مسحوبات قطع غيار / بضاعة (Inventory Withdrawal)</option>
+                <option value="INVENTORY_WITHDRAWAL_RETURN">مرتجعات بضاعة للشريك (Inventory Withdrawal Return)</option>
                 <option value="EXPENSE_CHARGE">مصروفات شخصية محمّلة على الشريك</option>
                 <option value="MANUAL_ADJUSTMENT">تسوية / تسوية دفترية يدوية</option>
               </select>
             </div>
           </div>
 
-          {type === "INVENTORY_WITHDRAWAL" && (
+          {(type === "INVENTORY_WITHDRAWAL" || type === "INVENTORY_WITHDRAWAL_RETURN") && (
             <div className="bg-cyan-950/40 border border-cyan-800/50 rounded-xl p-3.5 space-y-3">
               <div className="flex items-center gap-2 text-xs font-bold text-cyan-300">
                 <Boxes className="w-4 h-4" />
-                <span>تحديد الصنف والكمية المسحوبة من المخزن</span>
+                <span>{type === "INVENTORY_WITHDRAWAL" ? "تحديد الصنف والكمية المسحوبة من المخزن" : "تحديد الصنف والكمية المرتجعة للمخزن"}</span>
               </div>
 
               <div>
@@ -225,7 +275,7 @@ export default function PartnerTransactionsModal({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">الكمية المسحوبة *</label>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">{type === "INVENTORY_WITHDRAWAL" ? "الكمية المسحوبة *" : "الكمية المرتجعة *"}</label>
                   <input
                     type="number"
                     min="1"
@@ -261,7 +311,7 @@ export default function PartnerTransactionsModal({
                   type="number"
                   min="1"
                   step="0.01"
-                  disabled={type === "INVENTORY_WITHDRAWAL"}
+                  disabled={type === "INVENTORY_WITHDRAWAL" || type === "INVENTORY_WITHDRAWAL_RETURN"}
                   value={amount || ""}
                   onChange={e => setAmount(parseFloat(e.target.value) || 0)}
                   placeholder="0.00"

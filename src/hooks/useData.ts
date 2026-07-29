@@ -19,6 +19,7 @@ import {
   updateProductInSupabase,
   deleteProductFromSupabase,
   withdrawProductForPartner,
+  returnProductFromPartner,
   getInventoryMovements,
   getLocalProductsBackup,
   fetchOrMigrateCustomers,
@@ -400,7 +401,23 @@ export function useProducts() {
     return res;
   };
 
-  return { products, loading, error, addProduct, updateProduct, deleteProduct, withdrawProduct };
+  const returnProduct = async (params: {
+    productId: string;
+    quantity: number;
+    partnerId: string;
+    notes?: string;
+    userId?: string;
+  }) => {
+    const res = await returnProductFromPartner(params);
+    if (res.success) {
+      setProducts(prev =>
+        prev.map(p => (p.id === params.productId ? { ...p, quantity: res.newQuantity } : p))
+      );
+    }
+    return res;
+  };
+
+  return { products, loading, error, addProduct, updateProduct, deleteProduct, withdrawProduct, returnProduct };
 }
 
 export function useInventoryMovements(productId?: string) {
