@@ -233,7 +233,7 @@ CREATE TABLE IF NOT EXISTS public.invoice_items (
 CREATE TABLE IF NOT EXISTS public.repair_orders (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     order_number TEXT UNIQUE NOT NULL DEFAULT public.gen_repair_order_number(),
-    customer_id UUID NOT NULL REFERENCES public.customers(id) ON DELETE RESTRICT,
+    customer_id UUID REFERENCES public.customers(id) ON DELETE RESTRICT,
     work_owner work_owner_enum NOT NULL DEFAULT 'CLIENT',
     device_type TEXT NOT NULL,
     device_model TEXT NOT NULL,
