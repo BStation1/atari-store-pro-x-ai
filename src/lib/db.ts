@@ -3003,6 +3003,18 @@ export const db = {
     return getStorageItem<any[]>("atari_inventory_movements", []);
   },
 
+  addInventoryMovement: (movement: any): any => {
+    const list = getStorageItem<any[]>("atari_inventory_movements", []);
+    const newMov = {
+      id: movement.id || `MOV-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      ...movement
+    };
+    list.unshift(newMov);
+    setStorageItem("atari_inventory_movements", list);
+    return newMov;
+  },
+
   getJournalEntries: (): any[] => {
     return getStorageItem<any[]>("atari_journal_entries", []);
   },

@@ -914,24 +914,33 @@ export async function withdrawProductForPartner(params: {
     throw new Error('خطأ: يرجى إدخال كمية سحب صالحة أكبر من صفر.');
   }
 
-  // Fetch current product state
+  // 1. Fetch current product state (check Supabase then local)
   let product: Product | null = null;
-  try {
-    const { data: pData } = await supabase
-      .from('products')
-      .select('*')
-      .eq('id', params.productId)
-      .single();
-    if (pData) {
-      product = mapRowToProduct(pData);
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(params.productId);
+
+  if (isUuid) {
+    try {
+      const { data: pData } = await supabase
+        .from('products')
+        .select('*')
+        .eq('id', params.productId)
+        .single();
+      if (pData) {
+        product = mapRowToProduct(pData);
+      }
+    } catch (err) {
+      console.warn('Could not fetch product from Supabase for withdrawal:', err);
     }
-  } catch (err) {
-    console.warn('Could not fetch product from Supabase for withdrawal:', err);
   }
 
   if (!product) {
     const local = getLocalProductsBackup();
     product = local.find(p => p.id === params.productId) || null;
+  }
+
+  if (!product) {
+    const dbProds = db.getProducts();
+    product = dbProds.find(p => p.id === params.productId) || null;
   }
 
   if (!product) {
@@ -946,7 +955,7 @@ export async function withdrawProductForPartner(params: {
 
   const previousQty = Number(product.quantity || 0);
   const newQty = previousQty - qtyToWithdraw;
-  const unitCost = Number(product.purchasePrice || 0);
+  const unitCost = Number(product.purchasePrice || (product as any).cost_price || 0);
   const totalCost = qtyToWithdraw * unitCost;
 
   const isAbdo =
@@ -957,115 +966,152 @@ export async function withdrawProductForPartner(params: {
   const partnerCode = isAbdo ? 'ABDO' : 'AHMED';
   const partnerIdCanonical = isAbdo ? 'P-002' : 'P-001';
   const partnerNameAr = isAbdo ? 'عبده' : 'أحمد البنا';
+  const nowIso = new Date().toISOString();
 
-  // 1. Update product quantity in Supabase
-  const { data: updatedPData, error: updateErr } = await supabase
-    .from('products')
-    .update({ quantity: newQty, updated_at: new Date().toISOString() })
-    .eq('id', product.id)
-    .select()
-    .single();
+  // 2. Update Local State immediately
+  const updatedProduct: Product = { ...product, quantity: newQty, updatedAt: nowIso };
+  try {
+    db.updateProduct(updatedProduct);
+    const localBackup = getLocalProductsBackup();
+    const idx = localBackup.findIndex(p => p.id === product!.id);
+    if (idx !== -1) {
+      localBackup[idx] = updatedProduct;
+    } else {
+      localBackup.unshift(updatedProduct);
+    }
+    setLocalProductsBackup(localBackup, true);
+  } catch (e) {
+    console.warn('Local product update warning:', e);
+  }
 
-  if (updateErr) {
-    console.error('❌ Failed to deduct product quantity in Supabase:', updateErr.message);
-    throw new Error(`تعذر خصم الكمية من قاعدة البيانات: ${updateErr.message}`);
+  // 3. Update Supabase products table
+  let updatedPData: any = null;
+  if (isUuid) {
+    const { data: pRes, error: updateErr } = await supabase
+      .from('products')
+      .update({ quantity: newQty, updated_at: nowIso })
+      .eq('id', product.id)
+      .select()
+      .maybeSingle();
+
+    if (updateErr) {
+      console.warn('⚠️ Supabase product update notice:', updateErr.message);
+    } else {
+      updatedPData = pRes;
+    }
   }
 
   let movementId = `MOV-${Date.now()}`;
 
-  // 2. Insert inventory movement record in Supabase
-  const { data: movData, error: movErr } = await supabase
-    .from('inventory_movements')
-    .insert([
-      {
-        product_id: product.id,
-        movement_type: 'PARTNER_WITHDRAWAL',
-        quantity_change: -qtyToWithdraw,
-        previous_quantity: previousQty,
-        new_quantity: newQty,
-        cost_price_snapshot: unitCost,
-        selling_price_snapshot: Number(product.sellPrice || 0),
-        reference_id: partnerCode,
-        notes: params.notes || `مسحوبات بضاعة للشريك ${partnerNameAr}`,
-        created_by_user_id: params.userId || null,
-      },
-    ])
-    .select()
-    .single();
-
-  if (movErr) {
-    console.error('❌ Failed to insert inventory movement record, rolling back stock deduction:', movErr.message);
-    // Rollback product quantity in Supabase
-    await supabase.from('products').update({ quantity: previousQty }).eq('id', product.id);
-    throw new Error(`فشل تسجيل حركة المخزون. تم إلغاء العملية وإعادة الكمية السابقة (${previousQty}).`);
+  // 4. Record Inventory Movement (Supabase + Local)
+  const isUserUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(params.userId || '');
+  const movDataPayload: any = {
+    movement_type: 'PARTNER_WITHDRAWAL',
+    quantity_change: -qtyToWithdraw,
+    previous_quantity: previousQty,
+    new_quantity: newQty,
+    cost_price_snapshot: unitCost,
+    selling_price_snapshot: Number(product.sellPrice || 0),
+    reference_id: partnerCode,
+    notes: params.notes || `مسحوبات بضاعة للشريك ${partnerNameAr}`,
+    created_by_user_id: isUserUuid ? params.userId : null,
+  };
+  if (isUuid) {
+    movDataPayload.product_id = product.id;
   }
 
-  if (movData?.id) movementId = String(movData.id);
+  const { data: movData, error: movErr } = await supabase
+    .from('inventory_movements')
+    .insert([movDataPayload])
+    .select()
+    .maybeSingle();
 
-  // 3. Insert into repair_part_usages for withdrawal report
-  const partUsageData = {
-    inventory_item_id: product.id,
+  if (movErr) {
+    console.warn('⚠️ Notice inserting inventory_movements to Supabase:', movErr.message);
+  } else if (movData?.id) {
+    movementId = String(movData.id);
+  }
+
+  db.addInventoryMovement({
+    id: movementId,
+    productId: product.id,
+    movementType: 'PARTNER_WITHDRAWAL',
+    quantityChange: -qtyToWithdraw,
+    previousQuantity: previousQty,
+    newQuantity: newQty,
+    costPriceSnapshot: unitCost,
+    sellingPriceSnapshot: Number(product.sellPrice || 0),
+    referenceId: partnerCode,
+    partner: partnerCode,
+    notes: params.notes || `مسحوبات بضاعة للشريك ${partnerNameAr}`,
+    createdAt: nowIso,
+  });
+
+  // 5. Record Partner Financial Transaction (Supabase + Local)
+  const ptPayload: any = {
+    type: 'INVENTORY_WITHDRAWAL',
+    amount: totalCost,
+    notes: `سحب بضاعة: ${product.nameAr || product.name} (عدد ${qtyToWithdraw} قطعة) - ${params.notes || ''}`.trim(),
+  };
+  const isPartnerUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(partnerIdCanonical);
+  if (isPartnerUuid) {
+    ptPayload.partner_id = partnerIdCanonical;
+  }
+
+  const { error: ptErr } = await supabase.from('partner_transactions').insert([ptPayload]);
+  if (ptErr) {
+    console.warn('⚠️ Notice inserting partner_transactions to Supabase:', ptErr.message);
+  }
+
+  db.addPartnerTransaction({
+    partnerId: partnerIdCanonical,
+    type: 'INVENTORY_WITHDRAWAL',
+    amount: totalCost,
+    date: nowIso,
+    reason: `سحب بضاعة: ${product.nameAr || product.name} (عدد ${qtyToWithdraw} قطعة)`,
+    notes: `كود الصنف: ${product.sku || product.id} - ${params.notes || ''}`.trim(),
+    createdBy: params.userId || 'system',
+    approvedBy: params.userId || 'system',
+  });
+
+  // 6. Record Repair Part Usage for Withdrawn Items Report (Supabase + Local)
+  const partUsageData: any = {
     part_name: product.nameAr || product.name,
-    sku: product.sku,
+    sku: product.sku || product.id,
     quantity: qtyToWithdraw,
     unit_cost: unitCost,
     total_cost: totalCost,
-    ownership_type: isAbdo ? 'PARTNER_2_PRIVATE' : 'PARTNER_1_PRIVATE',
-    responsible_partner_id: partnerIdCanonical,
-    accounting_status: 'BILLED',
-    notes: params.notes || `مسحوبات بضاعة للشريك ${partnerNameAr}`,
+    repair_order_id: 'PARTNER_WITHDRAWAL',
+    created_at: nowIso,
   };
+  if (isUuid) {
+    partUsageData.inventory_item_id = product.id;
+  }
+  if (isPartnerUuid) {
+    partUsageData.responsible_partner_id = partnerIdCanonical;
+  }
 
   const { error: puErr } = await supabase.from('repair_part_usages').insert([partUsageData]);
   if (puErr) {
-    console.warn('⚠️ Notice inserting Supabase repair_part_usages:', puErr.message);
+    console.warn('⚠️ Notice inserting repair_part_usages to Supabase:', puErr.message);
   }
 
-  // 4. Update Local Database and Backups
-  try {
-    db.addPartnerTransaction({
-      partnerId: partnerIdCanonical,
-      type: 'INVENTORY_WITHDRAWAL',
-      amount: totalCost,
-      date: new Date().toISOString(),
-      reason: `سحب بضاعة: ${product.nameAr || product.name} (عدد ${qtyToWithdraw} قطعة)`,
-      notes: `كود الصنف: ${product.sku} - ${params.notes || ''}`.trim(),
-      createdBy: params.userId || 'system',
-      approvedBy: params.userId || 'system',
-    });
+  db.addRepairPartUsage({
+    repairOrderId: 'PARTNER_WITHDRAWAL',
+    inventoryItemId: product.id,
+    partName: product.nameAr || product.name,
+    sku: product.sku || product.id,
+    quantity: qtyToWithdraw,
+    unitCost: unitCost,
+    totalCost: totalCost,
+    ownershipType: isAbdo ? WorkOwnershipType.PARTNER_2_PRIVATE : WorkOwnershipType.PARTNER_1_PRIVATE,
+    responsiblePartnerId: partnerIdCanonical,
+    accountingStatus: 'CONSUMED',
+    notes: params.notes || `مسحوبات بضاعة للشريك ${partnerNameAr}`,
+    createdAt: nowIso,
+  });
 
-    db.addRepairPartUsage({
-      repairOrderId: 'PARTNER_WITHDRAWAL',
-      inventoryItemId: product.id,
-      partName: product.nameAr || product.name,
-      sku: product.sku,
-      quantity: qtyToWithdraw,
-      unitCost: unitCost,
-      totalCost: totalCost,
-      ownershipType: isAbdo ? WorkOwnershipType.PARTNER_2_PRIVATE : WorkOwnershipType.PARTNER_1_PRIVATE,
-      responsiblePartnerId: partnerIdCanonical,
-      accountingStatus: 'CONSUMED',
-      notes: params.notes || `مسحوبات بضاعة للشريك ${partnerNameAr}`,
-    });
-  } catch (err) {
-    console.warn('⚠️ Local db sync notice:', err);
-  }
-
-  // Update local product backup
-  const categoryMap = await getCategoryUuidMap();
-  const prodRow = mapProductToRow({ ...product, quantity: newQty }, categoryMap);
-  const updatedProductObj = mapRowToProduct(updatedPData || { ...prodRow, quantity: newQty });
-
-  const localBackup = getLocalProductsBackup();
-  const idx = localBackup.findIndex(p => p.id === product.id);
-  if (idx !== -1) {
-    localBackup[idx] = updatedProductObj;
-  } else {
-    localBackup.unshift(updatedProductObj);
-  }
-  setLocalProductsBackup(localBackup, false);
-
-  // 5. Dispatch global UI events for instant reactivity
+  // 7. Dispatch global UI events for instant reactivity
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_inventory_movements' } }));

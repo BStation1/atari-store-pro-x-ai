@@ -220,12 +220,12 @@ export default function ProfitsSummary({
   // 2. Extract ALL Raw Withdrawn Inventory Items across repair orders and direct sales invoices
   const allWithdrawalTransactions: WithdrawnItemDetail[] = [];
 
-  // A. From Repair Part Usages (linked to repair orders)
+  // A. From Repair Part Usages (linked to repair orders or partner inventory withdrawals)
   partUsages.forEach((pu, puIdx) => {
     if (pu.accountingStatus === 'RETURNED' || pu.accountingStatus === 'REVERSED') return;
 
     const parentOrder = orders.find((o) => o.id === pu.repairOrderId);
-    const dateStr = pu.createdAt || parentOrder?.receivedDate;
+    const dateStr = pu.createdAt || parentOrder?.receivedDate || (pu as any).date || new Date().toISOString();
     if (!isDateInFilterRange(dateStr)) return;
 
     // Real Item Name from Supabase (partName, or product name lookup)
@@ -248,9 +248,19 @@ export default function ProfitsSummary({
     if (!ownership) ownership = WorkOwnershipType.CUSTOMER_SHARED;
 
     let partyLabel: 'SHOP' | 'AHMED' | 'ABDO' = 'SHOP';
-    if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE || pu.responsiblePartnerId === 'P-001') {
+    if (
+      pu.responsiblePartnerId === 'P-001' ||
+      pu.responsiblePartnerId === 'AHMED' ||
+      ownership === WorkOwnershipType.PARTNER_1_PRIVATE ||
+      (ownership as string) === 'PARTNER_1_PRIVATE'
+    ) {
       partyLabel = 'AHMED';
-    } else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE || pu.responsiblePartnerId === 'P-002') {
+    } else if (
+      pu.responsiblePartnerId === 'P-002' ||
+      pu.responsiblePartnerId === 'ABDO' ||
+      ownership === WorkOwnershipType.PARTNER_2_PRIVATE ||
+      (ownership as string) === 'PARTNER_2_PRIVATE'
+    ) {
       partyLabel = 'ABDO';
     }
 
@@ -258,8 +268,13 @@ export default function ProfitsSummary({
     const uCost = Number(pu.unitCost) || 0;
     const tCost = Number(pu.totalCost) || qty * uCost;
 
-    const orderNum = (parentOrder as any)?.orderNumber || pu.repairOrderId || 'صيانة';
-    const customerName = parentOrder?.customerNameSnapshot || parentOrder?.guestCustomerName || 'عميل صيانة';
+    const isPartnerWithdrawal = pu.repairOrderId === 'PARTNER_WITHDRAWAL';
+    const orderNum = isPartnerWithdrawal
+      ? 'سحب شريك'
+      : (parentOrder as any)?.orderNumber || pu.repairOrderId || 'صيانة';
+    const customerName = isPartnerWithdrawal
+      ? (partyLabel === 'ABDO' ? 'مسحوبات الشريك عبده' : 'مسحوبات الشريك أحمد')
+      : parentOrder?.customerNameSnapshot || parentOrder?.guestCustomerName || 'عميل صيانة';
 
     allWithdrawalTransactions.push({
       id: pu.id || `pu-${pu.repairOrderId}-${realPartName}-${puIdx}`,
@@ -267,7 +282,7 @@ export default function ProfitsSummary({
       quantity: qty,
       unitCost: uCost,
       totalCost: tCost,
-      refNum: `أمر صيانة #${orderNum}`,
+      refNum: isPartnerWithdrawal ? 'مسحوبات بضاعة لشريك' : `أمر صيانة #${orderNum}`,
       customerName,
       date: formatDateISO(dateStr),
       ownership,
@@ -276,6 +291,50 @@ export default function ProfitsSummary({
       sourceType: 'REPAIR_ORDER'
     });
   });
+
+  // A2. From Direct Inventory Movements (Partner Withdrawals)
+  try {
+    const rawMovements = db.getInventoryMovements() || [];
+    rawMovements.forEach((m: any, mIdx: number) => {
+      if (m.movementType === 'PARTNER_WITHDRAWAL' || m.movement_type === 'PARTNER_WITHDRAWAL') {
+        const dateStr = m.createdAt || m.created_at || new Date().toISOString();
+        if (!isDateInFilterRange(dateStr)) return;
+
+        const prodId = m.productId || m.product_id;
+        const matchedProd = products.find(p => p.id === prodId || p.sku === m.referenceId);
+        const partName = matchedProd?.name || matchedProd?.nameAr || m.notes || 'صنف مسحوب';
+
+        const isAbdo = m.partner === 'ABDO' || m.referenceId === 'ABDO' || m.reference_id === 'ABDO' || (m.notes || '').includes('عبده');
+        const partyLabel: 'SHOP' | 'AHMED' | 'ABDO' = isAbdo ? 'ABDO' : 'AHMED';
+
+        const qty = Math.abs(Number(m.quantityChange || m.quantity_change) || 1);
+        const uCost = Number(m.costPriceSnapshot || m.cost_price_snapshot) || Number(matchedProd?.purchasePrice) || 0;
+        const tCost = qty * uCost;
+
+        const exists = allWithdrawalTransactions.some(
+          tx => tx.partName === partName && tx.quantity === qty && tx.date === formatDateISO(dateStr)
+        );
+        if (!exists) {
+          allWithdrawalTransactions.push({
+            id: m.id || `mov-with-${mIdx}`,
+            partName,
+            quantity: qty,
+            unitCost: uCost,
+            totalCost: tCost,
+            refNum: 'مسحوبات بضاعة لشريك',
+            customerName: partyLabel === 'ABDO' ? 'مسحوبات الشريك عبده' : 'مسحوبات الشريك أحمد',
+            date: formatDateISO(dateStr),
+            ownership: isAbdo ? WorkOwnershipType.PARTNER_2_PRIVATE : WorkOwnershipType.PARTNER_1_PRIVATE,
+            partyLabel,
+            partyNameArabic: partyLabel === 'AHMED' ? 'أحمد' : partyLabel === 'ABDO' ? 'عبده' : 'المحل',
+            sourceType: 'REPAIR_ORDER'
+          });
+        }
+      }
+    });
+  } catch (err) {
+    console.warn('Notice parsing inventory movements in ProfitsSummary:', err);
+  }
 
   // B. From Direct Sales Invoices (Prevent duplication: exclude invoices linked to repair orders)
   invoices.forEach((inv) => {
