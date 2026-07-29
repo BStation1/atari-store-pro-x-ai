@@ -49,14 +49,8 @@ export interface WithdrawnItemDetail {
 export interface AggregatedItem {
   partName: string;
   totalQuantity: number;
+  unitCost: number;
   totalCost: number;
-  minUnitCost: number;
-  maxUnitCost: number;
-  avgUnitCost: number;
-  shopQty: number;
-  ahmedQty: number;
-  abdoQty: number;
-  records: WithdrawnItemDetail[];
 }
 
 export default function ProfitsSummary({
@@ -82,7 +76,6 @@ export default function ProfitsSummary({
   // UI Modals & Expanders
   const [isWithdrawnModalOpen, setIsWithdrawnModalOpen] = useState(false);
   const [modalSearchQuery, setModalSearchQuery] = useState('');
-  const [selectedItemForDetail, setSelectedItemForDetail] = useState<AggregatedItem | null>(null);
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
 
   // Parse Month/Year for display
@@ -293,41 +286,6 @@ export default function ProfitsSummary({
     });
   });
 
-  // A2. From Repair Orders with device parts cost (where standalone partUsages is empty)
-  filteredOrders.forEach((o) => {
-    const orderParts = partUsages.filter(
-      (pu) => pu.repairOrderId === o.id && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
-    );
-    if (orderParts.length === 0) {
-      const devicePartsCost = o.devices?.reduce((sum, d) => sum + (Number(d.partsCost) || 0), 0) || 0;
-      if (devicePartsCost > 0) {
-        const ownership = o.jobType || o.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
-        let partyLabel: 'SHOP' | 'AHMED' | 'ABDO' = 'SHOP';
-        if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) partyLabel = 'AHMED';
-        else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) partyLabel = 'ABDO';
-
-        const orderNum = (o as any).orderNumber || o.id;
-        const customerName = o.customerNameSnapshot || o.guestCustomerName || 'عميل صيانة';
-        const dateStr = o.receivedDate;
-
-        allWithdrawalTransactions.push({
-          id: `ord-parts-${o.id}`,
-          partName: 'قطع غيار صيانة مسجلة بالأوردر',
-          quantity: 1,
-          unitCost: devicePartsCost,
-          totalCost: devicePartsCost,
-          refNum: `أمر صيانة #${orderNum}`,
-          customerName,
-          date: formatDateISO(dateStr),
-          ownership,
-          partyLabel,
-          partyNameArabic: partyLabel === 'AHMED' ? 'أحمد' : partyLabel === 'ABDO' ? 'عبده' : 'المحل',
-          sourceType: 'REPAIR_ORDER'
-        });
-      }
-    }
-  });
-
   // A3. From Direct Inventory Movements (Partner Withdrawals)
   try {
     const rawMovements = db.getInventoryMovements() || [];
@@ -338,7 +296,8 @@ export default function ProfitsSummary({
 
         const prodId = m.productId || m.product_id;
         const matchedProd = products.find(p => p.id === prodId || p.sku === m.referenceId);
-        const partName = matchedProd?.name || matchedProd?.nameAr || m.notes || 'صنف مسحوب';
+        const partName = matchedProd?.name || matchedProd?.nameAr || m.notes || '';
+        if (!partName) return;
 
         const isAbdo = m.partner === 'ABDO' || m.referenceId === 'ABDO' || m.reference_id === 'ABDO' || (m.notes || '').includes('عبده');
         const partyLabel: 'SHOP' | 'AHMED' | 'ABDO' = isAbdo ? 'ABDO' : 'AHMED';
@@ -404,7 +363,8 @@ export default function ProfitsSummary({
         }
 
         const qty = Number(item.quantity) || 1;
-        const uCost = Number((item as any).costPrice) || (Number((item as any).price || item.unitPrice) * 0.7);
+        const matchedProd = products.find(p => p.name === realPartName || p.id === item.productId);
+        const uCost = Number((item as any).costPrice) || Number(matchedProd?.purchasePrice) || (Number((item as any).price || item.unitPrice) * 0.7);
         const tCost = qty * uCost;
 
         const invNum = (inv as any).invoiceNumber || inv.id;
@@ -444,35 +404,18 @@ export default function ProfitsSummary({
       aggregated = {
         partName: key,
         totalQuantity: 0,
-        totalCost: 0,
-        minUnitCost: tx.unitCost,
-        maxUnitCost: tx.unitCost,
-        avgUnitCost: 0,
-        shopQty: 0,
-        ahmedQty: 0,
-        abdoQty: 0,
-        records: []
+        unitCost: tx.unitCost,
+        totalCost: 0
       };
       aggregatedItemsMap.set(key, aggregated);
     }
 
     aggregated.totalQuantity += tx.quantity;
     aggregated.totalCost += tx.totalCost;
-    aggregated.minUnitCost = Math.min(aggregated.minUnitCost, tx.unitCost);
-    aggregated.maxUnitCost = Math.max(aggregated.maxUnitCost, tx.unitCost);
-
-    if (tx.partyLabel === 'SHOP') aggregated.shopQty += tx.quantity;
-    if (tx.partyLabel === 'AHMED') aggregated.ahmedQty += tx.quantity;
-    if (tx.partyLabel === 'ABDO') aggregated.abdoQty += tx.quantity;
-
-    aggregated.records.push(tx);
+    aggregated.unitCost = aggregated.totalQuantity > 0 ? roundMoney(aggregated.totalCost / aggregated.totalQuantity) : tx.unitCost;
   });
 
-  const aggregatedItemsList = Array.from(aggregatedItemsMap.values()).map((item) => {
-    item.avgUnitCost = item.totalQuantity > 0 ? roundMoney(item.totalCost / item.totalQuantity) : 0;
-    item.records.sort((a, b) => b.date.localeCompare(a.date));
-    return item;
-  });
+  const aggregatedItemsList = Array.from(aggregatedItemsMap.values());
 
   // Sort aggregated items by total quantity descending
   aggregatedItemsList.sort((a, b) => b.totalQuantity - a.totalQuantity);
@@ -1131,20 +1074,13 @@ export default function ProfitsSummary({
               </div>
             </div>
 
-            {/* Modal Primary Aggregated Table Content */}
+            {/* Modal Primary Table Content */}
             <div className="overflow-y-auto flex-1 p-4">
               {(() => {
                 const filteredAggregated = aggregatedItemsList.filter((item) => {
                   if (!modalSearchQuery.trim()) return true;
                   const query = modalSearchQuery.toLowerCase();
-                  return (
-                    item.partName.toLowerCase().includes(query) ||
-                    item.records.some(
-                      (r) =>
-                        r.refNum.toLowerCase().includes(query) ||
-                        r.customerName.toLowerCase().includes(query)
-                    )
-                  );
+                  return item.partName.toLowerCase().includes(query);
                 });
 
                 return (
@@ -1152,54 +1088,33 @@ export default function ProfitsSummary({
                     <thead className="bg-[#181b2a] text-gray-400 font-semibold border-b border-[#2a2d42] sticky top-0">
                       <tr>
                         <th className="p-3">اسم الصنف</th>
-                        <th className="p-3 text-center">إجمالي الكمية المسحوبة</th>
-                        <th className="p-3">سعر التكلفة للوحدة</th>
-                        <th className="p-3 text-rose-400 font-bold">إجمالي تكلفة الصنف</th>
-                        <th className="p-3 text-center">التفاصيل والحركات</th>
+                        <th className="p-3 text-center">الكمية</th>
+                        <th className="p-3 text-center">سعر تكلفة الشراء (وقت السحب)</th>
+                        <th className="p-3 text-rose-400 font-bold text-left">إجمالي التكلفة</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#1f2937]">
                       {filteredAggregated.length > 0 ? (
-                        filteredAggregated.map((item, idx) => {
-                          const hasMultipleCosts = item.minUnitCost !== item.maxUnitCost;
-                          return (
-                            <tr key={idx} className="hover:bg-[#161927] transition">
-                              <td className="p-3 font-bold text-white flex items-center gap-2">
-                                <Box className="w-4 h-4 text-rose-400 shrink-0" />
-                                <span className="text-sm">{item.partName}</span>
-                              </td>
-                              <td className="p-3 font-extrabold text-cyan-300 text-center text-sm">
-                                {item.totalQuantity} قطعة
-                              </td>
-                              <td className="p-3 text-gray-300">
-                                {hasMultipleCosts ? (
-                                  <span className="text-amber-300 font-medium">
-                                    {item.minUnitCost.toLocaleString('ar-EG')} - {item.maxUnitCost.toLocaleString('ar-EG')} {currencySymbol} (متوسط: {item.avgUnitCost.toLocaleString('ar-EG')})
-                                  </span>
-                                ) : (
-                                  <span>
-                                    {item.minUnitCost.toLocaleString('ar-EG')} {currencySymbol}
-                                  </span>
-                                )}
-                              </td>
-                              <td className="p-3 font-black text-rose-300 text-sm">
-                                {item.totalCost.toLocaleString('ar-EG')} {currencySymbol}
-                              </td>
-                              <td className="p-3 text-center">
-                                <button
-                                  onClick={() => setSelectedItemForDetail(item)}
-                                  className="px-3 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 rounded-xl font-bold transition flex items-center gap-1.5 mx-auto cursor-pointer"
-                                >
-                                  <Eye className="w-3.5 h-3.5" />
-                                  <span>عرض الحركات ({item.records.length})</span>
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })
+                        filteredAggregated.map((item, idx) => (
+                          <tr key={idx} className="hover:bg-[#161927] transition">
+                            <td className="p-3 font-bold text-white flex items-center gap-2">
+                              <Box className="w-4 h-4 text-rose-400 shrink-0" />
+                              <span className="text-sm">{item.partName}</span>
+                            </td>
+                            <td className="p-3 font-extrabold text-cyan-300 text-center text-sm">
+                              {item.totalQuantity} قطعة
+                            </td>
+                            <td className="p-3 text-center text-gray-300 font-medium text-sm">
+                              {item.unitCost.toLocaleString('ar-EG')} {currencySymbol}
+                            </td>
+                            <td className="p-3 font-black text-rose-300 text-sm text-left">
+                              {item.totalCost.toLocaleString('ar-EG')} {currencySymbol}
+                            </td>
+                          </tr>
+                        ))
                       ) : (
                         <tr>
-                          <td colSpan={5} className="p-8 text-center text-gray-500">
+                          <td colSpan={4} className="p-8 text-center text-gray-500">
                             لا توجد أصناف بضاعة مسحوبة مطابقة للبحث أو الفلتر المختار
                           </td>
                         </tr>
@@ -1228,7 +1143,7 @@ export default function ProfitsSummary({
                 </div>
 
                 <div className="bg-[#1a1d2d] border border-rose-500/30 px-3.5 py-2 rounded-xl">
-                  <span className="text-[10px] text-rose-300 font-bold block">إجمالي تكلفة البضاعة:</span>
+                  <span className="text-[10px] text-rose-300 font-bold block">إجمالي تكلفة المسحوبات:</span>
                   <span className="text-sm font-black text-rose-400">
                     {totalWithdrawnCost.toLocaleString('ar-EG')} {currencySymbol}
                   </span>
@@ -1236,133 +1151,10 @@ export default function ProfitsSummary({
               </div>
 
               <button
-                onClick={() => {
-                  setIsWithdrawnModalOpen(false);
-                  setSelectedItemForDetail(null);
-                }}
+                onClick={() => setIsWithdrawnModalOpen(false)}
                 className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl transition cursor-pointer"
               >
                 إغلاق التقرير
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* SUB-MODAL: ITEM DRILL-DOWN TRANSACTIONS DETAIL */}
-      {selectedItemForDetail && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[60] flex items-center justify-center p-4 dir-rtl text-right overflow-y-auto">
-          <div className="bg-[#11131e] border border-rose-500/40 rounded-2xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
-            {/* Header */}
-            <div className="p-4 border-b border-[#2a2d42] flex items-center justify-between bg-[#161828]">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 bg-rose-500/20 border border-rose-500/40 rounded-xl text-rose-400">
-                  <Box className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-base font-black text-white flex items-center gap-2">
-                    تفاصيل حركات الصنف: <span className="text-rose-400">{selectedItemForDetail.partName}</span>
-                  </h3>
-                  <p className="text-xs text-gray-400">
-                    السجلات الفردية والفواتير التي تم سحب هذا الصنف لحسابها
-                  </p>
-                </div>
-              </div>
-
-              <button
-                onClick={() => setSelectedItemForDetail(null)}
-                className="p-2 text-gray-400 hover:text-white bg-[#1a1d2d] hover:bg-[#25293e] rounded-xl transition cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Summary badges */}
-            <div className="p-3 bg-[#161928] border-b border-[#2a2d42] flex flex-wrap items-center justify-between gap-3 text-xs">
-              <div className="flex items-center gap-3">
-                <span className="bg-[#11131e] border border-[#2a2d42] px-3 py-1.5 rounded-xl text-gray-300 font-bold">
-                  إجمالي الكمية: <strong className="text-cyan-300">{selectedItemForDetail.totalQuantity} قطعة</strong>
-                </span>
-                <span className="bg-[#11131e] border border-[#2a2d42] px-3 py-1.5 rounded-xl text-gray-300 font-bold">
-                  إجمالي التكلفة: <strong className="text-rose-400">{selectedItemForDetail.totalCost.toLocaleString('ar-EG')} {currencySymbol}</strong>
-                </span>
-              </div>
-
-              <div className="flex items-center gap-2 font-bold">
-                <span className="text-gray-400">توزيع الأطراف:</span>
-                <span className="px-2 py-0.5 rounded-lg bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                  المحل: {selectedItemForDetail.shopQty}
-                </span>
-                <span className="px-2 py-0.5 rounded-lg bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
-                  أحمد: {selectedItemForDetail.ahmedQty}
-                </span>
-                <span className="px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                  عبده: {selectedItemForDetail.abdoQty}
-                </span>
-              </div>
-            </div>
-
-            {/* Transactions Table */}
-            <div className="overflow-y-auto flex-1 p-4">
-              <table className="w-full text-xs text-right text-gray-300 border-collapse">
-                <thead className="bg-[#181b2a] text-gray-400 font-semibold border-b border-[#2a2d42] sticky top-0">
-                  <tr>
-                    <th className="p-3">رقم العملية / الفاتورة</th>
-                    <th className="p-3">العميل</th>
-                    <th className="p-3 text-center">الطرف المسؤول</th>
-                    <th className="p-3 text-center">الكمية</th>
-                    <th className="p-3">سعر التكلفة للوحدة</th>
-                    <th className="p-3 text-rose-400 font-bold">إجمالي التكلفة</th>
-                    <th className="p-3">التاريخ</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#1f2937]">
-                  {selectedItemForDetail.records.map((rec, rIdx) => (
-                    <tr key={rec.id || rIdx} className="hover:bg-[#161927] transition">
-                      <td className="p-3 font-mono font-bold text-indigo-300">
-                        {rec.refNum}
-                      </td>
-                      <td className="p-3 font-semibold text-white">
-                        {rec.customerName}
-                      </td>
-                      <td className="p-3 text-center">
-                        <span
-                          className={`px-2.5 py-1 rounded-full text-[11px] font-extrabold border ${
-                            rec.partyLabel === 'AHMED'
-                              ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30'
-                              : rec.partyLabel === 'ABDO'
-                              ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
-                              : 'bg-purple-500/20 text-purple-300 border-purple-500/30'
-                          }`}
-                        >
-                          {rec.partyNameArabic}
-                        </span>
-                      </td>
-                      <td className="p-3 font-extrabold text-cyan-300 text-center text-sm">
-                        {rec.quantity}
-                      </td>
-                      <td className="p-3 text-gray-300">
-                        {rec.unitCost.toLocaleString('ar-EG')} {currencySymbol}
-                      </td>
-                      <td className="p-3 font-black text-rose-300 text-sm">
-                        {rec.totalCost.toLocaleString('ar-EG')} {currencySymbol}
-                      </td>
-                      <td className="p-3 text-gray-400 whitespace-nowrap">
-                        {rec.date}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Sub-modal footer */}
-            <div className="p-4 border-t border-[#2a2d42] bg-[#141724] flex items-center justify-end">
-              <button
-                onClick={() => setSelectedItemForDetail(null)}
-                className="px-5 py-2 bg-[#25293e] hover:bg-[#323752] text-white font-bold text-xs rounded-xl transition cursor-pointer"
-              >
-                رجوع للقائمة التجميعية
               </button>
             </div>
           </div>
