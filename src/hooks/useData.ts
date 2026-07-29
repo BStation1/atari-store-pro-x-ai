@@ -210,7 +210,26 @@ export function useRepairOrders() {
     fetchOrMigrateRepairOrders()
       .then(res => {
         if (active) {
-          setOrders(res.orders);
+          setOrders(prev => {
+            const mergedMap = new Map<string, RepairOrder>();
+            // 1. Put freshly fetched remote/backup orders
+            (res.orders || []).forEach(o => mergedMap.set(o.id, o));
+            // 2. Preserve any order currently in local memory or localStorage
+            const backupLocal = getLocalRepairOrdersBackup();
+            backupLocal.forEach(o => {
+              if (!mergedMap.has(o.id)) {
+                mergedMap.set(o.id, o);
+              }
+            });
+            prev.forEach(o => {
+              if (!mergedMap.has(o.id)) {
+                mergedMap.set(o.id, o);
+              }
+            });
+            return Array.from(mergedMap.values()).sort((a, b) => {
+              return new Date(b.receivedDate || 0).getTime() - new Date(a.receivedDate || 0).getTime();
+            });
+          });
           setLoading(false);
           if (!res.success && res.error) {
             setError(res.error);
