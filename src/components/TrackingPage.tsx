@@ -35,6 +35,7 @@ import { RepairStatus, RepairOrder, Customer } from "../types";
 
 import { getCustomerNameHelper, getCustomerPhoneHelper, getCustomerBadgeHelper, getDeviceDisplayName } from "../lib/customerDisplayHelper";
 import { PhoneDisplay } from "./PhoneDisplay";
+import { fetchPublicTrackingOrder } from "../lib/publicTrackingService";
 
 interface TrackingPageProps {
   initialQuery?: string;
@@ -50,17 +51,17 @@ export default function TrackingPage({ initialQuery }: TrackingPageProps) {
   const [matchedOrders, setMatchedOrders] = useState<RepairOrder[]>([]);
   const [searchedOrder, setSearchedOrder] = useState<RepairOrder | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const [copiedToast, setCopiedToast] = useState(false);
 
-  // Verification helper function - Enforces BUG-005 security (Phone verification mandatory)
-  const verifyAndExecuteSearch = (searchOrder: string, searchPhone: string, directToken?: string) => {
+  // Verification helper function - Enforces public tracking security via public API/RPC
+  const verifyAndExecuteSearch = async (searchOrder: string, searchPhone: string, directToken?: string) => {
     setHasSearched(true);
     setVerificationError(null);
 
     const cleanOrder = searchOrder.trim().toLowerCase();
     const cleanPhone = searchPhone.trim().toLowerCase();
-    const cleanPhoneDigits = cleanPhone.replace(/\D/g, "");
     const cleanToken = directToken?.trim().toLowerCase();
 
     const targetCode = cleanToken || cleanOrder;
@@ -72,51 +73,33 @@ export default function TrackingPage({ initialQuery }: TrackingPageProps) {
       return;
     }
 
-    if (!cleanPhoneDigits) {
+    if (!cleanPhone) {
       setVerificationError("لأسباب أمنية، يرجى إدخال رقم الهاتف المسجل بالإيصال لفتح بيانات الصيانة.");
       setMatchedOrders([]);
       setSearchedOrder(null);
       return;
     }
 
-    const verified = orders.filter(order => {
-      // Order ID / Token / Serial match
-      const isOrderMatch =
-        order.id.toLowerCase() === targetCode ||
-        (order.trackingToken && order.trackingToken.toLowerCase() === targetCode) ||
-        order.devices.some(d => d.deviceCode?.toLowerCase() === targetCode || (d.serialNumber && d.serialNumber.toLowerCase() === targetCode));
+    setIsSearching(true);
 
-      if (!isOrderMatch) return false;
+    try {
+      const result = await fetchPublicTrackingOrder(targetCode, cleanPhone, orders, customers);
 
-      // Mandatory customer phone match for strict security
-      const custPhone = getCustomerPhoneHelper(order, customers);
-      if (!custPhone) return false;
-
-      const custPhoneDigits = custPhone.replace(/\D/g, "");
-      if (cleanPhoneDigits.length >= 4) {
-        return custPhoneDigits.includes(cleanPhoneDigits) || cleanPhoneDigits.includes(custPhoneDigits);
+      if (result.success && result.order) {
+        setMatchedOrders([result.order]);
+        setSearchedOrder(result.order);
+        setVerificationError(null);
+      } else {
+        setMatchedOrders([]);
+        setSearchedOrder(null);
+        setVerificationError(result.error || "رقم الهاتف أو بيانات التتبع غير صحيحة.");
       }
-
-      return custPhone.toLowerCase().includes(cleanPhone);
-    });
-
-    if (verified.length > 0) {
-      setMatchedOrders(verified);
-      setSearchedOrder(verified[0]);
-      setVerificationError(null);
-    } else {
+    } catch (err) {
       setMatchedOrders([]);
       setSearchedOrder(null);
-
-      const existsOrder = orders.some(
-        o => o.id.toLowerCase() === targetCode || (o.trackingToken && o.trackingToken.toLowerCase() === targetCode)
-      );
-
-      if (existsOrder) {
-        setVerificationError("رقم الهاتف المدخل لا يتطابق مع بيانات هذا الطلب. يرجى التأكد من رقم الهاتف المدون بالإيصال.");
-      } else {
-        setVerificationError("لم نتمكن من العثور على أي طلب صيانة يطابق البيانات المدخلة. يرجى التحقق وإعادة المحاولة.");
-      }
+      setVerificationError("رقم الهاتف أو بيانات التتبع غير صحيحة.");
+    } finally {
+      setIsSearching(false);
     }
   };
 
@@ -137,7 +120,7 @@ export default function TrackingPage({ initialQuery }: TrackingPageProps) {
         verifyAndExecuteSearch(activeCode, queryPhone);
       }
     }
-  }, [initialQuery, orders]);
+  }, [initialQuery]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -350,10 +333,20 @@ export default function TrackingPage({ initialQuery }: TrackingPageProps) {
 
           <button
             type="submit"
-            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3.5 px-6 rounded-xl text-xs font-bold transition-all shadow-lg shadow-indigo-950/50 cursor-pointer flex items-center justify-center gap-2 mt-2"
+            disabled={isSearching}
+            className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-900 disabled:opacity-70 text-white py-3.5 px-6 rounded-xl text-xs font-bold transition-all shadow-lg shadow-indigo-950/50 cursor-pointer flex items-center justify-center gap-2 mt-2"
           >
-            <ShieldCheck className="w-4 h-4" />
-            تحقق واستعلام عن الطلب
+            {isSearching ? (
+              <>
+                <Clock className="w-4 h-4 animate-spin text-indigo-300" />
+                جاري التحقق من بيانات التتبع...
+              </>
+            ) : (
+              <>
+                <ShieldCheck className="w-4 h-4" />
+                تحقق واستعلام عن الطلب
+              </>
+            )}
           </button>
         </form>
 

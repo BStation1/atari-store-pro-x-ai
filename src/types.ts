@@ -262,6 +262,10 @@ export interface RepairOrder {
   guestCustomerPhone?: string;
   guestCustomerAltPhone?: string;
   guestCustomerNote?: string;
+  guest_name?: string;
+  guest_phone?: string;
+  customer_name?: string;
+  customer_phone?: string;
   customerNameSnapshot?: string;
   customerPhoneSnapshot?: string;
   devices: RepairDevice[];

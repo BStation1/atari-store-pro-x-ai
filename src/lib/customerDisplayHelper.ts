@@ -128,24 +128,36 @@ export function getCustomerNameHelper(
   order: any,
   customersList: Customer[] = []
 ): string {
-  if (!order) return 'بدون اسم';
+  if (!order) return 'زائر';
 
-  if (order.customerNameSnapshot && String(order.customerNameSnapshot).trim() !== '') {
-    return String(order.customerNameSnapshot).trim();
-  }
-
-  if (order.guestCustomerName && String(order.guestCustomerName).trim() !== '') {
-    return String(order.guestCustomerName).trim();
-  }
-
+  // 1. Registered Customer lookup by ID if registered
   if (order.customerId) {
     const found = customersList.find((c) => c.id === order.customerId);
-    if (found && found.name && String(found.name).trim() !== '') {
+    if (found && found.name && String(found.name).trim() !== '' && found.name !== 'عميل غير مسجل' && found.name !== 'زائر') {
       return String(found.name).trim();
     }
   }
 
-  return 'بدون اسم';
+  // 2. Priority check for guest or order snapshot fields
+  const candidates = [
+    order.guest_name,
+    order.customer_name,
+    order.guestCustomerName,
+    order.customerNameSnapshot,
+    order.customerName,
+    order.notes?.guestCustomerName,
+    order.notes?.customerNameSnapshot,
+    order.notes?.guest_name,
+    order.notes?.customer_name
+  ];
+
+  for (const cand of candidates) {
+    if (cand && typeof cand === 'string' && cand.trim() !== '' && cand.trim() !== 'عميل غير مسجل') {
+      return cand.trim();
+    }
+  }
+
+  return 'زائر';
 }
 
 export function getCustomerBadgeHelper(order: any): {
@@ -161,7 +173,7 @@ export function getCustomerBadgeHelper(order: any): {
     return { type: 'GUEST', label: 'عميل زائر' };
   }
 
-  if (order.customerId && !order.guestCustomerName) {
+  if (order.customerId && !order.guestCustomerName && !order.guest_name) {
     return { type: 'REGISTERED', label: 'عميل مسجل' };
   }
 
@@ -172,20 +184,34 @@ export function getCustomerPhoneHelper(
   order: any,
   customersList: Customer[] = []
 ): string {
-  if (!order) return '';
+  if (!order) return 'بدون رقم هاتف';
 
-  if (order.customerPhoneSnapshot && String(order.customerPhoneSnapshot).trim() !== '') {
-    return String(order.customerPhoneSnapshot).trim();
-  }
-
-  if (order.guestCustomerPhone && String(order.guestCustomerPhone).trim() !== '') {
-    return String(order.guestCustomerPhone).trim();
-  }
-
+  // 1. Registered Customer lookup by ID if registered
   if (order.customerId) {
     const found = customersList.find((c) => c.id === order.customerId);
-    if (found && found.phone) return found.phone;
+    if (found && found.phone && String(found.phone).trim() !== '' && found.phone !== '0000000000') {
+      return String(found.phone).trim();
+    }
   }
 
-  return '';
+  // 2. Priority check for guest or order snapshot fields
+  const candidates = [
+    order.guest_phone,
+    order.customer_phone,
+    order.guestCustomerPhone,
+    order.customerPhoneSnapshot,
+    order.customerPhone,
+    order.notes?.guestCustomerPhone,
+    order.notes?.customerPhoneSnapshot,
+    order.notes?.guest_phone,
+    order.notes?.customer_phone
+  ];
+
+  for (const cand of candidates) {
+    if (cand && typeof cand === 'string' && cand.trim() !== '' && cand.trim() !== '0000000000') {
+      return cand.trim();
+    }
+  }
+
+  return 'بدون رقم هاتف';
 }

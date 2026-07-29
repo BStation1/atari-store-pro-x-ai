@@ -69,7 +69,8 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
   const { settings } = useSettings();
   const { invoices, addInvoice } = useInvoices();
 
-  const [activeTab, setActiveTab] = useState<string>(initialStatusFilter || "all");
+  const [activeTab, setActiveTab] = useState<string>(initialStatusFilter || "active_all");
+  const [searchQuery, setSearchQuery] = useState("");
   const [selectedOrder, setSelectedOrder] = useState<RepairOrder | null>(
     initialOrderId ? orders.find(o => o.id === initialOrderId) || null : null
   );
@@ -818,11 +819,77 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     }
   };
 
-  // Filter orders by active status tab
-  const filteredOrders = orders.filter(o => {
-    if (activeTab === "all") return true;
+  // Search matching function
+  const matchesWorkshopSearch = (order: RepairOrder, query: string): boolean => {
+    const trimmed = query.trim().toLowerCase();
+    if (!trimmed) return true;
+
+    // 1. Order ID / Order Number match
+    if (order.id.toLowerCase().includes(trimmed)) return true;
+
+    // 2. Customer or Guest Name match
+    const custName = getCustomerNameHelper(order, customers).toLowerCase();
+    if (custName.includes(trimmed)) return true;
+
+    if (order.guestCustomerName && order.guestCustomerName.toLowerCase().includes(trimmed)) return true;
+    if ((order as any).guest_name && String((order as any).guest_name).toLowerCase().includes(trimmed)) return true;
+    if ((order as any).customer_name && String((order as any).customer_name).toLowerCase().includes(trimmed)) return true;
+
+    // 3. Device Name & Serial Number match
+    if (Array.isArray(order.devices)) {
+      for (const d of order.devices) {
+        const devDisplayName = getDeviceDisplayName(d).toLowerCase();
+        if (devDisplayName.includes(trimmed)) return true;
+
+        if (d.type && d.type.toLowerCase().includes(trimmed)) return true;
+        if (d.model && d.model.toLowerCase().includes(trimmed)) return true;
+        if (d.serialNumber && d.serialNumber.toLowerCase().includes(trimmed)) return true;
+        if ((d as any).deviceCode && String((d as any).deviceCode).toLowerCase().includes(trimmed)) return true;
+      }
+    }
+
+    // 4. Phone matching (ONLY if query contains digits!)
+    const queryDigits = trimmed.replace(/\D/g, "");
+    if (queryDigits.length > 0) {
+      const custPhone = getCustomerPhoneHelper(order, customers);
+      if (custPhone && custPhone !== "بدون رقم هاتف" && custPhone !== "0000000000") {
+        const phoneDigits = custPhone.replace(/\D/g, "");
+        if (phoneDigits) {
+          const localPhoneDigits = phoneDigits.startsWith("201") && phoneDigits.length === 12 
+            ? "0" + phoneDigits.slice(2) 
+            : phoneDigits;
+          
+          const localQueryDigits = queryDigits.startsWith("201") && queryDigits.length === 12
+            ? "0" + queryDigits.slice(2)
+            : queryDigits;
+
+          if (phoneDigits.includes(queryDigits) || localPhoneDigits.includes(localQueryDigits) || queryDigits.includes(phoneDigits) || localPhoneDigits.includes(queryDigits)) {
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  };
+
+  // Helper counts for tabs
+  const countActiveAll = orders.filter(o => o.status !== RepairStatus.Delivered && o.status !== RepairStatus.Cancelled).length;
+  const countDeliveredArchive = orders.filter(o => o.status === RepairStatus.Delivered || o.status === RepairStatus.Cancelled).length;
+
+  // Filter orders by active status tab (Delivered orders excluded by default in active workshop)
+  const statusFilteredOrders = orders.filter(o => {
+    const isDeliveredOrCancelled = o.status === RepairStatus.Delivered || o.status === RepairStatus.Cancelled;
+    if (activeTab === "active_all" || activeTab === "all") {
+      return !isDeliveredOrCancelled;
+    }
+    if (activeTab === "delivered_archive") {
+      return isDeliveredOrCancelled;
+    }
     return o.status === activeTab;
   });
+
+  const filteredOrders = statusFilteredOrders.filter(o => matchesWorkshopSearch(o, searchQuery));
 
   return (
     <div className="space-y-6 text-right">
@@ -842,14 +909,16 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
         <div className="flex flex-wrap gap-1.5 bg-gray-950 p-1.5 rounded-xl border border-[#2a2d42]">
           <button
             type="button"
-            onClick={() => setActiveTab("all")}
+            onClick={() => setActiveTab("active_all")}
             className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-              activeTab === "all" ? "bg-indigo-600 text-white shadow-md shadow-indigo-950/50" : "text-gray-400 hover:text-white"
+              activeTab === "active_all" || activeTab === "all" ? "bg-indigo-600 text-white shadow-md shadow-indigo-950/50" : "text-gray-400 hover:text-white"
             }`}
           >
-            الكل ({orders.length})
+            الكل النشط ({countActiveAll})
           </button>
+          
           {Object.entries(statusConfig).map(([st, cfg]) => {
+            if (st === RepairStatus.Delivered || st === RepairStatus.Cancelled) return null;
             const count = orders.filter(o => o.status === st).length;
             return (
               <button
@@ -864,6 +933,16 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
               </button>
             );
           })}
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("delivered_archive")}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              activeTab === "delivered_archive" ? "bg-cyan-600/30 border border-cyan-500/50 text-cyan-300 shadow-md shadow-cyan-950/50" : "text-gray-400 hover:text-white"
+            }`}
+          >
+            تم التسليم / الأرشيف ({countDeliveredArchive})
+          </button>
         </div>
       </div>
 
@@ -873,14 +952,38 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
           <div className="flex justify-between items-center border-b border-[#2a2d42] pb-3">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
               <Layers className="w-4 h-4 text-indigo-400" />
-              قائمة أجهزة الورشه ({filteredOrders.length})
+              أجهزة الورشة النشطة ({filteredOrders.length})
             </h3>
           </div>
 
+          {/* Workshop Search Bar */}
+          <div className="relative">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="بحث بالاسم، رقم الهاتف، رقم الإيصال، السيريال..."
+              className="w-full bg-gray-950 border border-[#2a2d42] focus:border-indigo-500 text-xs text-white rounded-xl pr-9 pl-8 py-2.5 outline-none transition-all placeholder:text-gray-500"
+            />
+            <Search className="w-4 h-4 text-gray-400 absolute right-3 top-3" />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                className="absolute left-3 top-2.5 text-gray-400 hover:text-white p-0.5 rounded-full"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
           {filteredOrders.length === 0 ? (
-            <div className="text-center py-12 text-gray-500">
-              <Clock className="w-8 h-8 mx-auto mb-2 opacity-40 text-indigo-400" />
-              <p className="text-xs">لا توجد طلبات صيانة ضمن هذه الحالة</p>
+            <div className="text-center py-10 bg-[#16192a] rounded-xl border border-[#2a2d42] p-4 text-gray-400 space-y-2">
+              <Search className="w-8 h-8 mx-auto opacity-40 text-indigo-400" />
+              <p className="text-xs font-bold text-gray-300">لا توجد أوامر صيانة مطابقة</p>
+              <p className="text-[11px] text-gray-500">
+                {searchQuery ? "يرجى التحقق من كلمات البحث أو رقم الهاتف المدخل" : "لا توجد أجهزة متواجدة ضمن هذا القسم حالياً"}
+              </p>
             </div>
           ) : (
             filteredOrders.map(order => {
