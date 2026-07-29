@@ -380,21 +380,22 @@ export async function addRepairOrderToSupabase(
       .maybeSingle();
 
     if (error) {
-      console.warn("⚠️ Error saving repair order to Supabase, fallback to local:", error.message);
-      const updatedLocalList = [fullOrderObj, ...localList.filter(o => o.id !== fullOrderObj.id)];
-      saveLocalRepairOrdersBackup(updatedLocalList, true);
-      return fullOrderObj;
-    } else if (data) {
+      console.error("⚠️ Error saving repair order to Supabase:", error.message);
+      throw new Error(`تعذر حفظ أمر الصيانة في Supabase: ${error.message}`);
+    }
+
+    if (data) {
       const createdOrder = mapRowToRepairOrder(data);
       const updatedLocalList = [createdOrder, ...localList.filter(o => o.id !== createdOrder.id)];
       saveLocalRepairOrdersBackup(updatedLocalList, true);
       return createdOrder;
     }
   } catch (err: any) {
-    console.warn("⚠️ Exception in addRepairOrderToSupabase, fallback to local:", err?.message || err);
+    console.error("⚠️ Exception in addRepairOrderToSupabase:", err?.message || err);
+    throw err;
   }
 
-  // Local fallback
+  // Local fallback if Supabase not configured
   const updatedLocalList = [fullOrderObj, ...localList.filter(o => o.id !== fullOrderObj.id)];
   saveLocalRepairOrdersBackup(updatedLocalList, true);
   return fullOrderObj;
