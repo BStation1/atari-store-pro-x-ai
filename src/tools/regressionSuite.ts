@@ -96,7 +96,7 @@ export async function runGoLiveCoreRegressionSuite(): Promise<TestResult[]> {
   try {
     const fetched = await fetchOrMigrateRepairOrders();
     const sampleText = JSON.stringify(fetched.orders);
-    const hasReplacementChar = sampleText.includes('');
+    const hasReplacementChar = sampleText.includes('\uFFFD');
     addResult("Suite F: Formatting", "No Replacement Character ()", !hasReplacementChar, hasReplacementChar ? "Found invalid encoding characters" : "Text encoding clean");
 
     const hasInternalIDsInSnapshots = fetched.orders.some(o => (o.customerNameSnapshot || '').includes('DT-') || (o.customerNameSnapshot || '').includes('DM-'));

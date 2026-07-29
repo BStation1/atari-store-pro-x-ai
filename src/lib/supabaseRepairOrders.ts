@@ -207,19 +207,20 @@ export async function fetchOrMigrateRepairOrders(): Promise<{ success: boolean; 
     }
 
     if (!data || data.length === 0) {
-      if (localOrders.length > 0) {
-        return { success: true, orders: localOrders };
+      const freshLocalOrders = getLocalRepairOrdersBackup();
+      if (freshLocalOrders.length > 0) {
+        return { success: true, orders: freshLocalOrders };
       }
-      saveLocalRepairOrdersBackup([], false);
       return { success: true, orders: [] };
     }
 
     const mappedOrders = data.map(mapRowToRepairOrder);
 
-    // Merge local orders with remote orders so newly added/unsynced local orders are retained
+    // Merge fresh local orders with remote orders so newly added/unsynced local orders are retained
+    const freshLocalOrders = getLocalRepairOrdersBackup();
     const mergedMap = new Map<string, RepairOrder>();
     mappedOrders.forEach(o => mergedMap.set(o.id, o));
-    localOrders.forEach(o => {
+    freshLocalOrders.forEach(o => {
       if (!mergedMap.has(o.id)) {
         mergedMap.set(o.id, o);
       }
@@ -295,10 +296,20 @@ export async function addRepairOrderToSupabase(
     });
   }
 
+  const isGuestOrder = orderData.customerType === 'GUEST' || (!targetCustomerId && !orderData.customerId);
+  const resolvedCustomerId = isUuid(targetCustomerId) ? targetCustomerId : (isUuid(orderData.customerId) ? orderData.customerId : undefined);
+
   const fullOrderObj: RepairOrder = {
     ...orderData,
     id: generatedId,
-    customerId: targetCustomerId || orderData.customerId || `CUST_${Date.now()}`,
+    customerId: resolvedCustomerId,
+    customerType: isGuestOrder ? 'GUEST' : (orderData.customerType || 'REGISTERED'),
+    guestCustomerName: orderData.guestCustomerName || orderData.guest_name || orderData.customerNameSnapshot || orderData.customerName,
+    guestCustomerPhone: orderData.guestCustomerPhone || orderData.guest_phone || orderData.customerPhoneSnapshot || orderData.customerPhone,
+    guest_name: orderData.guest_name || orderData.guestCustomerName || orderData.customerNameSnapshot || orderData.customerName,
+    guest_phone: orderData.guest_phone || orderData.guestCustomerPhone || orderData.customerPhoneSnapshot || orderData.customerPhone,
+    customerNameSnapshot: orderData.customerNameSnapshot || orderData.guestCustomerName || orderData.customerName || "",
+    customerPhoneSnapshot: orderData.customerPhoneSnapshot || orderData.guestCustomerPhone || orderData.customerPhone || "",
     receivedDate: nowIso,
     trackingToken: generatedToken,
     jobType: resolvedOwnership,
@@ -316,7 +327,7 @@ export async function addRepairOrderToSupabase(
   try {
     // Step 1: Link to existing registered customer if phone matches, otherwise keep as guest without inserting into customers directory
     if (!targetCustomerId) {
-      const phoneToSearch = orderData.guestCustomerPhone || orderData.customerPhoneSnapshot || "";
+      const phoneToSearch = orderData.guestCustomerPhone || orderData.customerPhoneSnapshot || orderData.customerPhone || orderData.guest_phone || "";
 
       if (phoneToSearch) {
         try {
@@ -334,7 +345,10 @@ export async function addRepairOrderToSupabase(
       }
     }
 
-    fullOrderObj.customerId = targetCustomerId || fullOrderObj.customerId;
+    if (isUuid(targetCustomerId)) {
+      fullOrderObj.customerId = targetCustomerId;
+      fullOrderObj.customerType = 'REGISTERED';
+    }
 
     const firstDevice = orderData.devices?.[0];
     const reportedIssueStr = firstDevice?.issue || 
@@ -366,7 +380,10 @@ export async function addRepairOrderToSupabase(
       .maybeSingle();
 
     if (error) {
-      console.warn("⚠️ Error saving repair order to Supabase, saving locally:", error.message);
+      console.warn("⚠️ Error saving repair order to Supabase, fallback to local:", error.message);
+      const updatedLocalList = [fullOrderObj, ...localList.filter(o => o.id !== fullOrderObj.id)];
+      saveLocalRepairOrdersBackup(updatedLocalList, true);
+      return fullOrderObj;
     } else if (data) {
       const createdOrder = mapRowToRepairOrder(data);
       const updatedLocalList = [createdOrder, ...localList.filter(o => o.id !== createdOrder.id)];
@@ -374,7 +391,7 @@ export async function addRepairOrderToSupabase(
       return createdOrder;
     }
   } catch (err: any) {
-    console.warn("⚠️ Exception in addRepairOrderToSupabase, saving locally:", err?.message || err);
+    console.warn("⚠️ Exception in addRepairOrderToSupabase, fallback to local:", err?.message || err);
   }
 
   // Local fallback
