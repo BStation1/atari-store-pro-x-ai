@@ -478,7 +478,7 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
 
     // Work Ownership Validation (Required)
     if (!workOwnershipType) {
-      setValidationError("يرجى تحديد ملكية العمل (صيانة محل / صيانة أحمد شخصي / صيانة عبده شخصي) قبل حفظ الطلب.");
+      setValidationError("يرجى تحديد ملكية العمل (شغل المحل / شغل أحمد / شغل عبده) قبل حفظ الطلب.");
       return;
     }
 
@@ -856,10 +856,7 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
                         <div className="w-1.5 h-1.5 rounded-full bg-black" />
                       )}
                     </div>
-                    <div>
-                      <div className="text-xs font-bold text-white">صيانة محل (Shop Repair)</div>
-                      <div className="text-[10px] text-cyan-300/80">أحمد 50% | عبده 50%</div>
-                    </div>
+                    <span className="text-xs font-bold text-white">شغل المحل</span>
                   </div>
                   {workOwnershipType === WorkOwnershipType.CUSTOMER_SHARED && (
                     <CheckCircle className="w-4 h-4 text-cyan-400 shrink-0" />
@@ -886,10 +883,7 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
                         <div className="w-1.5 h-1.5 rounded-full bg-black" />
                       )}
                     </div>
-                    <div>
-                      <div className="text-xs font-bold text-white">صيانة أحمد شخصي (Ahmed Personal)</div>
-                      <div className="text-[10px] text-indigo-300/80">أحمد 100%</div>
-                    </div>
+                    <span className="text-xs font-bold text-white">شغل أحمد</span>
                   </div>
                   {workOwnershipType === WorkOwnershipType.PARTNER_1_PRIVATE && (
                     <CheckCircle className="w-4 h-4 text-indigo-400 shrink-0" />
@@ -916,10 +910,7 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
                         <div className="w-1.5 h-1.5 rounded-full bg-black" />
                       )}
                     </div>
-                    <div>
-                      <div className="text-xs font-bold text-white">صيانة عبده شخصي (Abdo Personal)</div>
-                      <div className="text-[10px] text-amber-300/80">عبده 75% | أحمد 25%</div>
-                    </div>
+                    <span className="text-xs font-bold text-white">شغل عبده</span>
                   </div>
                   {workOwnershipType === WorkOwnershipType.PARTNER_2_PRIVATE && (
                     <CheckCircle className="w-4 h-4 text-amber-400 shrink-0" />
