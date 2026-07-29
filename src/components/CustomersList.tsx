@@ -48,6 +48,15 @@ export default function CustomersList({
   // Selected Customer for Drawer Profile
   const [activeCustomer, setActiveCustomer] = useState<Customer | null>(null);
 
+  useEffect(() => {
+    if (activeCustomer) {
+      const fresh = customers.find(c => c.id === activeCustomer.id);
+      if (fresh) {
+        setActiveCustomer(fresh);
+      }
+    }
+  }, [customers]);
+
   // Add/Edit Modals state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);

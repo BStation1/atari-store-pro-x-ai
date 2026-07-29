@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useDialog } from "../context/DialogContext";
 import {
   Wrench,
@@ -74,6 +74,16 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
   const [selectedOrder, setSelectedOrder] = useState<RepairOrder | null>(
     initialOrderId ? orders.find(o => o.id === initialOrderId) || null : null
   );
+
+  // Sync selectedOrder whenever orders array updates
+  useEffect(() => {
+    if (selectedOrder) {
+      const fresh = orders.find(o => o.id === selectedOrder.id);
+      if (fresh) {
+        setSelectedOrder(fresh);
+      }
+    }
+  }, [orders]);
 
   // Sub-Navigation Tabs inside Order Workspace
   const [workspaceTab, setWorkspaceTab] = useState<"workshop" | "timeline" | "audit">("workshop");
