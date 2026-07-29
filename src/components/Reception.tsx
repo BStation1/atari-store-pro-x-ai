@@ -193,7 +193,7 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
 
   const [orderNotes, setOrderNotes] = useState("");
   const [advancePayment, setAdvancePayment] = useState(0);
-  const [workOwnershipType, setWorkOwnershipType] = useState<WorkOwnershipType>(WorkOwnershipType.CUSTOMER_SHARED);
+  const [workOwnershipType, setWorkOwnershipType] = useState<WorkOwnershipType | "">("");
   const [partnerDeductionRate, setPartnerDeductionRate] = useState<number>(0);
 
   // Warranty System state
@@ -476,6 +476,12 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
       }
     }
 
+    // Work Ownership Validation (Required)
+    if (!workOwnershipType) {
+      setValidationError("يرجى تحديد ملكية العمل (صيانة محل / صيانة أحمد شخصي / صيانة عبده شخصي) قبل حفظ الطلب.");
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
@@ -529,7 +535,8 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
         isPaid: false,
         notes: orderNotes ? `${guestNote ? guestNote + " | " : ""}${orderNotes}` : (guestNote || undefined),
         advancePayment: Number(advancePayment) || 0,
-        workOwnershipType,
+        workOwnershipType: workOwnershipType as WorkOwnershipType,
+        jobType: workOwnershipType as WorkOwnershipType,
         partnerDeductionRate,
         warrantyOption,
         warrantyDays: warrantyOption === "CUSTOM" ? customWarrantyDays : undefined,
@@ -572,6 +579,7 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
       setSelectedCustomer(null);
       setOrderNotes("");
       setAdvancePayment(0);
+      setWorkOwnershipType("");
       setDevices([
         {
           type: undefined,
@@ -813,6 +821,113 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
 
           {/* Order Financials & Ownership */}
           <div className="pt-2 space-y-3 border-t border-[#2a2d42]">
+            {/* Work Ownership Selection - Mandatory */}
+            <div className="bg-[#161827] p-3.5 rounded-xl border border-[#2a2d42] space-y-2">
+              <div className="flex justify-between items-center">
+                <label className="text-xs font-bold text-cyan-400 flex items-center gap-1.5">
+                  <Wrench className="w-4 h-4 text-cyan-400" />
+                  ملكية العمل (نوع الصيانة) <span className="text-rose-400">*</span>
+                </label>
+                {!workOwnershipType && (
+                  <span className="text-[10px] bg-rose-500/20 text-rose-300 border border-rose-500/30 px-2 py-0.5 rounded font-bold">
+                    مطلوب الاختيار
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 gap-2 pt-1">
+                {/* Shop Repair */}
+                <button
+                  type="button"
+                  onClick={() => setWorkOwnershipType(WorkOwnershipType.CUSTOMER_SHARED)}
+                  className={`p-2.5 rounded-xl border text-right transition flex items-center justify-between cursor-pointer ${
+                    workOwnershipType === WorkOwnershipType.CUSTOMER_SHARED
+                      ? "bg-cyan-500/15 border-cyan-400 text-white shadow-lg shadow-cyan-500/10"
+                      : "bg-[#11131e] border-[#2a2d42] text-gray-300 hover:border-gray-500"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                      workOwnershipType === WorkOwnershipType.CUSTOMER_SHARED
+                        ? "border-cyan-400 bg-cyan-500"
+                        : "border-gray-500"
+                    }`}>
+                      {workOwnershipType === WorkOwnershipType.CUSTOMER_SHARED && (
+                        <div className="w-1.5 h-1.5 rounded-full bg-black" />
+                      )}
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-white">صيانة محل (Shop Repair)</div>
+                      <div className="text-[10px] text-cyan-300/80">أحمد 50% | عبده 50%</div>
+                    </div>
+                  </div>
+                  {workOwnershipType === WorkOwnershipType.CUSTOMER_SHARED && (
+                    <CheckCircle className="w-4 h-4 text-cyan-400 shrink-0" />
+                  )}
+                </button>
+
+                {/* Ahmed Personal */}
+                <button
+                  type="button"
+                  onClick={() => setWorkOwnershipType(WorkOwnershipType.PARTNER_1_PRIVATE)}
+                  className={`p-2.5 rounded-xl border text-right transition flex items-center justify-between cursor-pointer ${
+                    workOwnershipType === WorkOwnershipType.PARTNER_1_PRIVATE
+                      ? "bg-indigo-500/15 border-indigo-400 text-white shadow-lg shadow-indigo-500/10"
+                      : "bg-[#11131e] border-[#2a2d42] text-gray-300 hover:border-gray-500"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                      workOwnershipType === WorkOwnershipType.PARTNER_1_PRIVATE
+                        ? "border-indigo-400 bg-indigo-500"
+                        : "border-gray-500"
+                    }`}>
+                      {workOwnershipType === WorkOwnershipType.PARTNER_1_PRIVATE && (
+                        <div className="w-1.5 h-1.5 rounded-full bg-black" />
+                      )}
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-white">صيانة أحمد شخصي (Ahmed Personal)</div>
+                      <div className="text-[10px] text-indigo-300/80">أحمد 100%</div>
+                    </div>
+                  </div>
+                  {workOwnershipType === WorkOwnershipType.PARTNER_1_PRIVATE && (
+                    <CheckCircle className="w-4 h-4 text-indigo-400 shrink-0" />
+                  )}
+                </button>
+
+                {/* Abdo Personal */}
+                <button
+                  type="button"
+                  onClick={() => setWorkOwnershipType(WorkOwnershipType.PARTNER_2_PRIVATE)}
+                  className={`p-2.5 rounded-xl border text-right transition flex items-center justify-between cursor-pointer ${
+                    workOwnershipType === WorkOwnershipType.PARTNER_2_PRIVATE
+                      ? "bg-amber-500/15 border-amber-400 text-white shadow-lg shadow-amber-500/10"
+                      : "bg-[#11131e] border-[#2a2d42] text-gray-300 hover:border-gray-500"
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                      workOwnershipType === WorkOwnershipType.PARTNER_2_PRIVATE
+                        ? "border-amber-400 bg-amber-500"
+                        : "border-gray-500"
+                    }`}>
+                      {workOwnershipType === WorkOwnershipType.PARTNER_2_PRIVATE && (
+                        <div className="w-1.5 h-1.5 rounded-full bg-black" />
+                      )}
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-white">صيانة عبده شخصي (Abdo Personal)</div>
+                      <div className="text-[10px] text-amber-300/80">عبده 75% | أحمد 25%</div>
+                    </div>
+                  </div>
+                  {workOwnershipType === WorkOwnershipType.PARTNER_2_PRIVATE && (
+                    <CheckCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                  )}
+                </button>
+              </div>
+            </div>
+
             <div>
               <label className="text-xs font-bold text-gray-300 block mb-1">الدفعة المقدمة / العربون (ج.م):</label>
               <input
