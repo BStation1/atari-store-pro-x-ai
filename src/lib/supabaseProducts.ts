@@ -1108,7 +1108,6 @@ export async function withdrawProductForPartner(params: {
     responsiblePartnerId: partnerIdCanonical,
     accountingStatus: 'CONSUMED',
     notes: params.notes || `مسحوبات بضاعة للشريك ${partnerNameAr}`,
-    createdAt: nowIso,
   });
 
   // 7. Dispatch global UI events for instant reactivity

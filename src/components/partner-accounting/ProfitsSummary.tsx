@@ -24,6 +24,7 @@ import {
 import { RepairOrder, WorkOwnershipType, Invoice } from '../../types';
 import { formatDateISO, roundMoney } from '../../lib/finalReportsEngine';
 import { useRepairPartUsages, useInvoices, useProducts } from '../../hooks/useData';
+import { db } from '../../lib/db';
 
 interface ProfitsSummaryProps {
   orders: RepairOrder[];
