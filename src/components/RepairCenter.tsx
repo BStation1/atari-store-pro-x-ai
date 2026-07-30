@@ -105,15 +105,15 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     initialOrderId ? orders.find(o => o.id === initialOrderId) || null : null
   );
 
-  // Sync selectedOrder whenever orders array updates
+  // Sync selectedOrder whenever orders array updates if content actually changed
   useEffect(() => {
     if (selectedOrder) {
       const fresh = orders.find(o => o.id === selectedOrder.id);
-      if (fresh) {
+      if (fresh && JSON.stringify(fresh) !== JSON.stringify(selectedOrder)) {
         setSelectedOrder(fresh);
       }
     }
-  }, [orders]);
+  }, [orders, selectedOrder]);
 
   // Sub-Navigation Tabs inside Order Workspace
   const [workspaceTab, setWorkspaceTab] = useState<"workshop" | "timeline" | "audit">("workshop");
