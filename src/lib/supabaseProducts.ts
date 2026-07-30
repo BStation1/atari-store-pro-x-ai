@@ -847,31 +847,36 @@ export async function updateProductQuantityInSupabase(productId: string, newQuan
     return true;
   }
 
-  let realUuid = productId;
-  if (!isUuid(realUuid)) {
-    const fetched = await ensureProductUuidInSupabase({ id: productId } as any);
-    if (fetched) realUuid = fetched;
-  }
+  try {
+    let realUuid = productId;
+    if (!isUuid(realUuid)) {
+      const fetched = await ensureProductUuidInSupabase({ id: productId } as any);
+      if (fetched) realUuid = fetched;
+    }
 
-  if (!isUuid(realUuid)) {
-    console.warn("⚠️ Cannot update product quantity in Supabase: Invalid Product UUID", productId);
+    if (!isUuid(realUuid)) {
+      console.warn("⚠️ Cannot update product quantity in Supabase: Invalid Product UUID", productId);
+      return false;
+    }
+
+    const { error } = await supabase
+      .from('products')
+      .update({
+        quantity: newQuantity,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', realUuid);
+
+    if (error) {
+      console.warn("⚠️ Notice updating product quantity in Supabase:", error.message);
+      return false;
+    }
+
+    return true;
+  } catch (err) {
+    console.warn("⚠️ Exception updating product quantity in Supabase:", err);
     return false;
   }
-
-  const { error } = await supabase
-    .from('products')
-    .update({
-      quantity: newQuantity,
-      updated_at: new Date().toISOString()
-    })
-    .eq('id', realUuid);
-
-  if (error) {
-    console.error("❌ Error updating product quantity in Supabase:", error.message);
-    return false;
-  }
-
-  return true;
 }
 
 /**
