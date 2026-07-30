@@ -49,6 +49,8 @@ import ReopenOrderModal from "./ReopenOrderModal";
 import CancelWarrantyModal from "./CancelWarrantyModal";
 import { canDeliverDevice, canReopenDeliveredOrder, canCancelWarranty } from "../lib/authPermissions";
 import { db } from "../lib/data";
+import { addInventoryMovementToSupabase } from "../lib/supabaseProducts";
+import { updateRepairPartUsageInSupabase } from "../lib/supabasePartUsages";
 import { sendRepairNotificationWorkflow } from "../lib/whatsapp";
 import { 
   addTimelineEventHelper, 
@@ -627,7 +629,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
     // 2. Create Inventory OUT Movement
     const movementId = `MOV-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`;
-    db.addInventoryMovement({
+    addInventoryMovementToSupabase({
       id: movementId,
       productId: product.id,
       productNameSnapshot: product.nameAr || product.name,
@@ -752,7 +754,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) owner = 'AHMED';
     else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) owner = 'ABDO';
 
-    db.addInventoryMovement({
+    addInventoryMovementToSupabase({
       id: `MOV-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
       productId: usage.inventoryItemId,
       productNameSnapshot: usage.partName,
@@ -772,6 +774,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     });
 
     // 3. Mark Usage as RETURNED
+    updateRepairPartUsageInSupabase(usageId, { accountingStatus: 'RETURNED' });
     const updatedUsages = allUsages.map(pu => {
       if (pu.id === usageId) {
         return { ...pu, accountingStatus: 'RETURNED' as const };

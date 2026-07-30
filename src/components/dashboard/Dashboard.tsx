@@ -20,6 +20,7 @@ import {
   getAnalyticsViewModel,
   DateRangeOption
 } from '../../lib/analytics';
+import { useRepairOrders, useProducts } from '../../hooks/useData';
 
 import KPICard from './KPICard';
 import RecentActivity from './RecentActivity';
@@ -83,16 +84,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
   const currentHour = new Date().getHours();
   const timeGreeting = currentHour < 12 ? 'صباح الخير' : 'مساء الخير';
 
+  const { orders } = useRepairOrders();
+  const { products } = useProducts();
+
   // Compute operational summaries safely relying on REAL DATA ONLY
   const waitingCount = useMemo(() => {
-    const orders = db.getRepairOrders() || [];
-    return orders.filter(ro => ['Received', 'Diagnosing', 'Waiting Approval', 'Waiting Parts'].includes(ro.status)).length;
-  }, []);
+    return (orders || []).filter(ro => ['Received', 'Diagnosing', 'Waiting Approval', 'Waiting Parts'].includes(ro.status)).length;
+  }, [orders]);
 
   const readyCount = useMemo(() => {
-    const orders = db.getRepairOrders() || [];
-    return orders.filter(ro => ['Ready', 'Delivered'].includes(ro.status)).length;
-  }, []);
+    return (orders || []).filter(ro => ['Ready', 'Delivered'].includes(ro.status)).length;
+  }, [orders]);
 
   const waitingRepairsKPI: KPIItem = useMemo(() => ({
     id: 'kpi-waiting-repairs',
@@ -112,15 +114,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
 
   // Real inventory priority grouped alerts
   const inventoryAlerts = useMemo(() => {
-    const products = db.getProducts() || [];
+    const prods = products || [];
     
-    const outOfStock = products.filter(p => (p.quantity ?? 0) === 0);
-    const lowStock = products.filter(p => {
+    const outOfStock = prods.filter(p => (p.quantity ?? 0) === 0);
+    const lowStock = prods.filter(p => {
       const q = p.quantity ?? 0;
       const minS = p.minStock ?? (p as any).minQuantity ?? 5;
       return q > 0 && q <= minS;
     });
-    const nearLowStock = products.filter(p => {
+    const nearLowStock = prods.filter(p => {
       const q = p.quantity ?? 0;
       const minS = p.minStock ?? (p as any).minQuantity ?? 5;
       return q > minS && q <= Math.ceil(minS * 1.5);

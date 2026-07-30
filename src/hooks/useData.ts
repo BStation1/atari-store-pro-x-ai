@@ -5,6 +5,9 @@
 
 import { useState, useEffect } from "react";
 import { supabase, isSupabaseConfigured } from "../lib/supabaseClient";
+import { fetchOrMigrateRepairPartUsages, addRepairPartUsageToSupabase } from "../lib/supabasePartUsages";
+import { fetchOrMigrateExpenses, addExpenseToSupabase } from "../lib/supabaseExpenses";
+import { fetchOrMigratePartnerTransactions, fetchOrMigratePartnerLedger, fetchOrMigratePartnerSettlements } from "../lib/supabasePartnerAccounting";
 import {
   db,
   fetchOrMigrateStoreSettings,
@@ -575,10 +578,17 @@ export function useExpenses() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
 
   useEffect(() => {
-    setExpenses(db.getExpenses());
+    let active = true;
+    fetchOrMigrateExpenses().then(res => {
+      if (active) setExpenses(res.expenses);
+    }).catch(() => {
+      if (active) setExpenses(db.getExpenses());
+    });
+    return () => { active = false; };
   }, [trigger]);
 
   const addExpense = (expense: Omit<Expense, "id" | "date">) => {
+    addExpenseToSupabase(expense);
     const created = db.addExpense(expense);
     setExpenses(prev => [created, ...prev]);
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_expenses' } }));
@@ -1029,7 +1039,13 @@ export function usePartnerLedger() {
   const [ledger, setLedger] = useState<PartnerLedgerEntry[]>([]);
 
   useEffect(() => {
-    setLedger(db.getPartnerLedger());
+    let active = true;
+    fetchOrMigratePartnerLedger().then(res => {
+      if (active) setLedger(res.ledger);
+    }).catch(() => {
+      if (active) setLedger(db.getPartnerLedger());
+    });
+    return () => { active = false; };
   }, [trigger]);
 
   const addLedgerEntry = (entry: Omit<PartnerLedgerEntry, "id" | "createdAt" | "updatedAt">) => {
@@ -1047,7 +1063,13 @@ export function usePartnerSettlements() {
   const [settlements, setSettlements] = useState<PartnerSettlement[]>([]);
 
   useEffect(() => {
-    setSettlements(db.getPartnerSettlements());
+    let active = true;
+    fetchOrMigratePartnerSettlements().then(res => {
+      if (active) setSettlements(res.settlements);
+    }).catch(() => {
+      if (active) setSettlements(db.getPartnerSettlements());
+    });
+    return () => { active = false; };
   }, [trigger]);
 
   return {
@@ -1085,7 +1107,13 @@ export function usePartnerTransactions() {
   const [transactions, setTransactions] = useState<PartnerTransaction[]>([]);
 
   useEffect(() => {
-    setTransactions(db.getPartnerTransactions());
+    let active = true;
+    fetchOrMigratePartnerTransactions().then(res => {
+      if (active) setTransactions(res.transactions);
+    }).catch(() => {
+      if (active) setTransactions(db.getPartnerTransactions());
+    });
+    return () => { active = false; };
   }, [trigger]);
 
   const addTransaction = (tx: Omit<PartnerTransaction, "id" | "createdAt" | "status">) => {
@@ -1117,10 +1145,17 @@ export function useRepairPartUsages() {
   const [partUsages, setPartUsages] = useState<RepairPartUsage[]>([]);
 
   useEffect(() => {
-    setPartUsages(db.getRepairPartUsages());
+    let active = true;
+    fetchOrMigrateRepairPartUsages().then(res => {
+      if (active) setPartUsages(res.partUsages);
+    }).catch(() => {
+      if (active) setPartUsages(db.getRepairPartUsages());
+    });
+    return () => { active = false; };
   }, [trigger]);
 
   const addPartUsage = (part: Omit<RepairPartUsage, "id" | "createdAt">) => {
+    addRepairPartUsageToSupabase(part);
     const created = db.addRepairPartUsage(part);
     setPartUsages(db.getRepairPartUsages());
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));

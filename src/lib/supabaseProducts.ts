@@ -715,10 +715,10 @@ export async function getInventoryMovements(productId?: string): Promise<Invento
   const { data, error } = await query;
   if (error) {
     console.error('Error fetching inventory movements:', error);
-    return [];
+    return db.getInventoryMovements ? db.getInventoryMovements() : [];
   }
 
-  return (data || []).map((m: any) => ({
+  const mapped: InventoryMovement[] = (data || []).map((m: any) => ({
     id: String(m.id),
     productId: String(m.product_id),
     movementType: m.movement_type,
@@ -732,6 +732,44 @@ export async function getInventoryMovements(productId?: string): Promise<Invento
     createdByUserId: m.created_by_user_id,
     createdAt: m.created_at,
   }));
+
+  if (!productId) {
+    // Sync to local backup so db.getInventoryMovements() returns latest remote data
+    db.saveInventoryMovements ? db.saveInventoryMovements(mapped) : null;
+  }
+
+  return mapped;
+}
+
+/**
+ * Adds an inventory movement to Supabase and updates local storage backup.
+ */
+export async function addInventoryMovementToSupabase(movement: any): Promise<void> {
+  db.addInventoryMovement(movement);
+
+  try {
+    const row: any = {
+      product_id: movement.productId,
+      movement_type: movement.movementType,
+      quantity_change: movement.quantityChange,
+      previous_quantity: movement.previousQuantity,
+      new_quantity: movement.newQuantity,
+      cost_price_snapshot: movement.costPriceSnapshot,
+      selling_price_snapshot: movement.sellingPriceSnapshot,
+      reference_id: movement.referenceId || movement.repairOrderId || null,
+      notes: movement.notes || null,
+      created_by_user_id: movement.createdByUserId || null,
+      created_at: movement.createdAt || new Date().toISOString()
+    };
+    if (movement.id) row.id = movement.id;
+
+    const { error } = await supabase.from('inventory_movements').upsert([row]);
+    if (error) {
+      console.warn("⚠️ Notice upserting inventory_movements to Supabase:", error.message);
+    }
+  } catch (err) {
+    console.warn("⚠️ Exception upserting inventory_movements to Supabase:", err);
+  }
 }
 
 /**

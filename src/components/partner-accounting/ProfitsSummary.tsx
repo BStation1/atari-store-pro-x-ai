@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import { RepairOrder, WorkOwnershipType, Invoice } from '../../types';
 import { formatDateISO, roundMoney } from '../../lib/finalReportsEngine';
-import { useRepairPartUsages, useInvoices, useProducts } from '../../hooks/useData';
+import { useRepairPartUsages, useInvoices, useProducts, useInventoryMovements } from '../../hooks/useData';
 import { db } from '../../lib/db';
 
 interface ProfitsSummaryProps {
@@ -60,6 +60,7 @@ export default function ProfitsSummary({
   const { partUsages } = useRepairPartUsages();
   const { invoices } = useInvoices();
   const { products } = useProducts();
+  const { movements: rawMovements } = useInventoryMovements();
 
   // Current Date Helper Values
   const now = new Date();
@@ -302,8 +303,7 @@ export default function ProfitsSummary({
 
   // A3. From Direct Inventory Movements (Partner Withdrawals & Stock OUT movements)
   try {
-    const rawMovements = db.getInventoryMovements() || [];
-    rawMovements.forEach((m: any, mIdx: number) => {
+    (rawMovements || []).forEach((m: any, mIdx: number) => {
       const movType = (m.movementType || m.movement_type || '').toUpperCase();
       const qtyChange = Number(m.quantityChange || m.quantity_change || 0);
 
