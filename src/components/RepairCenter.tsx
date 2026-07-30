@@ -40,7 +40,7 @@ import {
   X
 } from "lucide-react";
 import { useRepairOrders, useCustomers, useProducts, useSettings, useInvoices, useCurrentUser, useRepairPartUsages } from "../hooks/useData";
-import { RepairOrder, RepairDevice, RepairStatus, DeviceType, PaymentMethod, WorkOwnershipType, User as UserType, QUICK_FAULTS_LIST, SelectedRepairItem } from "../types";
+import { RepairOrder, RepairDevice, RepairStatus, DeviceType, PaymentMethod, WorkOwnershipType, User as UserType, QUICK_FAULTS_LIST, SelectedRepairItem, RepairPartUsage } from "../types";
 import { getCustomerNameHelper, getCustomerPhoneHelper, getCustomerBadgeHelper, getDeviceDisplayName } from "../lib/customerDisplayHelper";
 import { PhoneDisplay } from "./PhoneDisplay";
 import PrintReceiptModal from "./PrintReceiptModal";
@@ -601,10 +601,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
   const handleAddPartToDevice = async (deviceIdx: number, productId: string, qtyToAdd: number = 1) => {
     if (!selectedOrder) return;
     const product = products.find(p => p.id === productId);
-    if (!product) {
-      dialog.alert({ message: "عفواً، لم يتم العثور على قطعة الغيار المحددة!", variant: "error" });
-      return;
-    }
+    if (!product) return;
 
     const qty = Math.max(1, Math.floor(qtyToAdd));
     if (product.quantity < qty) {
@@ -625,8 +622,6 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) owner = 'AHMED';
     else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) owner = 'ABDO';
 
-    dialog.loading("جاري توثيق حركة الصرف وحسم القطعة من المخزون...");
-
     try {
       // 1. Deduct Stock in local state
       const newQty = product.quantity - qty;
@@ -635,7 +630,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
         quantity: newQty
       });
 
-      // Try background update to Supabase
+      // Background update to Supabase
       const productUuid = (await ensureProductUuidInSupabase(product)) || product.id;
       const repairOrderUuid = (await ensureRepairOrderUuidInSupabase(selectedOrder)) || selectedOrder.id;
       updateProductQuantityInSupabase(productUuid, newQty).catch(err => console.warn("Supabase qty update warn:", err));
@@ -658,22 +653,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
         createdAt: new Date().toISOString()
       }).catch(err => console.warn("Supabase movement warn:", err));
 
-      // 3. Create Repair Part Usage Record (uses unitSellingPrice so partsCost reflects retail selling price)
-      const addedUsage = await addRepairPartUsageToSupabase({
-        repairOrderId: repairOrderUuid,
-        inventoryItemId: productUuid,
-        partName: product.nameAr || product.name,
-        sku: product.sku || product.id,
-        quantity: qty,
-        unitCost: unitSellingPrice,
-        totalCost: totalCost,
-        ownershipType: ownership,
-        responsiblePartnerId: owner === 'AHMED' ? 'P-001' : owner === 'ABDO' ? 'P-002' : 'SHOP',
-        accountingStatus: 'CONSUMED',
-        notes: `deviceId:${currentDevice.id || deviceIdx}`
-      });
-
-      // 4. Recalculate device partsCost from all linked active partUsages for this order and device
+      // 3. Check if existing RepairPartUsage exists for this product and device
       const orderIdsToMatch = new Set<string>([
         String(selectedOrder.id || ''),
         String((selectedOrder as any).orderNumber || ''),
@@ -681,14 +661,62 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
         String(repairOrderUuid || '')
       ].filter(Boolean));
 
-      const allUsages = db.getRepairPartUsages().filter(
-        pu => orderIdsToMatch.has(String(pu.repairOrderId)) && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
-      );
-      const deviceUsages = allUsages.filter(
-        pu => (pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) || selectedOrder.devices.length === 1
+      const allUsages = db.getRepairPartUsages();
+      const existingUsage = allUsages.find(
+        pu => orderIdsToMatch.has(String(pu.repairOrderId)) &&
+              (pu.inventoryItemId === productUuid || pu.inventoryItemId === product.id) &&
+              pu.accountingStatus !== 'RETURNED' &&
+              pu.accountingStatus !== 'REVERSED' &&
+              ((pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) || selectedOrder.devices.length === 1)
       );
 
-      const newPartsCost = deviceUsages.reduce((sum, pu) => sum + (Number(pu.totalCost) || (pu.quantity * pu.unitCost)), 0);
+      let updatedUsageList = [...allUsages];
+
+      if (existingUsage) {
+        const newUsageQty = existingUsage.quantity + qty;
+        const newUsageTotalCost = newUsageQty * unitSellingPrice;
+        const updatedUsageRecord = {
+          ...existingUsage,
+          quantity: newUsageQty,
+          unitCost: unitSellingPrice,
+          totalCost: newUsageTotalCost
+        };
+        updatedUsageList = allUsages.map(pu => pu.id === existingUsage.id ? updatedUsageRecord : pu);
+        db.saveRepairPartUsages(updatedUsageList);
+        updateRepairPartUsageInSupabase(existingUsage.id, {
+          quantity: newUsageQty,
+          unitCost: unitSellingPrice,
+          totalCost: newUsageTotalCost
+        }).catch(err => console.warn("Supabase update usage warn:", err));
+      } else {
+        const addedUsage = await addRepairPartUsageToSupabase({
+          repairOrderId: repairOrderUuid,
+          inventoryItemId: productUuid,
+          partName: product.nameAr || product.name,
+          sku: product.sku || product.id,
+          quantity: qty,
+          unitCost: unitSellingPrice,
+          totalCost: totalCost,
+          ownershipType: ownership,
+          responsiblePartnerId: owner === 'AHMED' ? 'P-001' : owner === 'ABDO' ? 'P-002' : 'SHOP',
+          accountingStatus: 'CONSUMED',
+          notes: `deviceId:${currentDevice.id || deviceIdx}`
+        });
+        if (addedUsage) {
+          updatedUsageList.push(addedUsage);
+          db.saveRepairPartUsages(updatedUsageList);
+        }
+      }
+
+      // 4. Recalculate device partsCost
+      const activeUsagesForDevice = updatedUsageList.filter(
+        pu => orderIdsToMatch.has(String(pu.repairOrderId)) &&
+              pu.accountingStatus !== 'RETURNED' &&
+              pu.accountingStatus !== 'REVERSED' &&
+              ((pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) || selectedOrder.devices.length === 1)
+      );
+
+      const newPartsCost = activeUsagesForDevice.reduce((sum, pu) => sum + (Number(pu.totalCost) || (pu.quantity * pu.unitCost)), 0);
 
       const tags = currentDevice.selectedQuickFaults || (currentDevice.issue ? currentDevice.issue.split(" - ").map(s => s.trim()) : []);
       const faultsCost = currentDevice.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(tags);
@@ -741,30 +769,16 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       updateRepairOrder(updatedOrder);
       updateRepairOrderInSupabase(updatedOrder).catch(err => console.warn("Supabase order update warn:", err));
 
-      setPartSearch("");
-      setSelectedPartIndex(null);
-
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));
         window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_inventory_movements' } }));
       }
-
-      dialog.closeLoading();
-      dialog.alert({
-        message: `تم إضافة القطعة (${product.nameAr || product.name}) بنجاح وخصمها من المخزون وتحديث التكلفة والإجمالي!`,
-        variant: "success"
-      });
     } catch (err: any) {
-      dialog.closeLoading();
       console.error("❌ Exception adding part to repair order:", err);
-      dialog.alert({
-        message: `تعذر إضافة القطعة إلى أمر الصيانة: ${err?.message || 'خطأ غير متوقع'}`,
-        variant: "error"
-      });
     }
   };
 
-  const handleRemovePartUsage = (usageId: string, deviceIdx: number) => {
+  const handleRemovePartUsage = (usageId: string, deviceIdx: number, removeQty: number = 1) => {
     if (!selectedOrder) return;
     const allUsages = db.getRepairPartUsages();
     const usage = allUsages.find(pu => pu.id === usageId);
@@ -772,12 +786,17 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
     const product = products.find(p => p.id === usage.inventoryItemId);
 
+    const qtyToReturn = Math.min(usage.quantity, Math.max(1, removeQty));
+    const isFullRemove = (usage.quantity <= qtyToReturn) || removeQty === -1; // -1 means remove all
+    const actualReturnedQty = isFullRemove ? usage.quantity : qtyToReturn;
+
     // 1. Restore Product Stock
     if (product) {
       updateProduct({
         ...product,
-        quantity: product.quantity + usage.quantity
+        quantity: product.quantity + actualReturnedQty
       });
+      updateProductQuantityInSupabase(product.id, product.quantity + actualReturnedQty).catch(err => console.warn("Supabase qty restore warn:", err));
     }
 
     // 2. Add Reversal Movement
@@ -792,35 +811,55 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       productNameSnapshot: usage.partName,
       movementType: 'IN',
       usageType: 'REPAIR_USAGE_RETURN',
-      quantityChange: usage.quantity,
+      quantityChange: actualReturnedQty,
       previousQuantity: product ? product.quantity : 0,
-      newQuantity: product ? product.quantity + usage.quantity : usage.quantity,
+      newQuantity: product ? product.quantity + actualReturnedQty : actualReturnedQty,
       costPriceSnapshot: usage.unitCost,
       sellingPriceSnapshot: 0,
-      totalCost: usage.totalCost,
+      totalCost: usage.unitCost * actualReturnedQty,
       referenceId: selectedOrder.id,
       repairOrderId: selectedOrder.id,
       owner: owner,
       notes: `إرجاع قطعة غيار صيانة للمخزن: ${usage.partName}`,
       createdAt: new Date().toISOString()
-    });
+    }).catch(err => console.warn("Supabase movement warn:", err));
 
-    // 3. Mark Usage as RETURNED
-    updateRepairPartUsageInSupabase(usageId, { accountingStatus: 'RETURNED' });
-    const updatedUsages = allUsages.map(pu => {
-      if (pu.id === usageId) {
-        return { ...pu, accountingStatus: 'RETURNED' as const };
-      }
-      return pu;
-    });
+    // 3. Update or Mark Usage as RETURNED
+    let updatedUsages: RepairPartUsage[] = [];
+    if (isFullRemove) {
+      updateRepairPartUsageInSupabase(usageId, { accountingStatus: 'RETURNED' }).catch(err => console.warn(err));
+      updatedUsages = allUsages.map(pu => {
+        if (pu.id === usageId) {
+          return { ...pu, accountingStatus: 'RETURNED' as const };
+        }
+        return pu;
+      });
+    } else {
+      const newQty = usage.quantity - actualReturnedQty;
+      const newTotalCost = newQty * usage.unitCost;
+      updateRepairPartUsageInSupabase(usageId, { quantity: newQty, totalCost: newTotalCost }).catch(err => console.warn(err));
+      updatedUsages = allUsages.map(pu => {
+        if (pu.id === usageId) {
+          return { ...pu, quantity: newQty, totalCost: newTotalCost };
+        }
+        return pu;
+      });
+    }
     db.saveRepairPartUsages(updatedUsages);
 
     // 4. Recalculate device partsCost
+    const orderIdsToMatch = new Set<string>([
+      String(selectedOrder.id || ''),
+      String((selectedOrder as any).orderNumber || ''),
+      String((selectedOrder as any).uuid || ''),
+      String(usage.repairOrderId || '')
+    ].filter(Boolean));
+
     const updatedDevices = [...selectedOrder.devices];
     const currentDevice = updatedDevices[deviceIdx];
     if (currentDevice) {
       const remainingUsages = updatedUsages.filter(
-        pu => pu.repairOrderId === selectedOrder.id && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
+        pu => orderIdsToMatch.has(String(pu.repairOrderId)) && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
       );
       const deviceRemainingUsages = remainingUsages.filter(
         pu => (pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) || selectedOrder.devices.length === 1
@@ -858,6 +897,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
       setSelectedOrder(updatedOrder);
       updateRepairOrder(updatedOrder);
+      updateRepairOrderInSupabase(updatedOrder).catch(err => console.warn(err));
     }
 
     if (typeof window !== 'undefined') {
@@ -1620,85 +1660,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                             </div>
                           </div>
 
-                          {/* ================= PART 2: TECHNICIAN DIAGNOSIS REPORT ================= */}
-                          <div className="bg-blue-950/20 border border-blue-500/30 p-4 rounded-xl space-y-3">
-                            <div className="flex justify-between items-center">
-                              <h5 className="text-xs font-bold text-blue-300 flex items-center gap-1.5">
-                                <FileText className="w-4 h-4 text-blue-400" />
-                                <span>2. التقرير والتشخيص الفني للمهندس (Technician Diagnosis)</span>
-                              </h5>
-                              <button
-                                type="button"
-                                onClick={() => handleSaveDiagnosis(devIdx)}
-                                className="bg-blue-600 hover:bg-blue-500 text-white text-[11px] px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 transition cursor-pointer"
-                              >
-                                <Save className="w-3.5 h-3.5" />
-                                <span>حفظ التشخيص في السجل</span>
-                              </button>
-                            </div>
-
-                            <textarea
-                              placeholder="أدخل تشخيصك الفني الدقيق للجهاز، المشاكل المكتشفة بالبوردة، المكونات التالفة..."
-                              value={device.diagnosisText || device.technicianNotes || ""}
-                              onChange={e => {
-                                handleUpdateDeviceDetails(devIdx, "diagnosisText", e.target.value);
-                                handleUpdateDeviceDetails(devIdx, "technicianNotes", e.target.value);
-                              }}
-                              className="w-full bg-gray-950 border border-[#2a2d42] rounded-xl p-3 text-xs text-white focus:outline-none focus:border-blue-500 h-20 resize-none font-sans leading-relaxed"
-                            />
-                          </div>
-
-                          {/* ================= PART 3: TECHNICAL PROCEDURES & REPAIRS ================= */}
-                          <div className="bg-purple-950/20 border border-purple-500/30 p-4 rounded-xl space-y-3">
-                            <div className="flex justify-between items-center">
-                              <h5 className="text-xs font-bold text-purple-300 flex items-center gap-1.5">
-                                <Wrench className="w-4 h-4 text-purple-400" />
-                                <span>3. الإجراءات الفنية والإصلاحات وقطع الغيار المعتمدة</span>
-                              </h5>
-
-                              <button
-                                type="button"
-                                onClick={() => setNewProcedureModalDevIdx(devIdx)}
-                                className="bg-purple-600 hover:bg-purple-500 text-white text-[11px] px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 transition cursor-pointer"
-                              >
-                                <Plus className="w-3.5 h-3.5" />
-                                <span>إضافة إجراء فني / إصلاح</span>
-                              </button>
-                            </div>
-
-                            {/* Active Procedures List */}
-                            {proceduresList.length === 0 ? (
-                              <div className="text-center py-6 border border-dashed border-purple-500/20 rounded-xl bg-gray-950/40">
-                                <p className="text-xs text-gray-400">لم يتم تسجيل إجراءات فنية لهذا الجهاز بعد</p>
-                                <p className="text-[10px] text-gray-500 mt-1">انقر على "إضافة إجراء فني" لتسجيل الأعمال المستبدلة أو اختر من المخزون أدناه</p>
-                              </div>
-                            ) : (
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                                {proceduresList.map((proc, pIdx) => (
-                                  <div
-                                    key={proc.id || pIdx}
-                                    className="bg-gray-950 border border-purple-500/30 p-3 rounded-xl flex justify-between items-center text-xs"
-                                  >
-                                    <div>
-                                      <span className="font-bold text-white block">{proc.name}</span>
-                                      <span className="text-[10px] text-purple-300">
-                                        سعر الإصلاح: {proc.repairPrice} ج.م | التكلفة: {proc.costPrice} ج.م
-                                      </span>
-                                    </div>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleRemoveProcedure(devIdx, pIdx)}
-                                      className="p-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-lg transition cursor-pointer"
-                                      title="حذف الإجراء"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-
-                          {/* ================= PART 4: USED SPARE PARTS FROM INVENTORY ================= */}
+                          {/* ================= PART 2: USED SPARE PARTS FROM INVENTORY ================= */}
                           {(() => {
                             const orderIdsToMatch = new Set<string>([
                               String(selectedOrder.id || ''),
@@ -1719,7 +1681,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                 <div className="flex flex-wrap justify-between items-center gap-2">
                                   <h5 className="text-xs font-bold text-rose-300 flex items-center gap-1.5">
                                     <Package className="w-4 h-4 text-rose-400" />
-                                    <span>4. قطع الغيار والمكونات من المخزن (اختيار وسحب فورى)</span>
+                                    <span>2. قطع الغيار والمكونات من المخزن (اختيار وسحب فورى)</span>
                                   </h5>
                                   <span className="text-[10px] text-emerald-300 font-mono font-bold">
                                     تُحسب بسعر البيع وتُخصم تلقائياً من المخزون
@@ -1780,13 +1742,12 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                           >
                                             <button
                                               type="button"
-                                              disabled={isOutOfStock}
+                                              disabled={isOutOfStock || (isSelected && p.quantity <= 0)}
                                               onClick={() => {
-                                                if (!isSelected) {
-                                                  handleAddPartToDevice(devIdx, p.id, 1);
-                                                }
+                                                handleAddPartToDevice(devIdx, p.id, 1);
                                               }}
-                                              className="flex items-center gap-1.5 px-2 py-0.5 cursor-pointer disabled:cursor-not-allowed"
+                                              className="flex items-center gap-1.5 px-2 py-0.5 cursor-pointer disabled:cursor-not-allowed hover:opacity-90 transition"
+                                              title={isSelected ? "انقر لإضافة قطعة إضافية من نفس النوع" : "انقر لإضافة القطعة للطلب"}
                                             >
                                               <span className="text-[10px] text-emerald-400">{isSelected ? "☑" : "□"}</span>
                                               <span>{p.nameAr || p.name}</span>
@@ -1803,13 +1764,14 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                               <div className="flex items-center gap-1 bg-black/40 px-1.5 py-0.5 rounded-lg border border-rose-500/30 mr-1">
                                                 <button
                                                   type="button"
-                                                  onClick={() => {
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
                                                     const lastUsage = linkedUsages[linkedUsages.length - 1];
                                                     if (lastUsage) {
-                                                      handleRemovePartUsage(lastUsage.id, devIdx);
+                                                      handleRemovePartUsage(lastUsage.id, devIdx, 1);
                                                     }
                                                   }}
-                                                  className="text-rose-400 hover:text-white hover:bg-rose-600/50 px-1.5 py-0.2 rounded font-bold transition"
+                                                  className="text-rose-400 hover:text-white hover:bg-rose-600/50 px-1.5 py-0.2 rounded font-bold transition cursor-pointer"
                                                   title="إنقاص قطعة واحدة"
                                                 >
                                                   -
@@ -1822,8 +1784,11 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                                 <button
                                                   type="button"
                                                   disabled={p.quantity <= 0}
-                                                  onClick={() => handleAddPartToDevice(devIdx, p.id, 1)}
-                                                  className="text-emerald-400 hover:text-white hover:bg-emerald-600/50 px-1.5 py-0.2 rounded font-bold transition disabled:opacity-30 disabled:cursor-not-allowed"
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleAddPartToDevice(devIdx, p.id, 1);
+                                                  }}
+                                                  className="text-emerald-400 hover:text-white hover:bg-emerald-600/50 px-1.5 py-0.2 rounded font-bold transition disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
                                                   title="زيادة قطعة أخرى"
                                                 >
                                                   +
@@ -1873,9 +1838,9 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                               <div className="inline-flex items-center gap-1.5 bg-[#181b2a] px-2 py-1 rounded-lg border border-gray-700">
                                                 <button
                                                   type="button"
-                                                  onClick={() => handleRemovePartUsage(pu.id, devIdx)}
+                                                  onClick={() => handleRemovePartUsage(pu.id, devIdx, 1)}
                                                   className="w-5 h-5 flex items-center justify-center bg-rose-950 hover:bg-rose-800 text-rose-200 rounded font-bold cursor-pointer transition"
-                                                  title="خصم قطعة واحدة أو حذف"
+                                                  title="خصم قطعة واحدة"
                                                 >
                                                   -
                                                 </button>
@@ -1903,7 +1868,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                             <td className="p-2.5 text-center">
                                               <button
                                                 type="button"
-                                                onClick={() => handleRemovePartUsage(pu.id, devIdx)}
+                                                onClick={() => handleRemovePartUsage(pu.id, devIdx, -1)}
                                                 className="p-1.5 bg-rose-500/20 hover:bg-rose-500/40 text-rose-300 rounded-lg transition cursor-pointer flex items-center gap-1 mx-auto"
                                                 title="إلغاء و إرجاع كامل الحركة للمخزن"
                                               >
@@ -1928,7 +1893,6 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                               </div>
                             );
                           })()}
-                          </div>
 
                           {/* Device Price Summary & Manual Override */}
                           {(() => {
