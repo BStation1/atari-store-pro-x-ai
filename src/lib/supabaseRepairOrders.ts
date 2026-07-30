@@ -35,6 +35,74 @@ function isUuid(id?: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 }
 
+export function mapRepairOrderToRow(order: RepairOrder): Record<string, any> {
+  const firstDevice = order.devices?.[0];
+  const reportedIssueStr = firstDevice?.issue || 
+    (Array.isArray((order as any).selectedQuickFaults) && (order as any).selectedQuickFaults.length > 0 ? (order as any).selectedQuickFaults.join(' - ') : null) || 
+    order.notes || 
+    'فحص ومعاينة الكشف العام';
+
+  const payload: Record<string, any> = {
+    order_number: order.id,
+    customer_id: isUuid(order.customerId) ? order.customerId : null,
+    status: mapUiStatusToDbStatus(order.status),
+    tracking_token: order.trackingToken || generateSecureTrackingToken(),
+    created_at: (order as any).createdAt || new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    estimated_cost: Number(order.totalEstimatedCost || order.finalRepairPrice || 0),
+    final_cost: Number(order.finalRepairPrice || order.totalEstimatedCost || 0),
+    device_type: firstDevice?.type || 'أجهزة ألعاب',
+    device_model: firstDevice?.model || 'موديل قياسي',
+    serial_number: firstDevice?.serialNumber || '',
+    reported_issue: reportedIssueStr,
+    notes: JSON.stringify(order)
+  };
+
+  if (isUuid(order.id)) {
+    payload.id = order.id;
+  }
+
+  return payload;
+}
+
+export async function ensureRepairOrderUuidInSupabase(order: RepairOrder): Promise<string | null> {
+  if (isUuid(order.id)) return order.id;
+  if ((order as any).uuid && isUuid((order as any).uuid)) return (order as any).uuid;
+
+  if (!isSupabaseConfigured) return null;
+
+  try {
+    // 1. Query by order_number or id
+    const { data: existing } = await supabase
+      .from('repair_orders')
+      .select('id, order_number')
+      .or(`order_number.eq.${order.id},id.eq.${order.id}`)
+      .maybeSingle();
+
+    if (existing?.id && isUuid(existing.id)) {
+      return existing.id;
+    }
+
+    // 2. Insert order row in Supabase if missing
+    const rowToInsert = mapRepairOrderToRow(order);
+    const { data: created, error } = await supabase
+      .from('repair_orders')
+      .insert([rowToInsert])
+      .select('id')
+      .single();
+
+    if (error) {
+      console.warn("⚠️ Error creating repair order row in Supabase:", error.message);
+      return null;
+    }
+
+    return created?.id || null;
+  } catch (err) {
+    console.warn("⚠️ Exception resolving repair order UUID:", err);
+    return null;
+  }
+}
+
 /**
  * Maps UI RepairStatus to DB repair_status_enum
  */

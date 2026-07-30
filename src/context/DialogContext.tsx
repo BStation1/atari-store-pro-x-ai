@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback } from "react";
-import { AlertTriangle, CheckCircle2, Info, XCircle, Trash2, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Info, XCircle, Trash2, X, Loader2 } from "lucide-react";
 
 interface ConfirmOptions {
   title?: string;
@@ -19,6 +19,8 @@ interface AlertOptions {
 interface DialogContextType {
   confirm: (options: ConfirmOptions | string) => Promise<boolean>;
   alert: (options: AlertOptions | string) => Promise<void>;
+  loading: (message?: string) => void;
+  closeLoading: () => void;
 }
 
 const DialogContext = createContext<DialogContextType | null>(null);
@@ -36,6 +38,12 @@ export const DialogProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     isOpen: boolean;
     options: AlertOptions;
     resolve: () => void;
+  } | null>(null);
+
+  // Loading state
+  const [loadingState, setLoadingState] = useState<{
+    isOpen: boolean;
+    message: string;
   } | null>(null);
 
   const confirm = useCallback((options: ConfirmOptions | string): Promise<boolean> => {
@@ -60,6 +68,14 @@ export const DialogProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
   }, []);
 
+  const loading = useCallback((message: string = "جاري التحميل..."): void => {
+    setLoadingState({ isOpen: true, message });
+  }, []);
+
+  const closeLoading = useCallback((): void => {
+    setLoadingState(null);
+  }, []);
+
   const handleConfirmResponse = (value: boolean) => {
     if (confirmState) {
       confirmState.resolve(value);
@@ -75,8 +91,22 @@ export const DialogProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   return (
-    <DialogContext.Provider value={{ confirm, alert }}>
+    <DialogContext.Provider value={{ confirm, alert, loading, closeLoading }}>
       {children}
+
+      {/* Loading Overlay */}
+      {loadingState?.isOpen && (
+        <div className="fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-sm w-full p-6 border border-slate-200 dark:border-slate-700 dir-rtl text-center flex flex-col items-center justify-center gap-4 transform transition-all scale-100">
+            <div className="p-3 bg-blue-50 dark:bg-blue-950/50 rounded-2xl text-blue-600 dark:text-blue-400">
+              <Loader2 className="w-8 h-8 animate-spin" />
+            </div>
+            <p className="text-sm font-semibold text-slate-800 dark:text-slate-200 leading-relaxed">
+              {loadingState.message}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Confirm Modal */}
       {confirmState?.isOpen && (

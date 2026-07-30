@@ -66,41 +66,109 @@ export async function fetchOrMigrateRepairPartUsages(): Promise<{
   }
 }
 
+export function isUuid(id?: string): boolean {
+  if (!id || typeof id !== 'string') return false;
+  return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(id);
+}
+
 export async function addRepairPartUsageToSupabase(
   partUsage: Omit<RepairPartUsage, "id" | "createdAt"> & { id?: string; createdAt?: string }
 ): Promise<RepairPartUsage> {
-  const created = db.addRepairPartUsage(partUsage);
+  if (!isSupabaseConfigured) {
+    return db.addRepairPartUsage(partUsage);
+  }
 
-  if (isSupabaseConfigured) {
+  // 1. Resolve repair_order_id UUID in Supabase if a custom order number like 'ATR-10001' was passed
+  let resolvedOrderUuid = partUsage.repairOrderId;
+  if (!isUuid(resolvedOrderUuid)) {
     try {
-      const row: any = {
-        id: created.id,
-        repair_order_id: created.repairOrderId || null,
-        inventory_item_id: created.inventoryItemId || null,
-        part_name: created.partName,
-        sku: created.sku || null,
-        quantity: created.quantity,
-        unit_cost: created.unitCost,
-        total_cost: created.totalCost,
-        ownership_type: created.ownershipType,
-        responsible_partner_id: created.responsiblePartnerId,
-        accounting_status: created.accountingStatus,
-        created_at: created.createdAt,
-        employee_name: created.employeeName || null,
-        warehouse: created.warehouse || null,
-        notes: created.notes || null
-      };
+      const { data: existingOrder } = await supabase
+        .from('repair_orders')
+        .select('id')
+        .or(`order_number.eq.${partUsage.repairOrderId},id.eq.${partUsage.repairOrderId}`)
+        .maybeSingle();
 
-      const { error } = await supabase.from('repair_part_usages').upsert([row]);
-      if (error) {
-        console.warn("⚠️ Notice upserting repair_part_usages to Supabase:", error.message);
+      if (existingOrder?.id && isUuid(existingOrder.id)) {
+        resolvedOrderUuid = existingOrder.id;
       }
     } catch (err) {
-      console.warn("⚠️ Exception upserting repair_part_usages to Supabase:", err);
+      console.warn("⚠️ Exception resolving repair_order UUID:", err);
     }
   }
 
-  return created;
+  // 2. Resolve inventory_item_id UUID in Supabase if needed
+  let resolvedItemUuid = partUsage.inventoryItemId;
+  if (resolvedItemUuid && !isUuid(resolvedItemUuid)) {
+    try {
+      const { data: existingProd } = await supabase
+        .from('products')
+        .select('id')
+        .or(`sku.eq.${partUsage.sku || partUsage.inventoryItemId},name.eq.${partUsage.partName}`)
+        .maybeSingle();
+
+      if (existingProd?.id && isUuid(existingProd.id)) {
+        resolvedItemUuid = existingProd.id;
+      } else {
+        resolvedItemUuid = undefined;
+      }
+    } catch (err) {
+      resolvedItemUuid = undefined;
+    }
+  }
+
+  // Map ownership
+  let ownershipEnum: 'AHMED' | 'ABDO' | 'SHARED' = 'SHARED';
+  if (partUsage.ownershipType === 'PARTNER_1_PRIVATE' || (partUsage.ownershipType as any) === 'AHMED') {
+    ownershipEnum = 'AHMED';
+  } else if (partUsage.ownershipType === 'PARTNER_2_PRIVATE' || (partUsage.ownershipType as any) === 'ABDO') {
+    ownershipEnum = 'ABDO';
+  }
+
+  const row: any = {
+    repair_order_id: isUuid(resolvedOrderUuid) ? resolvedOrderUuid : null,
+    inventory_item_id: isUuid(resolvedItemUuid) ? resolvedItemUuid : null,
+    part_name_snapshot: partUsage.partName,
+    part_name: partUsage.partName,
+    sku: partUsage.sku || null,
+    quantity: Number(partUsage.quantity || 1),
+    cost_price_snapshot: Number(partUsage.unitCost || 0),
+    unit_cost: Number(partUsage.unitCost || 0),
+    selling_price_snapshot: Number(partUsage.totalCost || (partUsage.quantity * partUsage.unitCost)),
+    total_cost: Number(partUsage.totalCost || (partUsage.quantity * partUsage.unitCost)),
+    stock_ownership_snapshot: ownershipEnum,
+    ownership_type: partUsage.ownershipType || 'CUSTOMER_SHARED',
+    responsible_partner_id: partUsage.responsiblePartnerId || 'SHOP',
+    accounting_status: partUsage.accountingStatus || 'CONSUMED',
+    created_at: partUsage.createdAt || new Date().toISOString(),
+    employee_name: partUsage.employeeName || null,
+    warehouse: partUsage.warehouse || null,
+    notes: partUsage.notes || null
+  };
+
+  if (isUuid(partUsage.id)) {
+    row.id = partUsage.id;
+  }
+
+  try {
+    const { data: insertedRow, error } = await supabase
+      .from('repair_part_usages')
+      .insert([row])
+      .select()
+      .single();
+
+    if (error) {
+      console.warn("⚠️ Notice inserting repair_part_usages into Supabase:", error.message);
+    }
+
+    return db.addRepairPartUsage({
+      ...partUsage,
+      id: insertedRow?.id ? String(insertedRow.id) : partUsage.id,
+      repairOrderId: partUsage.repairOrderId
+    } as any);
+  } catch (err) {
+    console.warn("⚠️ Exception inserting repair_part_usages into Supabase:", err);
+    return db.addRepairPartUsage(partUsage);
+  }
 }
 
 export async function updateRepairPartUsageInSupabase(id: string, updates: Partial<RepairPartUsage>): Promise<void> {

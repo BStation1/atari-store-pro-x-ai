@@ -135,12 +135,7 @@ BEGIN
         GET DIAGNOSTICS v_cnt_repair_orders = ROW_COUNT;
     END IF;
 
-    IF to_regclass('public.inventory_movements') IS NOT NULL THEN
-        DELETE FROM public.inventory_movements;
-        GET DIAGNOSTICS v_cnt_inventory_movements = ROW_COUNT;
-    END IF;
-
-    -- Zero out product stock quantities if products table exists
+    -- Zero out product stock quantities if products table exists FIRST
     IF to_regclass('public.products') IS NOT NULL THEN
         UPDATE public.products SET quantity = 0;
     END IF;
@@ -153,6 +148,12 @@ BEGIN
     IF to_regclass('public.invoices') IS NOT NULL THEN
         DELETE FROM public.invoices;
         GET DIAGNOSTICS v_cnt_invoices = ROW_COUNT;
+    END IF;
+
+    -- Delete inventory_movements AFTER products have been zeroed
+    IF to_regclass('public.inventory_movements') IS NOT NULL THEN
+        DELETE FROM public.inventory_movements;
+        GET DIAGNOSTICS v_cnt_inventory_movements = ROW_COUNT;
     END IF;
 
     IF to_regclass('public.customers') IS NOT NULL THEN

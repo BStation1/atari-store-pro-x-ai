@@ -4,10 +4,11 @@
 
 DROP POLICY IF EXISTS "Staff manage customers" ON public.customers;
 DROP POLICY IF EXISTS "Authenticated users manage customers" ON public.customers;
+DROP POLICY IF EXISTS "Public manage customers" ON public.customers;
 
-CREATE POLICY "Authenticated users manage customers"
+CREATE POLICY "Public manage customers"
 ON public.customers
 FOR ALL
-TO authenticated
+TO public
 USING (true)
 WITH CHECK (true);

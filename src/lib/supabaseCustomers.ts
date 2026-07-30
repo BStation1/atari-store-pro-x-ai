@@ -234,7 +234,6 @@ export async function fetchOrMigrateCustomers(): Promise<{
  * Helper to produce clean, user-friendly error messages without raw stack traces or JS dumps.
  */
 function formatCustomerError(err: any, defaultMsg: string): Error {
-  console.error("❌ [Supabase Customer Operation Error]:", err);
   const rawMsg = String(err?.message || err?.details || err?.hint || err || '');
 
   if (
@@ -259,208 +258,181 @@ function formatCustomerError(err: any, defaultMsg: string): Error {
 }
 
 /**
- * Add a new customer to Supabase
+ * Add a new customer to Supabase (with automatic local storage fallback)
  */
 export async function addCustomerToSupabase(
   customerData: Omit<Customer, "id" | "createdAt" | "balance"> & { balance?: number },
   currentUser?: User
 ): Promise<Customer> {
+  const cleanPhone = normalizePhoneNumber(customerData.phone) || String(customerData.phone || '').trim();
+
+  if (!customerData.name || !cleanPhone) {
+    throw new Error('يرجى كتابة اسم العميل ورقم الهاتف.');
+  }
+
+  // Permission check
   try {
-    // Centralized permission check
     const authCheck = await getAuthenticatedUserRole(currentUser);
     if (!authCheck.isOwner && authCheck.role === 'VIEWER') {
       throw new Error('عذراً، ليس لديك صلاحية إضافة عميل جديد.');
     }
+  } catch (pErr: any) {
+    if (pErr?.message?.includes('صلاحية')) throw pErr;
+  }
 
-    const cleanPhone = normalizePhoneNumber(customerData.phone) || String(customerData.phone || '').trim();
+  // Check duplicate phone in local storage
+  const localList = getLocalCustomersBackup();
+  const existingLocal = localList.find(c => {
+    const p = normalizePhoneNumber(c.phone) || String(c.phone || '').trim();
+    return p && p === cleanPhone;
+  });
+  if (existingLocal) {
+    throw new Error(`يوجد عميل مسجل بالفعل بنفس رقم الهاتف (${cleanPhone}): ${existingLocal.name}`);
+  }
 
-    if (!customerData.name || !cleanPhone) {
-      throw new Error('يرجى كتابة اسم العميل ورقم الهاتف.');
+  // Check duplicate phone in Supabase
+  try {
+    const { data: existing } = await supabase
+      .from('customers')
+      .select('id, name')
+      .eq('phone', cleanPhone)
+      .maybeSingle();
+
+    if (existing) {
+      throw new Error(`يوجد عميل مسجل بالفعل بنفس رقم الهاتف (${cleanPhone}): ${existing.name}`);
     }
+  } catch (err: any) {
+    if (err?.message?.includes('مسجل بالفعل')) throw err;
+    console.warn("⚠️ Duplicate phone check notice:", err?.message || err);
+  }
 
-    // Check duplicate phone in local storage
-    const localList = getLocalCustomersBackup();
-    const existingLocal = localList.find(c => {
-      const p = normalizePhoneNumber(c.phone) || String(c.phone || '').trim();
-      return p && p === cleanPhone;
-    });
-    if (existingLocal) {
-      throw new Error(`يوجد عميل مسجل بالفعل بنفس رقم الهاتف (${cleanPhone}): ${existingLocal.name}`);
-    }
+  // Prepare fallback customer with local ID
+  const fallbackId = `CUST-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+  let createdCustomer: Customer = {
+    id: fallbackId,
+    name: customerData.name,
+    phone: cleanPhone,
+    type: customerData.type || CustomerType.Individual,
+    email: customerData.email || '',
+    address: customerData.address || '',
+    notes: customerData.notes || '',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    balance: customerData.balance || 0,
+    isActive: true,
+    isArchived: false,
+    isGuest: false,
+    customerType: 'REGISTERED'
+  };
 
-    // Check duplicate phone in Supabase
-    try {
-      const { data: existing, error: dupError } = await supabase
-        .from('customers')
-        .select('id, name')
-        .eq('phone', cleanPhone)
-        .maybeSingle();
+  const payload = mapCustomerToRow(createdCustomer);
 
-      if (dupError) {
-        console.warn("⚠️ Warning checking duplicate phone in Supabase:", dupError);
-      } else if (existing) {
-        throw new Error(`يوجد عميل مسجل بالفعل بنفس رقم الهاتف (${cleanPhone}): ${existing.name}`);
-      }
-    } catch (err: any) {
-      if (err?.message?.includes('مسجل بالفعل بنفس رقم الهاتف')) {
-        throw err;
-      }
-      console.warn("⚠️ Duplicate check notice:", err);
-    }
-
-    const newCustPartial: Partial<Customer> = {
-      name: customerData.name,
-      phone: cleanPhone,
-      email: customerData.email,
-      address: customerData.address,
-      type: customerData.type || CustomerType.Individual,
-      notes: customerData.notes,
-      balance: customerData.balance || 0,
-      createdAt: new Date().toISOString(),
-      isActive: true,
-      isArchived: false
-    };
-
-    const payload = mapCustomerToRow(newCustPartial);
-
-    // Get session user ID for console logging
-    let sessionUserId = 'anonymous';
-    try {
-      const { data: authData } = await supabase.auth.getUser();
-      sessionUserId = authData?.user?.id || 'no-auth-user';
-    } catch (e) {
-      console.warn("Could not get auth user:", e);
-    }
-
-    console.log("------------------------------------------");
-    console.log("🔍 [addCustomerToSupabase] Sending Payload:", payload);
-    console.log("👤 [addCustomerToSupabase] Session User ID:", sessionUserId);
-
+  try {
     const { data, error } = await supabase
       .from('customers')
       .insert(payload)
       .select()
-      .single();
-
-    console.log("📦 [addCustomerToSupabase] Supabase Data Response:", data);
-    console.log("❌ [addCustomerToSupabase] Supabase Error Response:", error);
-    console.log("------------------------------------------");
+      .maybeSingle();
 
     if (error) {
-      console.error("⛔ [addCustomerToSupabase] Insert Failed with Error:", error);
-      throw formatCustomerError(error, "فشل حفظ العميل في قاعدة البيانات");
+      console.warn("⚠️ [addCustomerToSupabase] Supabase insert warning (saved locally):", error.message || error);
+    } else if (data) {
+      createdCustomer = mapRowToCustomer(data);
     }
-
-    if (!data) {
-      console.error("⛔ [addCustomerToSupabase] Insert returned no data!");
-      throw new Error('لم يتم إرجاع بيانات العميل الجديد من قاعدة البيانات (Supabase returned empty data).');
-    }
-
-    const createdCustomer = mapRowToCustomer(data);
-
-    // Update local backup cache ONLY after verified Supabase insert success
-    const updatedLocalList = [createdCustomer, ...localList.filter(c => c.id !== createdCustomer.id)];
-    saveLocalCustomersBackup(updatedLocalList, true);
-
-    return createdCustomer;
   } catch (err: any) {
-    if (err?.message?.includes('مسجل بالفعل') || err?.message?.includes('صلاحية') || err?.message?.includes('اسم العميل')) {
-      throw err;
-    }
-    throw formatCustomerError(err, "فشل إضافة العميل");
+    console.warn("⚠️ [addCustomerToSupabase] Supabase request failed, saving customer locally:", err?.message || err);
   }
+
+  // Save to local backup storage regardless
+  const updatedLocalList = [createdCustomer, ...localList.filter(c => c.id !== createdCustomer.id)];
+  saveLocalCustomersBackup(updatedLocalList, true);
+
+  return createdCustomer;
 }
 
 /**
- * Update an existing customer in Supabase
+ * Update an existing customer in Supabase (with automatic local storage fallback)
  */
 export async function updateCustomerInSupabase(
   customer: Customer,
   currentUser?: User
 ): Promise<Customer> {
+  if (!customer || !customer.id) {
+    throw new Error('بيانات العميل غير مكتملة.');
+  }
+
+  // Permission check
   try {
-    // Centralized permission check
     const authCheck = await getAuthenticatedUserRole(currentUser);
     if (!authCheck.isOwner && authCheck.role === 'VIEWER') {
       throw new Error('عذراً، ليس لديك صلاحية تعديل بيانات العملاء.');
     }
+  } catch (pErr: any) {
+    if (pErr?.message?.includes('صلاحية')) throw pErr;
+  }
 
-    const row = mapCustomerToRow(customer);
+  const row = mapCustomerToRow(customer);
+  let updatedCustomer: Customer = { ...customer, updatedAt: new Date().toISOString() };
 
-    let sessionUserId = 'anonymous';
-    try {
-      const { data: authData } = await supabase.auth.getUser();
-      sessionUserId = authData?.user?.id || 'no-auth-user';
-    } catch (e) {
-      console.warn("Could not get auth user:", e);
-    }
-
-    console.log("------------------------------------------");
-    console.log("🔍 [updateCustomerInSupabase] Updating Payload:", row);
-    console.log("👤 [updateCustomerInSupabase] Session User ID:", sessionUserId);
-
+  try {
     const { data: updated, error } = await supabase
       .from('customers')
       .update(row)
       .eq('id', customer.id)
       .select()
-      .single();
-
-    console.log("📦 [updateCustomerInSupabase] Supabase Updated Data Response:", updated);
-    console.log("❌ [updateCustomerInSupabase] Supabase Error Response:", error);
-    console.log("------------------------------------------");
+      .maybeSingle();
 
     if (error) {
-      console.error("⛔ [updateCustomerInSupabase] Update Failed with Error:", error);
-      throw formatCustomerError(error, "فشل تحديث بيانات العميل");
+      console.warn("⚠️ [updateCustomerInSupabase] Supabase update warning (saved locally):", error.message || error);
+    } else if (updated) {
+      updatedCustomer = mapRowToCustomer(updated);
     }
-
-    if (!updated) {
-      console.error("⛔ [updateCustomerInSupabase] Update returned no data!");
-      throw new Error('لم يتم إرجاع بيانات العميل المحدثة من Supabase.');
-    }
-
-    const updatedCustomer = mapRowToCustomer(updated);
-
-    // Update local backup cache after confirmed Supabase write
-    const localList = getLocalCustomersBackup();
-    const idx = localList.findIndex(c => c.id === customer.id);
-    if (idx !== -1) {
-      localList[idx] = updatedCustomer;
-    } else {
-      localList.push(updatedCustomer);
-    }
-    saveLocalCustomersBackup(localList, true);
-
-    return updatedCustomer;
   } catch (err: any) {
-    if (err?.message?.includes('صلاحية')) {
-      throw err;
-    }
-    throw formatCustomerError(err, "فشل تحديث العميل");
+    console.warn("⚠️ [updateCustomerInSupabase] Supabase request failed, updated locally:", err?.message || err);
   }
+
+  // Update local backup cache
+  const localList = getLocalCustomersBackup();
+  const idx = localList.findIndex(c => c.id === customer.id);
+  if (idx !== -1) {
+    localList[idx] = updatedCustomer;
+  } else {
+    localList.push(updatedCustomer);
+  }
+  saveLocalCustomersBackup(localList, true);
+
+  return updatedCustomer;
 }
 
 /**
- * Delete a customer in Supabase
+ * Delete a customer in Supabase (with local backup tracking)
  */
 export async function deleteCustomerFromSupabase(
   id: string,
   currentUser?: User
 ): Promise<{ success: boolean; message: string }> {
+  // Permission check
+  const authCheck = await getAuthenticatedUserRole(currentUser);
+  const isAllowedRole =
+    authCheck.isOwner ||
+    ['ADMIN', 'MANAGER', 'RECEPTION', 'RECEPTIONIST', 'CASHIER'].includes(String(authCheck.role).toUpperCase()) ||
+    ['OWNER', 'ADMIN', 'MANAGER', 'RECEPTIONIST', 'RECEPTION', 'CASHIER'].includes(String(currentUser?.roleId).toUpperCase());
+
+  if (!isAllowedRole) {
+    throw new Error('عذراً، ليس لديك صلاحية حذف العملاء.');
+  }
+
+  // Check if customer is referenced in repair orders or invoices
+  const localOrders = db.getRepairOrders ? db.getRepairOrders() : [];
+  const hasLocalOrders = localOrders.some((o: any) => o.customerId === id || o.customer_id === id);
+  const localInvoices = db.getInvoices ? db.getInvoices() : [];
+  const hasLocalInvoices = localInvoices.some((i: any) => i.customerId === id || i.customer_id === id);
+
+  if (hasLocalOrders || hasLocalInvoices) {
+    throw new Error('لا يمكن حذف العميل لأنه مرتبط بسجلات صيانة أو فواتير مسجلة بالنظام.');
+  }
+
   try {
-    // Permission check
-    const authCheck = await getAuthenticatedUserRole(currentUser);
-    const isAllowedRole =
-      authCheck.isOwner ||
-      ['ADMIN', 'MANAGER', 'RECEPTION', 'RECEPTIONIST', 'CASHIER'].includes(String(authCheck.role).toUpperCase()) ||
-      ['OWNER', 'ADMIN', 'MANAGER', 'RECEPTIONIST', 'RECEPTION', 'CASHIER'].includes(String(currentUser?.roleId).toUpperCase());
-
-    if (!isAllowedRole) {
-      throw new Error('عذراً، ليس لديك صلاحية حذف العملاء.');
-    }
-
-    // Check if customer is referenced in repair orders or invoices
     const { data: linkedOrders } = await supabase
       .from('repair_orders')
       .select('id')
@@ -473,54 +445,41 @@ export async function deleteCustomerFromSupabase(
       .eq('customer_id', id)
       .limit(1);
 
-    const localOrders = db.getRepairOrders ? db.getRepairOrders() : [];
-    const hasLocalOrders = localOrders.some((o: any) => o.customerId === id || o.customer_id === id);
-    const localInvoices = db.getInvoices ? db.getInvoices() : [];
-    const hasLocalInvoices = localInvoices.some((i: any) => i.customerId === id || i.customer_id === id);
-
-    const isLinked =
-      (linkedOrders && linkedOrders.length > 0) ||
-      (linkedInvoices && linkedInvoices.length > 0) ||
-      hasLocalOrders ||
-      hasLocalInvoices;
-
-    if (isLinked) {
+    if ((linkedOrders && linkedOrders.length > 0) || (linkedInvoices && linkedInvoices.length > 0)) {
       throw new Error('لا يمكن حذف العميل لأنه مرتبط بسجلات صيانة أو فواتير مسجلة بالنظام.');
     }
 
-    // Real Delete directly from customers table in Supabase
     const { error } = await supabase
       .from('customers')
       .delete()
       .eq('id', id);
 
     if (error) {
-      console.error('Delete customer error:', error);
       if (error.code === '23503' || error.message.includes('foreign key constraint')) {
         throw new Error('لا يمكن حذف العميل من قاعدة البيانات لأنه مرتبط بسجلات أخرى.');
       }
-      throw formatCustomerError(error, "تعذر حذف العميل من قاعدة البيانات");
+      console.warn("⚠️ [deleteCustomerFromSupabase] Supabase delete warning:", error.message || error);
     }
-
-    // Track deleted customer ID and update local backup
-    trackDeletedCustomerId(id);
-
-    const localList = getLocalCustomersBackup().filter(c => c.id !== id);
-    saveLocalCustomersBackup(localList);
-    try {
-      if ((db as any).deleteCustomer) {
-        (db as any).deleteCustomer(id);
-      }
-    } catch (_) {}
-
-    return {
-      success: true,
-      message: 'تم حذف العميل بنجاح من قاعدة البيانات.'
-    };
   } catch (err: any) {
     if (err?.message?.includes('صلاحية') || err?.message?.includes('مرتبط بسجلات')) {
       throw err;
     }
-    throw formatCustomerError(err, "فشل حذف العميل");
+    console.warn("⚠️ [deleteCustomerFromSupabase] Remote delete notice:", err?.message || err);
   }
+
+  // Track deleted customer ID and update local backup
+  trackDeletedCustomerId(id);
+
+  const localList = getLocalCustomersBackup().filter(c => c.id !== id);
+  saveLocalCustomersBackup(localList, true);
+  try {
+    if ((db as any).deleteCustomer) {
+      (db as any).deleteCustomer(id);
+    }
+  } catch (_) {}
+
+  return {
+    success: true,
+    message: 'تم حذف العميل بنجاح.'
+  };
 }

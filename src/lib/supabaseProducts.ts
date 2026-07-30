@@ -1,4 +1,4 @@
-import { supabase } from './supabaseClient';
+import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { Product, InventoryMovement, WorkOwnershipType } from '../types';
 import { getAuthenticatedUserRole } from './authPermissions';
 import { db } from './db';
@@ -301,72 +301,89 @@ export async function addProductToSupabase(
     throw new Error('خطأ: لا يمكن إضافة منتج بكمية أقل من صفر (الكميات السالبة حظرت بالكامل).');
   }
 
-  const categoryMap = await getCategoryUuidMap();
-  const row = mapProductToRow(prod, categoryMap);
+  const fallbackId = `PROD-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+  let newProduct: Product = {
+    ...prod,
+    id: fallbackId,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    isActive: true,
+    isArchived: false
+  };
 
-  let { data, error } = await supabase
-    .from('products')
-    .insert([row])
-    .select()
-    .single();
+  try {
+    const categoryMap = await getCategoryUuidMap();
+    const row = mapProductToRow(prod, categoryMap);
 
-  if (error && (error.code === 'PGRST204' || error.message?.includes('is_archived'))) {
-    console.warn('⚠️ is_archived column missing in schema cache. Retrying insert without is_archived column...');
-    const fallbackRow = { ...row };
-    delete fallbackRow.is_archived;
-    const retryRes = await supabase
+    let { data, error } = await supabase
       .from('products')
-      .insert([fallbackRow])
+      .insert([row])
       .select()
-      .single();
-    data = retryRes.data;
-    error = retryRes.error;
-  }
+      .maybeSingle();
 
-  if (error) {
-    console.error('❌ Supabase error adding product:', error.message);
-    if (error.code === '23505' || error.message?.includes('products_sku_key') || error.message?.includes('sku')) {
-      throw new Error(`كود SKU (${row.sku}) مستخدم بالفعل لصنف آخر في قاعدة البيانات. يرجى إدخال كود SKU فريد.`);
+    if (error && (error.code === 'PGRST204' || error.message?.includes('is_archived'))) {
+      console.warn('⚠️ is_archived column missing in schema cache. Retrying insert without is_archived column...');
+      const fallbackRow = { ...row };
+      delete fallbackRow.is_archived;
+      const retryRes = await supabase
+        .from('products')
+        .insert([fallbackRow])
+        .select()
+        .maybeSingle();
+      data = retryRes.data;
+      error = retryRes.error;
     }
-    if (error.code === '23505' || error.message?.includes('products_barcode_key') || error.message?.includes('barcode')) {
-      throw new Error(`الباركود (${row.barcode}) مستخدم بالفعل لصنف آخر في قاعدة البيانات. يرجى إدخال باركود فريد.`);
+
+    if (error) {
+      if (error.code === '23505' || error.message?.includes('products_sku_key') || error.message?.includes('sku')) {
+        throw new Error(`كود SKU (${row.sku}) مستخدم بالفعل لصنف آخر في قاعدة البيانات. يرجى إدخال كود SKU فريد.`);
+      }
+      if (error.code === '23505' || error.message?.includes('products_barcode_key') || error.message?.includes('barcode')) {
+        throw new Error(`الباركود (${row.barcode}) مستخدم بالفعل لصنف آخر في قاعدة البيانات. يرجى إدخال باركود فريد.`);
+      }
+      console.warn('⚠️ [addProductToSupabase] Supabase error (saved locally):', error.message || error);
+    } else if (data) {
+      newProduct = mapRowToProduct(data);
+
+      if (newProduct.quantity > 0) {
+        try {
+          await supabase.from('inventory_movements').insert([
+            {
+              product_id: newProduct.id,
+              movement_type: 'ADJUSTMENT',
+              quantity_change: newProduct.quantity,
+              previous_quantity: 0,
+              new_quantity: newProduct.quantity,
+              cost_price_snapshot: newProduct.purchasePrice,
+              selling_price_snapshot: newProduct.sellPrice,
+              reference_id: 'OPENING_BALANCE',
+              notes: 'إضافة منتج جديد - رصيد افتتاحي',
+              created_by_user_id: userId || null,
+            },
+          ]);
+        } catch (_) {}
+      }
     }
-    throw new Error(`تعذر إضافة المنتج إلى Supabase: ${error.message}`);
-  }
-
-  const newProduct = mapRowToProduct(data);
-
-  // If quantity > 0, create initial OPENING_BALANCE movement
-  if (newProduct.quantity > 0) {
-    await supabase.from('inventory_movements').insert([
-      {
-        product_id: newProduct.id,
-        movement_type: 'ADJUSTMENT',
-        quantity_change: newProduct.quantity,
-        previous_quantity: 0,
-        new_quantity: newProduct.quantity,
-        cost_price_snapshot: newProduct.purchasePrice,
-        selling_price_snapshot: newProduct.sellPrice,
-        reference_id: 'OPENING_BALANCE',
-        notes: 'إضافة منتج جديد - رصيد افتتاحي',
-        created_by_user_id: userId || null,
-      },
-    ]);
+  } catch (err: any) {
+    if (err?.message?.includes('مستخدم بالفعل') || err?.message?.includes('أقل من صفر')) {
+      throw err;
+    }
+    console.warn('⚠️ [addProductToSupabase] Request failed (saved locally):', err?.message || err);
   }
 
   // Sync local backup
   const currentBackup = getLocalProductsBackup();
-  currentBackup.unshift(newProduct);
-  setLocalProductsBackup(currentBackup);
+  const updatedList = [newProduct, ...currentBackup.filter(p => p.id !== newProduct.id)];
+  setLocalProductsBackup(updatedList);
+  try {
+    db.saveProducts(updatedList);
+  } catch (_) {}
 
   return newProduct;
 }
 
 /**
- * Update a product in Supabase.
- * - Enforces quantity >= 0.
- * - If quantity changed, creates an ADJUSTMENT movement in inventory_movements.
- * Throws an error if Supabase connection fails.
+ * Update a product in Supabase (with automatic local storage backup fallback).
  */
 export async function updateProductInSupabase(
   prod: Product,
@@ -377,69 +394,86 @@ export async function updateProductInSupabase(
     throw new Error('خطأ: الكمية السالبة غير مسموحة بضوابط المخزون.');
   }
 
-  // Fetch current state from Supabase to check previous quantity
   let previousQty = prod.quantity;
+  let updatedProduct: Product = {
+    ...prod,
+    updatedAt: new Date().toISOString()
+  };
+
   try {
-    const { data: currentData } = await supabase
-      .from('products')
-      .select('quantity, cost_price, selling_price')
-      .eq('id', prod.id)
-      .single();
+    try {
+      const { data: currentData } = await supabase
+        .from('products')
+        .select('quantity, cost_price, selling_price')
+        .eq('id', prod.id)
+        .maybeSingle();
 
-    if (currentData) {
-      previousQty = Number(currentData.quantity || 0);
+      if (currentData) {
+        previousQty = Number(currentData.quantity || 0);
+      }
+    } catch (e) {
+      console.warn('Could not fetch previous product state:', e);
     }
-  } catch (e) {
-    console.warn('Could not fetch previous product state for adjustment tracking:', e);
-  }
 
-  const categoryMap = await getCategoryUuidMap();
-  const row = mapProductToRow(prod, categoryMap);
+    const categoryMap = await getCategoryUuidMap();
+    const row = mapProductToRow(prod, categoryMap);
 
-  let { data, error } = await supabase
-    .from('products')
-    .update(row)
-    .eq('id', prod.id)
-    .select()
-    .single();
-
-  if (error && (error.code === 'PGRST204' || error.message?.includes('is_archived'))) {
-    console.warn('⚠️ is_archived column missing in schema cache. Retrying update without is_archived column...');
-    const fallbackRow = { ...row };
-    delete fallbackRow.is_archived;
-    const retryRes = await supabase
+    let { data, error } = await supabase
       .from('products')
-      .update(fallbackRow)
+      .update(row)
       .eq('id', prod.id)
       .select()
-      .single();
-    data = retryRes.data;
-    error = retryRes.error;
-  }
+      .maybeSingle();
 
-  if (error) {
-    console.error('❌ Supabase error updating product:', error.message);
-    throw new Error(`تعذر تعديل المنتج في Supabase: ${error.message}`);
-  }
+    if (error && (error.code === 'PGRST204' || error.message?.includes('is_archived'))) {
+      console.warn('⚠️ is_archived column missing in schema cache. Retrying update without is_archived column...');
+      const fallbackRow = { ...row };
+      delete fallbackRow.is_archived;
+      const retryRes = await supabase
+        .from('products')
+        .update(fallbackRow)
+        .eq('id', prod.id)
+        .select()
+        .maybeSingle();
+      data = retryRes.data;
+      error = retryRes.error;
+    }
 
-  const updatedProduct = mapRowToProduct(data);
+    if (error) {
+      if (error.code === '23505' || error.message?.includes('products_sku_key') || error.message?.includes('sku')) {
+        throw new Error(`كود SKU (${row.sku}) مستخدم بالفعل لصنف آخر في قاعدة البيانات.`);
+      }
+      if (error.code === '23505' || error.message?.includes('products_barcode_key') || error.message?.includes('barcode')) {
+        throw new Error(`الباركود (${row.barcode}) مستخدم بالفعل لصنف آخر في قاعدة البيانات.`);
+      }
+      console.warn('⚠️ [updateProductInSupabase] Supabase update error (updated locally):', error.message || error);
+    } else if (data) {
+      updatedProduct = mapRowToProduct(data);
 
-  // Create ADJUSTMENT movement if quantity changed
-  if (previousQty !== updatedProduct.quantity) {
-    const diff = updatedProduct.quantity - previousQty;
-    await supabase.from('inventory_movements').insert([
-      {
-        product_id: updatedProduct.id,
-        movement_type: 'ADJUSTMENT',
-        quantity_change: diff,
-        previous_quantity: previousQty,
-        new_quantity: updatedProduct.quantity,
-        cost_price_snapshot: updatedProduct.purchasePrice,
-        selling_price_snapshot: updatedProduct.sellPrice,
-        notes: reason || `تعديل يدوي للكمية (من ${previousQty} إلى ${updatedProduct.quantity})`,
-        created_by_user_id: userId || null,
-      },
-    ]);
+      if (previousQty !== updatedProduct.quantity) {
+        const diff = updatedProduct.quantity - previousQty;
+        try {
+          await supabase.from('inventory_movements').insert([
+            {
+              product_id: updatedProduct.id,
+              movement_type: 'ADJUSTMENT',
+              quantity_change: diff,
+              previous_quantity: previousQty,
+              new_quantity: updatedProduct.quantity,
+              cost_price_snapshot: updatedProduct.purchasePrice,
+              selling_price_snapshot: updatedProduct.sellPrice,
+              notes: reason || `تعديل يدوي للكمية (من ${previousQty} إلى ${updatedProduct.quantity})`,
+              created_by_user_id: userId || null,
+            },
+          ]);
+        } catch (_) {}
+      }
+    }
+  } catch (err: any) {
+    if (err?.message?.includes('مستخدم بالفعل') || err?.message?.includes('غير مسموحة')) {
+      throw err;
+    }
+    console.warn('⚠️ [updateProductInSupabase] Remote request failed (updated locally):', err?.message || err);
   }
 
   // Sync local backup
@@ -451,6 +485,9 @@ export async function updateProductInSupabase(
     currentBackup.unshift(updatedProduct);
   }
   setLocalProductsBackup(currentBackup);
+  try {
+    db.saveProducts(currentBackup);
+  } catch (_) {}
 
   return updatedProduct;
 }
@@ -702,74 +739,204 @@ export async function deleteProductFromSupabase(
   return { success: true, message: 'تم حذف المنتج نهائياً من قاعدة البيانات Supabase بنجاح.' };
 }
 
+function isUuid(id?: string): boolean {
+  if (!id || typeof id !== 'string') return false;
+  return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(id);
+}
+
 /**
  * Fetch inventory movements for a product or all products.
  */
 export async function getInventoryMovements(productId?: string): Promise<InventoryMovement[]> {
-  let query = supabase.from('inventory_movements').select('*').order('created_at', { ascending: false });
+  try {
+    const localMovs = db.getInventoryMovements ? db.getInventoryMovements() : [];
 
-  if (productId) {
-    query = query.eq('product_id', productId);
+    if (productId && !isUuid(productId)) {
+      return localMovs.filter(m => m.productId === productId);
+    }
+
+    let query = supabase.from('inventory_movements').select('*').order('created_at', { ascending: false });
+
+    if (productId && isUuid(productId)) {
+      query = query.eq('product_id', productId);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      console.warn('⚠️ [getInventoryMovements] Supabase notice (using local movements):', error.message || error);
+      return productId ? localMovs.filter(m => m.productId === productId) : localMovs;
+    }
+
+    const mapped: InventoryMovement[] = (data || []).map((m: any) => ({
+      id: String(m.id),
+      productId: String(m.product_id),
+      movementType: m.movement_type,
+      quantityChange: Number(m.quantity_change || 0),
+      previousQuantity: Number(m.previous_quantity || 0),
+      newQuantity: Number(m.new_quantity || 0),
+      costPriceSnapshot: Number(m.cost_price_snapshot || 0),
+      sellingPriceSnapshot: Number(m.selling_price_snapshot || 0),
+      referenceId: m.reference_id,
+      notes: m.notes,
+      createdByUserId: m.created_by_user_id,
+      createdAt: m.created_at,
+    }));
+
+    if (!productId) {
+      db.saveInventoryMovements ? db.saveInventoryMovements(mapped) : null;
+    }
+
+    return mapped;
+  } catch (err: any) {
+    console.warn('⚠️ [getInventoryMovements] Exception (using local movements):', err?.message || err);
+    const localMovs = db.getInventoryMovements ? db.getInventoryMovements() : [];
+    return productId ? localMovs.filter(m => m.productId === productId) : localMovs;
+  }
+}
+
+export async function ensureProductUuidInSupabase(product: Product): Promise<string | null> {
+  if (isUuid(product.id)) return product.id;
+  if (!isSupabaseConfigured) return null;
+
+  try {
+    // Search by sku or barcode or name
+    let query = supabase.from('products').select('id, quantity');
+    if (product.sku) {
+      query = query.eq('sku', product.sku);
+    } else if (product.barcode) {
+      query = query.eq('barcode', product.barcode);
+    } else {
+      query = query.eq('name', product.nameAr || product.name);
+    }
+
+    const { data: existing } = await query.maybeSingle();
+    if (existing?.id && isUuid(existing.id)) {
+      return existing.id;
+    }
+
+    // Insert product if missing
+    const row = {
+      name: product.nameAr || product.name,
+      sku: product.sku || `SKU-${Date.now()}`,
+      barcode: product.barcode || null,
+      quantity: Number(product.quantity || 0),
+      cost_price: Number(product.purchasePrice || 0),
+      selling_price: Number(product.sellPrice || 0),
+    };
+
+    const { data: created, error } = await supabase
+      .from('products')
+      .insert([row])
+      .select('id')
+      .single();
+
+    if (error) {
+      console.warn("⚠️ Error creating product in Supabase:", error.message);
+      return null;
+    }
+
+    return created?.id || null;
+  } catch (err) {
+    console.warn("⚠️ Exception resolving product UUID:", err);
+    return null;
+  }
+}
+
+export async function updateProductQuantityInSupabase(productId: string, newQuantity: number): Promise<boolean> {
+  if (!isSupabaseConfigured) {
+    return true;
   }
 
-  const { data, error } = await query;
+  let realUuid = productId;
+  if (!isUuid(realUuid)) {
+    const fetched = await ensureProductUuidInSupabase({ id: productId } as any);
+    if (fetched) realUuid = fetched;
+  }
+
+  if (!isUuid(realUuid)) {
+    console.warn("⚠️ Cannot update product quantity in Supabase: Invalid Product UUID", productId);
+    return false;
+  }
+
+  const { error } = await supabase
+    .from('products')
+    .update({
+      quantity: newQuantity,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', realUuid);
+
   if (error) {
-    console.error('Error fetching inventory movements:', error);
-    return db.getInventoryMovements ? db.getInventoryMovements() : [];
+    console.error("❌ Error updating product quantity in Supabase:", error.message);
+    return false;
   }
 
-  const mapped: InventoryMovement[] = (data || []).map((m: any) => ({
-    id: String(m.id),
-    productId: String(m.product_id),
-    movementType: m.movement_type,
-    quantityChange: Number(m.quantity_change || 0),
-    previousQuantity: Number(m.previous_quantity || 0),
-    newQuantity: Number(m.new_quantity || 0),
-    costPriceSnapshot: Number(m.cost_price_snapshot || 0),
-    sellingPriceSnapshot: Number(m.selling_price_snapshot || 0),
-    referenceId: m.reference_id,
-    notes: m.notes,
-    createdByUserId: m.created_by_user_id,
-    createdAt: m.created_at,
-  }));
-
-  if (!productId) {
-    // Sync to local backup so db.getInventoryMovements() returns latest remote data
-    db.saveInventoryMovements ? db.saveInventoryMovements(mapped) : null;
-  }
-
-  return mapped;
+  return true;
 }
 
 /**
  * Adds an inventory movement to Supabase and updates local storage backup.
  */
-export async function addInventoryMovementToSupabase(movement: any): Promise<void> {
+export async function addInventoryMovementToSupabase(movement: any): Promise<boolean> {
   db.addInventoryMovement(movement);
 
-  try {
-    const row: any = {
-      product_id: movement.productId,
-      movement_type: movement.movementType,
-      quantity_change: movement.quantityChange,
-      previous_quantity: movement.previousQuantity,
-      new_quantity: movement.newQuantity,
-      cost_price_snapshot: movement.costPriceSnapshot,
-      selling_price_snapshot: movement.sellingPriceSnapshot,
-      reference_id: movement.referenceId || movement.repairOrderId || null,
-      notes: movement.notes || null,
-      created_by_user_id: movement.createdByUserId || null,
-      created_at: movement.createdAt || new Date().toISOString()
-    };
-    if (movement.id) row.id = movement.id;
+  if (!isSupabaseConfigured) {
+    return true;
+  }
 
-    const { error } = await supabase.from('inventory_movements').upsert([row]);
+  let realProdUuid = movement.productId;
+  if (!isUuid(realProdUuid)) {
+    try {
+      const fetched = await ensureProductUuidInSupabase({
+        id: movement.productId,
+        sku: movement.sku,
+        name: movement.productNameSnapshot
+      } as any);
+      if (fetched) realProdUuid = fetched;
+    } catch (err) {
+      console.warn("⚠️ Error resolving product UUID for inventory movement:", err);
+    }
+  }
+
+  // Map movement_type to valid enum: ('SALE', 'PURCHASE', 'RETURN', 'REPAIR_USAGE', 'ADJUSTMENT', 'DELETION_RESTORE')
+  let movType = movement.movementType;
+  if (movement.movementType === 'OUT' || movement.usageType === 'REPAIR_USAGE') {
+    movType = 'REPAIR_USAGE';
+  } else if (movement.movementType === 'IN') {
+    movType = 'PURCHASE';
+  }
+
+  const row: any = {
+    product_id: isUuid(realProdUuid) ? realProdUuid : null,
+    movement_type: movType,
+    quantity_change: Number(movement.quantityChange),
+    previous_quantity: Number(movement.previousQuantity || 0),
+    new_quantity: Number(movement.newQuantity || 0),
+    cost_price_snapshot: Number(movement.costPriceSnapshot || 0),
+    selling_price_snapshot: Number(movement.sellingPriceSnapshot || 0),
+    reference_id: movement.referenceId || movement.repairOrderId || null,
+    notes: movement.notes || null,
+    created_by_user_id: isUuid(movement.createdByUserId) ? movement.createdByUserId : null,
+    created_at: movement.createdAt || new Date().toISOString()
+  };
+
+  if (isUuid(movement.id)) {
+    row.id = movement.id;
+  }
+
+  try {
+    const { error } = await supabase
+      .from('inventory_movements')
+      .insert([row]);
+
     if (error) {
-      console.warn("⚠️ Notice upserting inventory_movements to Supabase:", error.message);
+      console.warn("⚠️ Notice inserting inventory_movements into Supabase:", error.message);
     }
   } catch (err) {
-    console.warn("⚠️ Exception upserting inventory_movements to Supabase:", err);
+    console.warn("⚠️ Exception inserting inventory_movements into Supabase:", err);
   }
+
+  return true;
 }
 
 /**

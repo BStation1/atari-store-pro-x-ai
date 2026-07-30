@@ -164,9 +164,9 @@ BEGIN
         GET DIAGNOSTICS v_cnt_repair_orders = ROW_COUNT;
     END IF;
 
-    IF to_regclass('public.inventory_movements') IS NOT NULL THEN
-        DELETE FROM public.inventory_movements;
-        GET DIAGNOSTICS v_cnt_inventory_movements = ROW_COUNT;
+    -- Zero out stock quantities FIRST while preserving catalog items, barcodes, and SKUs
+    IF to_regclass('public.products') IS NOT NULL THEN
+        UPDATE public.products SET quantity = 0;
     END IF;
 
     IF to_regclass('public.expenses') IS NOT NULL THEN
@@ -204,9 +204,10 @@ BEGIN
         GET DIAGNOSTICS v_cnt_notifications = ROW_COUNT;
     END IF;
 
-    -- Zero out stock quantities while preserving catalog items, barcodes, and SKUs
-    IF to_regclass('public.products') IS NOT NULL THEN
-        UPDATE public.products SET quantity = 0;
+    -- Delete inventory_movements AFTER products have been zeroed to eliminate orphan movements
+    IF to_regclass('public.inventory_movements') IS NOT NULL THEN
+        DELETE FROM public.inventory_movements;
+        GET DIAGNOSTICS v_cnt_inventory_movements = ROW_COUNT;
     END IF;
 
     -- 3. Controlled Rollback Test Hook

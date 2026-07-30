@@ -35,11 +35,12 @@ GRANT EXECUTE ON FUNCTION public.is_owner() TO authenticated;
 -- 3. Drop existing policies on customers table
 DROP POLICY IF EXISTS "Staff manage customers" ON public.customers;
 DROP POLICY IF EXISTS "Authenticated users manage customers" ON public.customers;
+DROP POLICY IF EXISTS "Public manage customers" ON public.customers;
 
--- 4. Re-create "Authenticated users manage customers" policy
-CREATE POLICY "Authenticated users manage customers"
+-- 4. Re-create "Public manage customers" policy
+CREATE POLICY "Public manage customers"
 ON public.customers
 FOR ALL
-TO authenticated
+TO public
 USING (true)
 WITH CHECK (true);

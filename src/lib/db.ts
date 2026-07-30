@@ -1296,7 +1296,7 @@ export const db = {
     const list = db.getPartnerTransactions();
     const newTx: PartnerTransaction = {
       ...tx,
-      id: `PTX-${Date.now().toString(36).toUpperCase()}`,
+      id: `PTX-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
       status: "APPROVED",
       createdAt: new Date().toISOString()
     };
@@ -1350,7 +1350,7 @@ export const db = {
     const list = db.getRepairPartUsages();
     const newPart: RepairPartUsage = {
       ...part,
-      id: `PU-${Date.now().toString(36).toUpperCase()}`,
+      id: `PU-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
       createdAt: new Date().toISOString()
     };
     list.unshift(newPart);
@@ -1365,7 +1365,7 @@ export const db = {
     const list = db.getSettlementAuditLogs();
     const newLog: SettlementAuditLog = {
       ...log,
-      id: `SAL-${Date.now().toString(36).toUpperCase()}`,
+      id: `SAL-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
       timestamp: new Date().toISOString()
     };
     list.unshift(newLog);
@@ -1705,7 +1705,7 @@ export const db = {
 
     const payments = db.getPartnerSettlementPayments();
     const newPayment: PartnerSettlementPayment = {
-      id: `PAY-${Date.now().toString(36).toUpperCase()}`,
+      id: `PAY-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
       settlementId,
       partnerId,
       amount,
@@ -2550,9 +2550,24 @@ export const db = {
         logErr(`Exception during Strategy 2 delete on "${tableName}": ${e?.message || e}`);
       }
 
+      // Step D: Strategy 3 - Direct wipe using created_at filter if id-based filters miss
+      log(`8. Executing Strategy 3: Bulk delete on "${tableName}" using .gte('created_at', '1970-01-01T00:00:00Z')...`);
+      try {
+        const { error: delErr3 } = await supabase
+          .from(tableName)
+          .delete({ count: 'exact' })
+          .gte('created_at', '1970-01-01T00:00:00Z');
+
+        if (delErr3) {
+          logErr(`Strategy 3 delete on "${tableName}" error: ${delErr3.message}`);
+        }
+      } catch (e: any) {
+        logErr(`Exception during Strategy 3 delete on "${tableName}": ${e?.message || e}`);
+      }
+
       // Final count check for this table
       const { count: finalRemCount } = await supabase.from(tableName).select('id', { count: 'exact', head: true });
-      log(`8. Final remaining count in "${tableName}": ${finalRemCount ?? 0}`);
+      log(`9. Final remaining count in "${tableName}": ${finalRemCount ?? 0}`);
 
       if ((finalRemCount ?? 0) > 0) {
         return {
@@ -2590,6 +2605,18 @@ export const db = {
       if (error || !data || !data.success) {
         console.warn("RPC reset_operational_data missing or unexecutable, executing safe direct Supabase table deletion...", error?.message || error);
 
+        // Zero product stock in Supabase FIRST to prevent auto-creation of opening balance movements
+        try {
+          await supabase.from('products').update({ quantity: 0 }).neq('id', '00000000-0000-0000-0000-000000000000');
+          const localProds = db.getProducts();
+          if (Array.isArray(localProds) && localProds.length > 0) {
+            const zeroedProds = localProds.map(p => ({ ...p, quantity: 0 }));
+            db.saveProducts(zeroedProds);
+          }
+        } catch (prodErr: any) {
+          console.warn("⚠️ [Operational Reset] Stock zeroing warning:", prodErr?.message);
+        }
+
         const tablesToReset = [
           'partner_settlement_payments',
           'partner_settlements',
@@ -2599,11 +2626,11 @@ export const db = {
           'invoice_items',
           'repair_part_usages',
           'repair_orders',
-          'inventory_movements',
           'expenses',
           'invoices',
           'customers',
           'suppliers',
+          'inventory_movements',
           'activity_logs',
           'audit_logs',
           'system_notifications'
@@ -2621,11 +2648,8 @@ export const db = {
           }
         }
 
-        try {
-          await supabase.from('products').update({ quantity: 0 }).neq('id', '00000000-0000-0000-0000-000000000000');
-        } catch (prodErr: any) {
-          console.warn("⚠️ [Operational Reset] Stock zeroing warning:", prodErr?.message);
-        }
+        // Final mandatory wipe on inventory_movements after products are zeroed
+        await safeDeleteTable('inventory_movements');
 
         if (fatalErrors.length > 0) {
           console.warn("⚠️ [Operational Reset] Table deletion encountered non-fatal issues:", fatalErrors);
@@ -2685,17 +2709,23 @@ export const db = {
       if (verificationFailed) {
         console.warn("⚠️ Initial verification found remaining records, attempting direct safeDeleteTable failsafe...");
         
-        if (movCount > 0) await safeDeleteTable('inventory_movements');
+        // Zero products FIRST so no opening balances can be recreated
+        if (nonZeroProdCount > 0) {
+          try {
+            await supabase.from('products').update({ quantity: 0 }).neq('id', '00000000-0000-0000-0000-000000000000');
+            const localProds = db.getProducts();
+            if (Array.isArray(localProds) && localProds.length > 0) {
+              db.saveProducts(localProds.map(p => ({ ...p, quantity: 0 })));
+            }
+          } catch (_) {}
+        }
+
         if (custCount > 0) await safeDeleteTable('customers');
         if (orderCount > 0) await safeDeleteTable('repair_orders');
         if (invCount > 0) await safeDeleteTable('invoices');
         if (supCount > 0) await safeDeleteTable('suppliers');
         if (expCount > 0) await safeDeleteTable('expenses');
-        if (nonZeroProdCount > 0) {
-          try {
-            await supabase.from('products').update({ quantity: 0 }).neq('id', '00000000-0000-0000-0000-000000000000');
-          } catch (_) {}
-        }
+        if (movCount > 0 || true) await safeDeleteTable('inventory_movements');
 
         // Re-verify counts after failsafe execution
         const [reCust, reOrder, reInv, reSup, reExp, reMov, reProd] = await Promise.all([
@@ -2751,7 +2781,9 @@ export const db = {
       setStorageItem("error_logger_v1", []);
       setStorageItem("atari_system_health_logs", []);
 
-      window.dispatchEvent(new Event("atari_db_changed"));
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event("atari_db_changed"));
+      }
 
       const deletedCountsObj = data.deleted_counts || {};
       const resetTablesList = [
