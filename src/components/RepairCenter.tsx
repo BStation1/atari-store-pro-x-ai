@@ -1702,41 +1702,113 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
                             return (
                               <div className="bg-rose-950/20 border border-rose-500/30 p-4 rounded-xl space-y-3">
-                                <div className="flex justify-between items-center">
+                                <div className="flex flex-wrap justify-between items-center gap-2">
                                   <h5 className="text-xs font-bold text-rose-300 flex items-center gap-1.5">
                                     <Package className="w-4 h-4 text-rose-400" />
-                                    <span>4. قطع الغيار المستخدمة (من المخزن)</span>
+                                    <span>4. قطع الغيار والمكونات من المخزن (اختيار وسحب فورى)</span>
                                   </h5>
-
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setSelectedPartIndex(selectedPartIndex === devIdx ? null : devIdx);
-                                      setPartSearch("");
-                                    }}
-                                    className="bg-rose-600 hover:bg-rose-500 text-white text-[11px] px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 transition cursor-pointer shadow-sm"
-                                  >
-                                    <Plus className="w-3.5 h-3.5" />
-                                    <span>إضافة قطعة من المخزن</span>
-                                  </button>
+                                  <span className="text-[10px] text-rose-300/80 font-mono">انقر على القطعة لإضافتها/خصمها من المخزون</span>
                                 </div>
 
-                                {/* Active Linked Parts Table */}
-                                {deviceLinkedUsages.length === 0 ? (
-                                  <div className="text-center py-5 border border-dashed border-rose-500/20 rounded-xl bg-gray-950/40">
-                                    <p className="text-xs text-gray-400">لم يتم إضافة قطع غيار مسحوبة من المخزن لهذا الجهاز بعد</p>
-                                    <p className="text-[10px] text-gray-500 mt-1">انقر على "إضافة قطعة من المخزن" لاختيار صنف وتوثيق حركة السحب</p>
+                                {/* Part Search Filter Input */}
+                                {products.filter(p => !p.isArchived).length > 3 && (
+                                  <div className="relative">
+                                    <Search className="w-3.5 h-3.5 text-gray-400 absolute right-3 top-2.5" />
+                                    <input
+                                      type="text"
+                                      placeholder="ابحث في قطع الغيار المتاحة بالمخزن (مثال: HDMI, IC, شاشة, كابل...)"
+                                      value={partSearch}
+                                      onChange={e => setPartSearch(e.target.value)}
+                                      className="w-full bg-[#11131e] border border-rose-500/30 rounded-xl pr-9 pl-3 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-rose-500"
+                                    />
                                   </div>
-                                ) : (
-                                  <div className="overflow-x-auto rounded-xl border border-rose-500/20 bg-gray-950/80">
+                                )}
+
+                                {/* Inventory Choice Chips (Template Style) */}
+                                {(() => {
+                                  const availableParts = products.filter(p => !p.isArchived);
+                                  const filteredParts = availableParts.filter(p =>
+                                    !partSearch.trim() ||
+                                    p.name.toLowerCase().includes(partSearch.toLowerCase()) ||
+                                    (p.nameAr && p.nameAr.toLowerCase().includes(partSearch.toLowerCase())) ||
+                                    (p.category && p.category.toLowerCase().includes(partSearch.toLowerCase()))
+                                  );
+
+                                  if (filteredParts.length === 0) {
+                                    return (
+                                      <p className="text-xs text-gray-400 italic py-2">
+                                        لا توجد قطع غيار مطابقة في المخزون.
+                                      </p>
+                                    );
+                                  }
+
+                                  return (
+                                    <div className="flex flex-wrap gap-1.5 pt-1 max-h-[220px] overflow-y-auto p-1 custom-scrollbar">
+                                      {filteredParts.map(p => {
+                                        const linkedUsages = deviceLinkedUsages.filter(pu => pu.inventoryItemId === p.id || pu.partName === (p.nameAr || p.name));
+                                        const isSelected = linkedUsages.length > 0;
+                                        const totalUsedQty = linkedUsages.reduce((sum, pu) => sum + (pu.quantity || 1), 0);
+                                        const isOutOfStock = p.quantity <= 0 && !isSelected;
+
+                                        return (
+                                          <button
+                                            key={p.id}
+                                            type="button"
+                                            disabled={isOutOfStock}
+                                            onClick={() => {
+                                              if (isSelected) {
+                                                const lastUsage = linkedUsages[linkedUsages.length - 1];
+                                                if (lastUsage) {
+                                                  handleRemovePartUsage(lastUsage.id, devIdx);
+                                                }
+                                              } else {
+                                                handleAddPartToDevice(devIdx, p.id, 1);
+                                              }
+                                            }}
+                                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
+                                              isSelected
+                                                ? "bg-rose-600 text-white border-rose-400 shadow-md shadow-rose-950/50 scale-[1.02]"
+                                                : isOutOfStock
+                                                ? "bg-gray-950/50 text-gray-600 border-gray-800/80 opacity-50 cursor-not-allowed"
+                                                : "bg-gray-950/80 text-gray-300 border-rose-500/20 hover:border-rose-500/60 hover:text-white"
+                                            }`}
+                                          >
+                                            <span className="text-[10px]">{isSelected ? "☑" : "□"}</span>
+                                            <span>{p.nameAr || p.name}</span>
+
+                                            <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-mono font-bold ${
+                                              isSelected ? "bg-rose-800/90 text-white" : "bg-gray-900 text-amber-300"
+                                            }`}>
+                                              +{p.purchasePrice || 0} ج.م
+                                            </span>
+
+                                            <span className={`text-[9px] px-1 py-0.5 rounded ${
+                                              isOutOfStock
+                                                ? "bg-red-950 text-red-400 font-bold"
+                                                : isSelected
+                                                ? "bg-rose-950 text-rose-200"
+                                                : "bg-cyan-950/80 text-cyan-300 font-mono"
+                                            }`}>
+                                              {isOutOfStock ? "غير متوفر" : isSelected ? `مضاف (${totalUsedQty}) | المتاح: ${p.quantity}` : `المتاح: ${p.quantity}`}
+                                            </span>
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  );
+                                })()}
+
+                                {/* Active Linked Parts Table Summary */}
+                                {deviceLinkedUsages.length > 0 && (
+                                  <div className="overflow-x-auto rounded-xl border border-rose-500/20 bg-gray-950/80 mt-2">
                                     <table className="w-full text-xs text-right text-gray-300 border-collapse">
                                       <thead className="bg-[#181b2a] text-gray-400 font-semibold border-b border-[#2a2d42]">
                                         <tr>
                                           <th className="p-2.5">اسم القطعة</th>
-                                          <th className="p-2.5 text-center">الكمية</th>
-                                          <th className="p-2.5 text-center">سعر الشراء وقت السحب</th>
-                                          <th className="p-2.5 text-left font-bold text-rose-300">الإجمالي</th>
-                                          <th className="p-2.5 text-center">الإجراء</th>
+                                          <th className="p-2.5 text-center">الكمية المسحوبة</th>
+                                          <th className="p-2.5 text-center">سعر الشراء</th>
+                                          <th className="p-2.5 text-left font-bold text-rose-300">إجمالي التكلفة</th>
+                                          <th className="p-2.5 text-center">حذف/إرجاع</th>
                                         </tr>
                                       </thead>
                                       <tbody className="divide-y divide-[#1f2937]">
@@ -1765,65 +1837,11 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
                                 {/* Display calculated read-only parts total */}
                                 <div className="pt-2 border-t border-rose-500/20 flex justify-between items-center text-xs">
-                                  <span className="text-gray-300 font-bold">إجمالي تكلفة قطع الغيار:</span>
+                                  <span className="text-gray-300 font-bold">إجمالي تكلفة قطع الغيار المسحوبة:</span>
                                   <span className="font-mono font-extrabold text-rose-400 text-sm bg-rose-950/60 px-3 py-1 rounded-lg border border-rose-500/30">
                                     {devicePartsTotalCost.toLocaleString('ar-EG')} ج.م
                                   </span>
                                 </div>
-
-                                {/* Product Search / Picker */}
-                                {selectedPartIndex === devIdx && (
-                                  <div className="mt-2 p-3 bg-gray-950 border border-rose-500/40 rounded-xl space-y-2">
-                                    <div className="flex justify-between items-center">
-                                      <label className="text-xs font-bold text-rose-300">اختر قطعة غيار من المخزون:</label>
-                                      <button
-                                        type="button"
-                                        onClick={() => setSelectedPartIndex(null)}
-                                        className="text-gray-400 hover:text-white p-1"
-                                      >
-                                        <X className="w-4 h-4" />
-                                      </button>
-                                    </div>
-
-                                    <input
-                                      type="text"
-                                      autoFocus
-                                      placeholder="اكتب اسم القطعة (مثال: HDMI PS5 Socket, IC Power...)"
-                                      value={partSearch}
-                                      onChange={e => setPartSearch(e.target.value)}
-                                      className="w-full bg-[#11131e] border border-[#2a2d42] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-rose-500"
-                                    />
-
-                                    <div className="max-h-[180px] overflow-y-auto divide-y divide-[#2a2d42] border border-[#2a2d42] rounded-xl bg-[#11131e]">
-                                      {products
-                                        .filter(p => !p.isArchived && (
-                                          !partSearch.trim() ||
-                                          p.name.toLowerCase().includes(partSearch.toLowerCase()) ||
-                                          (p.nameAr && p.nameAr.toLowerCase().includes(partSearch.toLowerCase())) ||
-                                          (p.category && p.category.includes("قطع غيار"))
-                                        ))
-                                        .map(p => (
-                                          <div key={p.id} className="p-2.5 flex justify-between items-center hover:bg-rose-500/10 transition">
-                                            <div>
-                                              <span className="font-bold text-white text-xs block">{p.nameAr || p.name}</span>
-                                              <span className="text-[10px] text-gray-400">
-                                                سعر الشراء: <strong className="text-amber-400 font-mono">{p.purchasePrice || 0} ج.م</strong> | المتاح بالمخزن: <strong className="text-cyan-400 font-mono">{p.quantity} قطعة</strong>
-                                              </span>
-                                            </div>
-
-                                            <button
-                                              type="button"
-                                              disabled={p.quantity <= 0}
-                                              onClick={() => handleAddPartToDevice(devIdx, p.id, 1)}
-                                              className="bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white font-bold px-3 py-1 rounded-lg text-xs transition cursor-pointer"
-                                            >
-                                              إضافة قطعة
-                                            </button>
-                                          </div>
-                                        ))}
-                                    </div>
-                                  </div>
-                                )}
                               </div>
                             );
                           })()}
