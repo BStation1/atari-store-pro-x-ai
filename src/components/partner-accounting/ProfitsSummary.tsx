@@ -1014,7 +1014,6 @@ export default function ProfitsSummary({
               <button
                 onClick={() => {
                   setIsWithdrawnModalOpen(false);
-                  setSelectedItemForDetail(null);
                 }}
                 className="p-2 text-gray-400 hover:text-white bg-[#1a1d2d] hover:bg-[#25293e] rounded-xl transition cursor-pointer"
               >
