@@ -34,11 +34,12 @@ import {
   ArrowUpDown,
   CheckCircle2,
   PackageCheck,
+  Package,
   Tag,
   Plus,
   X
 } from "lucide-react";
-import { useRepairOrders, useCustomers, useProducts, useSettings, useInvoices, useCurrentUser } from "../hooks/useData";
+import { useRepairOrders, useCustomers, useProducts, useSettings, useInvoices, useCurrentUser, useRepairPartUsages } from "../hooks/useData";
 import { RepairOrder, RepairDevice, RepairStatus, DeviceType, PaymentMethod, WorkOwnershipType, User as UserType, QUICK_FAULTS_LIST, SelectedRepairItem } from "../types";
 import { getCustomerNameHelper, getCustomerPhoneHelper, getCustomerBadgeHelper, getDeviceDisplayName } from "../lib/customerDisplayHelper";
 import { PhoneDisplay } from "./PhoneDisplay";
@@ -68,6 +69,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
   const { products, updateProduct } = useProducts();
   const { settings } = useSettings();
   const { invoices, addInvoice } = useInvoices();
+  const { partUsages, addPartUsage } = useRepairPartUsages();
 
   console.log("=== Repair Center: Component rendered ===");
   console.log("=== Repair Center: Orders count ===", orders.length);
@@ -593,12 +595,13 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
   };
 
   // Add inventory part to device
-  const handleAddPartToDevice = (deviceIdx: number, productId: string) => {
+  const handleAddPartToDevice = (deviceIdx: number, productId: string, qtyToAdd: number = 1) => {
     if (!selectedOrder) return;
     const product = products.find(p => p.id === productId);
     if (!product) return;
 
-    if (product.quantity <= 0) {
+    const qty = Math.max(1, Math.floor(qtyToAdd));
+    if (product.quantity < qty) {
       dialog.alert({ message: "عفواً، هاته القطعة غير متوفرة بالمخزون حالياً!", variant: "error" });
       return;
     }
@@ -607,20 +610,66 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     const currentDevice = updatedDevices[deviceIdx];
     if (!currentDevice) return;
 
-    const currentPartsCost = Number(currentDevice.partsCost) || 0;
-    const newPartsCost = currentPartsCost + product.sellPrice;
+    const unitCost = Number(product.purchasePrice) || 0;
+    const totalCost = unitCost * qty;
 
-    const currentProcedures = currentDevice.technicalProcedures || currentDevice.selectedRepairItems || [];
-    const newPartItem: SelectedRepairItem = {
-      id: `PART-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+    const ownership = selectedOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
+    let owner: 'SHOP' | 'AHMED' | 'ABDO' = 'SHOP';
+    if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) owner = 'AHMED';
+    else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) owner = 'ABDO';
+
+    // 1. Deduct Stock from Product
+    const newQty = product.quantity - qty;
+    updateProduct({
+      ...product,
+      quantity: newQty
+    });
+
+    // 2. Create Inventory OUT Movement
+    const movementId = `MOV-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`;
+    db.addInventoryMovement({
+      id: movementId,
       productId: product.id,
-      name: product.name,
-      quantity: 1,
-      costPrice: product.purchasePrice || 0,
-      repairPrice: product.sellPrice || 0
-    };
+      productNameSnapshot: product.nameAr || product.name,
+      movementType: 'OUT',
+      usageType: 'REPAIR_USAGE',
+      quantityChange: -qty,
+      previousQuantity: product.quantity,
+      newQuantity: newQty,
+      costPriceSnapshot: unitCost,
+      sellingPriceSnapshot: Number(product.sellPrice || 0),
+      totalCost: totalCost,
+      referenceId: selectedOrder.id,
+      repairOrderId: selectedOrder.id,
+      owner: owner,
+      notes: `صرف قطعة غيار صيانة: ${product.nameAr || product.name} للجهاز (${getDeviceDisplayName(currentDevice)})`,
+      createdAt: new Date().toISOString()
+    });
 
-    const updatedProcedures = [...currentProcedures, newPartItem];
+    // 3. Create Repair Part Usage Record
+    addPartUsage({
+      repairOrderId: selectedOrder.id,
+      inventoryItemId: product.id,
+      partName: product.nameAr || product.name,
+      sku: product.sku || product.id,
+      quantity: qty,
+      unitCost: unitCost,
+      totalCost: totalCost,
+      ownershipType: ownership,
+      responsiblePartnerId: owner === 'AHMED' ? 'P-001' : owner === 'ABDO' ? 'P-002' : 'SHOP',
+      accountingStatus: 'CONSUMED',
+      notes: `deviceId:${currentDevice.id || deviceIdx}`
+    });
+
+    // 4. Recalculate device partsCost from all linked active partUsages for this order and device
+    const allUsages = db.getRepairPartUsages().filter(
+      pu => pu.repairOrderId === selectedOrder.id && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
+    );
+    const deviceUsages = allUsages.filter(
+      pu => (pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) || selectedOrder.devices.length === 1
+    );
+
+    const newPartsCost = deviceUsages.reduce((sum, pu) => sum + (Number(pu.totalCost) || (pu.quantity * pu.unitCost)), 0);
 
     const tags = currentDevice.selectedQuickFaults || (currentDevice.issue ? currentDevice.issue.split(" - ").map(s => s.trim()) : []);
     const faultsCost = currentDevice.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(tags);
@@ -630,16 +679,12 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       updatedDevices[deviceIdx] = {
         ...currentDevice,
         partsCost: newPartsCost,
-        technicalProcedures: updatedProcedures,
-        selectedRepairItems: updatedProcedures,
         priceOverrideAcknowledged: false
       };
     } else {
       updatedDevices[deviceIdx] = {
         ...currentDevice,
         partsCost: newPartsCost,
-        technicalProcedures: updatedProcedures,
-        selectedRepairItems: updatedProcedures,
         finalRepairPrice: newAutoPrice,
         estimatedCost: newAutoPrice
       };
@@ -654,19 +699,13 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       finalRepairPrice: totalFinal
     };
 
-    // Deduct quantity from inventory
-    updateProduct({
-      ...product,
-      quantity: product.quantity - 1
-    });
-
     updatedOrder = addAuditLogRecordHelper(
       updatedOrder,
       "ADD_PART",
       `قطع غيار جهاز ${currentDevice.type}`,
       null,
-      `${product.name} (${product.sellPrice} ج.م)`,
-      "صرف قطعة غيار من المخزون مباشرة للتركيب",
+      `${product.name} (تكلفة الشراء: ${unitCost} ج.م | كمية: ${qty})`,
+      "صرف قطعة غيار من المخزون وتوثيق حركة السحب",
       currentUserForAction,
       currentDevice.id
     );
@@ -674,7 +713,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     updatedOrder = addTimelineEventHelper(
       updatedOrder,
       "PART_ADDED",
-      `صرف قطعة غيار من المخزون: ${product.name} (${product.sellPrice} ج.م)`,
+      `صرف قطعة غيار من المخزون: ${product.name} (كمية ${qty} بسعر شراء ${unitCost} ج.م)`,
       currentUserForAction,
       currentDevice.id
     );
@@ -684,6 +723,112 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
     setPartSearch("");
     setSelectedPartIndex(null);
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_inventory_movements' } }));
+    }
+  };
+
+  const handleRemovePartUsage = (usageId: string, deviceIdx: number) => {
+    if (!selectedOrder) return;
+    const allUsages = db.getRepairPartUsages();
+    const usage = allUsages.find(pu => pu.id === usageId);
+    if (!usage) return;
+
+    const product = products.find(p => p.id === usage.inventoryItemId);
+
+    // 1. Restore Product Stock
+    if (product) {
+      updateProduct({
+        ...product,
+        quantity: product.quantity + usage.quantity
+      });
+    }
+
+    // 2. Add Reversal Movement
+    const ownership = selectedOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
+    let owner: 'SHOP' | 'AHMED' | 'ABDO' = 'SHOP';
+    if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) owner = 'AHMED';
+    else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) owner = 'ABDO';
+
+    db.addInventoryMovement({
+      id: `MOV-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+      productId: usage.inventoryItemId,
+      productNameSnapshot: usage.partName,
+      movementType: 'IN',
+      usageType: 'REPAIR_USAGE_RETURN',
+      quantityChange: usage.quantity,
+      previousQuantity: product ? product.quantity : 0,
+      newQuantity: product ? product.quantity + usage.quantity : usage.quantity,
+      costPriceSnapshot: usage.unitCost,
+      sellingPriceSnapshot: 0,
+      totalCost: usage.totalCost,
+      referenceId: selectedOrder.id,
+      repairOrderId: selectedOrder.id,
+      owner: owner,
+      notes: `إرجاع قطعة غيار صيانة للمخزن: ${usage.partName}`,
+      createdAt: new Date().toISOString()
+    });
+
+    // 3. Mark Usage as RETURNED
+    const updatedUsages = allUsages.map(pu => {
+      if (pu.id === usageId) {
+        return { ...pu, accountingStatus: 'RETURNED' as const };
+      }
+      return pu;
+    });
+    db.saveRepairPartUsages(updatedUsages);
+
+    // 4. Recalculate device partsCost
+    const updatedDevices = [...selectedOrder.devices];
+    const currentDevice = updatedDevices[deviceIdx];
+    if (currentDevice) {
+      const remainingUsages = updatedUsages.filter(
+        pu => pu.repairOrderId === selectedOrder.id && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
+      );
+      const deviceRemainingUsages = remainingUsages.filter(
+        pu => (pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) || selectedOrder.devices.length === 1
+      );
+
+      const newPartsCost = deviceRemainingUsages.reduce((sum, pu) => sum + (Number(pu.totalCost) || (pu.quantity * pu.unitCost)), 0);
+
+      const tags = currentDevice.selectedQuickFaults || (currentDevice.issue ? currentDevice.issue.split(" - ").map(s => s.trim()) : []);
+      const faultsCost = currentDevice.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(tags);
+      const newAutoPrice = faultsCost + newPartsCost;
+
+      if (currentDevice.isPriceManuallyEdited) {
+        updatedDevices[deviceIdx] = {
+          ...currentDevice,
+          partsCost: newPartsCost,
+          priceOverrideAcknowledged: false
+        };
+      } else {
+        updatedDevices[deviceIdx] = {
+          ...currentDevice,
+          partsCost: newPartsCost,
+          finalRepairPrice: newAutoPrice,
+          estimatedCost: newAutoPrice
+        };
+      }
+
+      const totalFinal = updatedDevices.reduce((sum, d) => sum + (d.finalRepairPrice ?? d.estimatedCost ?? 0), 0);
+
+      const updatedOrder: RepairOrder = {
+        ...selectedOrder,
+        devices: updatedDevices,
+        totalEstimatedCost: totalFinal,
+        finalRepairPrice: totalFinal
+      };
+
+      setSelectedOrder(updatedOrder);
+      updateRepairOrder(updatedOrder);
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_inventory_movements' } }));
+    }
   };
 
   // Update Work Ownership Type (شغل المحل / أحمد البنا / عبده)
@@ -756,6 +901,25 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     if (!selectedOrder) return;
 
     const oldStatus = selectedOrder.status;
+    const isDelivered = status === RepairStatus.Delivered;
+    const isReady = status === RepairStatus.Ready;
+
+    // Order Completion Validation for Parts Cost
+    if (isReady || isDelivered) {
+      const totalOrderPartsCost = selectedOrder.devices.reduce((sum, d) => sum + (Number(d.partsCost) || 0), 0);
+      if (totalOrderPartsCost > 0) {
+        const linkedUsages = partUsages.filter(
+          pu => pu.repairOrderId === selectedOrder.id && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
+        );
+        if (linkedUsages.length === 0) {
+          dialog.alert({
+            message: "لا يمكن إكمال أمر الصيانة لأن تكلفة قطع الغيار غير مرتبطة بقطع فعلية من المخزن.",
+            variant: "error"
+          });
+          return;
+        }
+      }
+    }
 
     // Update both main order status and all unfinished devices status
     const updatedDevices = selectedOrder.devices.map(dev => {
@@ -764,9 +928,6 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       }
       return dev;
     });
-
-    const isDelivered = status === RepairStatus.Delivered;
-    const isReady = status === RepairStatus.Ready;
 
     let updatedOrder: RepairOrder = {
       ...selectedOrder,
@@ -1502,46 +1663,143 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                               </div>
                             )}
 
-                            {/* Pull Spare Part directly from Stock Inventory */}
-                            <div className="pt-2 border-t border-purple-500/20">
-                              <div className="flex justify-between items-center mb-1.5">
-                                <label className="text-[11px] text-gray-300 block font-bold">صرف قطعة غيار من المخزون مباشرة للتركيب:</label>
-                                {Number(device.partsCost) > 0 && (
-                                  <span className="text-[10px] text-rose-400 font-mono font-bold bg-rose-950/40 px-2 py-0.5 rounded border border-rose-500/20">
-                                    إجمالي تكلفة بضاعة القطع المصروفة: {device.partsCost} ج.م
-                                  </span>
+                          {/* ================= PART 4: USED SPARE PARTS FROM INVENTORY ================= */}
+                          {(() => {
+                            const deviceLinkedUsages = partUsages.filter(
+                              pu => pu.repairOrderId === selectedOrder.id &&
+                                    pu.accountingStatus !== 'RETURNED' &&
+                                    pu.accountingStatus !== 'REVERSED' &&
+                                    ((pu.notes && pu.notes.includes(`deviceId:${device.id || devIdx}`)) || selectedOrder.devices.length === 1)
+                            );
+                            const devicePartsTotalCost = deviceLinkedUsages.reduce((sum, pu) => sum + (Number(pu.totalCost) || (pu.quantity * pu.unitCost)), 0);
+
+                            return (
+                              <div className="bg-rose-950/20 border border-rose-500/30 p-4 rounded-xl space-y-3">
+                                <div className="flex justify-between items-center">
+                                  <h5 className="text-xs font-bold text-rose-300 flex items-center gap-1.5">
+                                    <Package className="w-4 h-4 text-rose-400" />
+                                    <span>4. قطع الغيار المستخدمة (من المخزن)</span>
+                                  </h5>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedPartIndex(selectedPartIndex === devIdx ? null : devIdx);
+                                      setPartSearch("");
+                                    }}
+                                    className="bg-rose-600 hover:bg-rose-500 text-white text-[11px] px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 transition cursor-pointer shadow-sm"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                    <span>إضافة قطعة من المخزن</span>
+                                  </button>
+                                </div>
+
+                                {/* Active Linked Parts Table */}
+                                {deviceLinkedUsages.length === 0 ? (
+                                  <div className="text-center py-5 border border-dashed border-rose-500/20 rounded-xl bg-gray-950/40">
+                                    <p className="text-xs text-gray-400">لم يتم إضافة قطع غيار مسحوبة من المخزن لهذا الجهاز بعد</p>
+                                    <p className="text-[10px] text-gray-500 mt-1">انقر على "إضافة قطعة من المخزن" لاختيار صنف وتوثيق حركة السحب</p>
+                                  </div>
+                                ) : (
+                                  <div className="overflow-x-auto rounded-xl border border-rose-500/20 bg-gray-950/80">
+                                    <table className="w-full text-xs text-right text-gray-300 border-collapse">
+                                      <thead className="bg-[#181b2a] text-gray-400 font-semibold border-b border-[#2a2d42]">
+                                        <tr>
+                                          <th className="p-2.5">اسم القطعة</th>
+                                          <th className="p-2.5 text-center">الكمية</th>
+                                          <th className="p-2.5 text-center">سعر الشراء وقت السحب</th>
+                                          <th className="p-2.5 text-left font-bold text-rose-300">الإجمالي</th>
+                                          <th className="p-2.5 text-center">الإجراء</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-[#1f2937]">
+                                        {deviceLinkedUsages.map((pu) => (
+                                          <tr key={pu.id} className="hover:bg-[#161927]">
+                                            <td className="p-2.5 font-bold text-white">{pu.partName}</td>
+                                            <td className="p-2.5 text-center font-bold text-cyan-300">{pu.quantity}</td>
+                                            <td className="p-2.5 text-center text-gray-300 font-mono">{pu.unitCost.toLocaleString('ar-EG')} ج.م</td>
+                                            <td className="p-2.5 text-left font-mono font-bold text-rose-300">{pu.totalCost.toLocaleString('ar-EG')} ج.م</td>
+                                            <td className="p-2.5 text-center">
+                                              <button
+                                                type="button"
+                                                onClick={() => handleRemovePartUsage(pu.id, devIdx)}
+                                                className="p-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-lg transition cursor-pointer"
+                                                title="إلغاء/إرجاع القطعة للمخزن"
+                                              >
+                                                <Trash2 className="w-3.5 h-3.5" />
+                                              </button>
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
                                 )}
-                              </div>
-                              <div className="relative">
-                                <input
-                                  type="text"
-                                  placeholder="ابحث في المخزون عن سوكيت، IC، باورسبلاي، أنالوج..."
-                                  value={selectedPartIndex === devIdx ? partSearch : ""}
-                                  onChange={e => {
-                                    setSelectedPartIndex(devIdx);
-                                    setPartSearch(e.target.value);
-                                  }}
-                                  className="w-full bg-gray-950 border border-[#2a2d42] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
-                                />
-                                {selectedPartIndex === devIdx && partSearch.trim() && (
-                                  <div className="absolute right-0 left-0 bg-[#11131e] border border-[#2a2d42] mt-1 rounded-xl max-h-[160px] overflow-y-auto z-40 divide-y divide-[#2a2d42] shadow-2xl">
-                                    {products
-                                      .filter(p => !p.isArchived && (p.name.includes(partSearch) || p.category.includes("قطع غيار")))
-                                      .map(p => (
-                                        <button
-                                          key={p.id}
-                                          type="button"
-                                          onClick={() => handleAddPartToDevice(devIdx, p.id)}
-                                          className="w-full text-right px-4 py-2.5 text-xs text-gray-300 hover:bg-indigo-600/10 flex justify-between items-center cursor-pointer"
-                                        >
-                                          <span>{p.name}</span>
-                                          <span className="font-bold text-green-400">{p.sellPrice} ج.م (متاح: {p.quantity})</span>
-                                        </button>
-                                      ))}
+
+                                {/* Display calculated read-only parts total */}
+                                <div className="pt-2 border-t border-rose-500/20 flex justify-between items-center text-xs">
+                                  <span className="text-gray-300 font-bold">إجمالي تكلفة قطع الغيار:</span>
+                                  <span className="font-mono font-extrabold text-rose-400 text-sm bg-rose-950/60 px-3 py-1 rounded-lg border border-rose-500/30">
+                                    {devicePartsTotalCost.toLocaleString('ar-EG')} ج.م
+                                  </span>
+                                </div>
+
+                                {/* Product Search / Picker */}
+                                {selectedPartIndex === devIdx && (
+                                  <div className="mt-2 p-3 bg-gray-950 border border-rose-500/40 rounded-xl space-y-2">
+                                    <div className="flex justify-between items-center">
+                                      <label className="text-xs font-bold text-rose-300">اختر قطعة غيار من المخزون:</label>
+                                      <button
+                                        type="button"
+                                        onClick={() => setSelectedPartIndex(null)}
+                                        className="text-gray-400 hover:text-white p-1"
+                                      >
+                                        <X className="w-4 h-4" />
+                                      </button>
+                                    </div>
+
+                                    <input
+                                      type="text"
+                                      autoFocus
+                                      placeholder="اكتب اسم القطعة (مثال: HDMI PS5 Socket, IC Power...)"
+                                      value={partSearch}
+                                      onChange={e => setPartSearch(e.target.value)}
+                                      className="w-full bg-[#11131e] border border-[#2a2d42] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-rose-500"
+                                    />
+
+                                    <div className="max-h-[180px] overflow-y-auto divide-y divide-[#2a2d42] border border-[#2a2d42] rounded-xl bg-[#11131e]">
+                                      {products
+                                        .filter(p => !p.isArchived && (
+                                          !partSearch.trim() ||
+                                          p.name.toLowerCase().includes(partSearch.toLowerCase()) ||
+                                          (p.nameAr && p.nameAr.toLowerCase().includes(partSearch.toLowerCase())) ||
+                                          (p.category && p.category.includes("قطع غيار"))
+                                        ))
+                                        .map(p => (
+                                          <div key={p.id} className="p-2.5 flex justify-between items-center hover:bg-rose-500/10 transition">
+                                            <div>
+                                              <span className="font-bold text-white text-xs block">{p.nameAr || p.name}</span>
+                                              <span className="text-[10px] text-gray-400">
+                                                سعر الشراء: <strong className="text-amber-400 font-mono">{p.purchasePrice || 0} ج.م</strong> | المتاح بالمخزن: <strong className="text-cyan-400 font-mono">{p.quantity} قطعة</strong>
+                                              </span>
+                                            </div>
+
+                                            <button
+                                              type="button"
+                                              disabled={p.quantity <= 0}
+                                              onClick={() => handleAddPartToDevice(devIdx, p.id, 1)}
+                                              className="bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white font-bold px-3 py-1 rounded-lg text-xs transition cursor-pointer"
+                                            >
+                                              إضافة قطعة
+                                            </button>
+                                          </div>
+                                        ))}
+                                    </div>
                                   </div>
                                 )}
                               </div>
-                            </div>
+                            );
+                          })()}
                           </div>
 
                           {/* Device Price Summary & Manual Override */}
