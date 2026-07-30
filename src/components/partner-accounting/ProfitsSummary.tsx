@@ -122,6 +122,16 @@ export default function ProfitsSummary({
     return true;
   };
 
+  // Helper to check if a part usage or reference ID belongs to an order
+  const isPartBelongsToOrder = (puRepairOrderId: string | undefined, order: RepairOrder): boolean => {
+    if (!puRepairOrderId) return false;
+    const oId = String(order.id || '');
+    const oNum = String((order as any).orderNumber || '');
+    const oUuid = String((order as any).uuid || '');
+    const target = String(puRepairOrderId);
+    return target === oId || target === oNum || target === oUuid;
+  };
+
   // 1. Filter Orders by Date & Party
   const filteredOrders = orders.filter((o) => {
     if (!isDateInFilterRange(o.receivedDate)) return false;
@@ -136,9 +146,9 @@ export default function ProfitsSummary({
     const date = formatDateISO(o.receivedDate);
     const totalInvoice = Math.max(0, (Number(o.finalRepairPrice ?? o.totalEstimatedCost) || 0) - (Number(o.discount) || 0));
 
-    // Get parts for this order
+    // Get parts for this order using flexible matching
     const orderParts = partUsages.filter(
-      (pu) => pu.repairOrderId === o.id && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
+      (pu) => isPartBelongsToOrder(pu.repairOrderId, o) && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
     );
 
     let partsList: { partName: string; quantity: number; unitCost: number; totalCost: number }[] = [];
@@ -218,9 +228,9 @@ export default function ProfitsSummary({
     rawOwnership?: string,
     rawNotes?: string
   ): 'SHOP' | 'AHMED' | 'ABDO' => {
-    const pId = (rawPartnerId || '').toUpperCase();
-    const own = (rawOwnership || '').toUpperCase();
-    const n = (rawNotes || '').toUpperCase();
+    const pId = String(rawPartnerId || '').toUpperCase();
+    const own = String(rawOwnership || '').toUpperCase();
+    const n = String(rawNotes || '').toUpperCase();
 
     if (
       pId === 'P-001' || pId === 'AHMED' || pId === 'PARTNER_1_PRIVATE' || pId === 'PARTNER_1' || pId === 'P1' ||
@@ -248,7 +258,7 @@ export default function ProfitsSummary({
   partUsages.forEach((pu, puIdx) => {
     if (pu.accountingStatus === 'RETURNED' || pu.accountingStatus === 'REVERSED') return;
 
-    const parentOrder = orders.find((o) => o.id === pu.repairOrderId);
+    const parentOrder = orders.find((o) => isPartBelongsToOrder(pu.repairOrderId, o));
     const dateStr = pu.createdAt || parentOrder?.receivedDate || (pu as any).date || new Date().toISOString();
     if (!isDateInFilterRange(dateStr)) return;
 
@@ -264,14 +274,15 @@ export default function ProfitsSummary({
 
     if (!realPartName) return; // Skip records with no real name
 
-    // Determine responsible party
-    let ownership = pu.ownershipType;
-    if (!ownership && parentOrder) {
-      ownership = parentOrder.jobType || parentOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
+    // Determine responsible party label & ownership
+    let partyLabel = normalizePartyLabel(pu.responsiblePartnerId, pu.ownershipType as string, pu.notes);
+    if (partyLabel === 'SHOP' && parentOrder) {
+      const pOrderAny = parentOrder as any;
+      const parentOwnership = parentOrder.jobType || parentOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
+      partyLabel = normalizePartyLabel(pOrderAny.responsiblePartnerId, parentOwnership as string, pOrderAny.notes || pOrderAny.reportedIssue);
     }
-    if (!ownership) ownership = WorkOwnershipType.CUSTOMER_SHARED;
 
-    const partyLabel = normalizePartyLabel(pu.responsiblePartnerId, ownership as string, pu.notes);
+    const ownership = partyLabel === 'AHMED' ? WorkOwnershipType.PARTNER_1_PRIVATE : partyLabel === 'ABDO' ? WorkOwnershipType.PARTNER_2_PRIVATE : WorkOwnershipType.CUSTOMER_SHARED;
 
     const qty = Number(pu.quantity) || 1;
     const uCost = Number(pu.unitCost) || 0;
@@ -316,17 +327,26 @@ export default function ProfitsSummary({
         const partName = (m.productNameSnapshot || m.product_name_snapshot || matchedProd?.name || matchedProd?.nameAr || m.notes || '').trim();
         if (!partName) return;
 
-        const rawPartner = m.partner || m.owner || m.referenceId || m.reference_id;
-        const partyLabel = normalizePartyLabel(rawPartner, m.notes, m.notes);
+        const refId = m.referenceId || m.reference_id || m.repairOrderId || m.repair_order_id;
+        const parentOrder = orders.find(o => isPartBelongsToOrder(refId, o));
+
+        const rawPartner = m.partner || m.owner || m.responsible_partner_id || m.responsiblePartnerId;
+        let partyLabel = normalizePartyLabel(rawPartner, m.ownershipType || m.notes, m.notes);
+        if (partyLabel === 'SHOP' && parentOrder) {
+          const pOrderAny = parentOrder as any;
+          const parentOwnership = parentOrder.jobType || parentOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
+          partyLabel = normalizePartyLabel(pOrderAny.responsiblePartnerId, parentOwnership as string, pOrderAny.notes || pOrderAny.reportedIssue);
+        }
 
         const qty = Math.abs(qtyChange) || 1;
         const uCost = Number(m.costPriceSnapshot || m.cost_price_snapshot) || Number(matchedProd?.purchasePrice) || 0;
         const tCost = qty * uCost;
 
         const exists = allWithdrawalTransactions.some(
-          tx => (tx.id === m.id || tx.id === m.referenceId) ||
+          tx => (tx.id === m.id || (m.id && tx.id === m.id)) ||
                 (tx.partName === partName && tx.quantity === qty && tx.date === formatDateISO(dateStr) && tx.partyLabel === partyLabel)
         );
+
         if (!exists) {
           allWithdrawalTransactions.push({
             id: m.id || `mov-with-${mIdx}`,
@@ -334,8 +354,8 @@ export default function ProfitsSummary({
             quantity: qty,
             unitCost: uCost,
             totalCost: tCost,
-            refNum: movType === 'PARTNER_WITHDRAWAL' ? 'مسحوبات بضاعة لشريك' : 'سحب مخزن',
-            customerName: partyLabel === 'ABDO' ? 'مسحوبات الشريك عبده' : partyLabel === 'AHMED' ? 'مسحوبات الشريك أحمد' : 'مسحوبات المحل',
+            refNum: movType === 'PARTNER_WITHDRAWAL' ? 'مسحوبات بضاعة لشريك' : parentOrder ? `أمر صيانة #${(parentOrder as any).orderNumber || parentOrder.id}` : 'سحب مخزن',
+            customerName: parentOrder ? (parentOrder.customerNameSnapshot || parentOrder.guestCustomerName || 'عميل صيانة') : (partyLabel === 'ABDO' ? 'مسحوبات الشريك عبده' : partyLabel === 'AHMED' ? 'مسحوبات الشريك أحمد' : 'مسحوبات المحل'),
             date: formatDateISO(dateStr),
             ownership: partyLabel === 'ABDO' ? WorkOwnershipType.PARTNER_2_PRIVATE : partyLabel === 'AHMED' ? WorkOwnershipType.PARTNER_1_PRIVATE : WorkOwnershipType.CUSTOMER_SHARED,
             partyLabel,
@@ -349,16 +369,57 @@ export default function ProfitsSummary({
     console.warn('Notice parsing inventory movements in ProfitsSummary:', err);
   }
 
+  // A4. Fallback from Repair Orders where parts were logged directly on the order/devices without a separate partUsage
+  orders.forEach((o, oIdx) => {
+    if (!isDateInFilterRange(o.receivedDate)) return;
+
+    const orderParts = partUsages.filter(pu => isPartBelongsToOrder(pu.repairOrderId, o) && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED');
+    if (orderParts.length > 0) return; // Already processed via partUsages
+
+    const oAny = o as any;
+    const parentOwnership = o.jobType || o.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
+    const partyLabel = normalizePartyLabel(oAny.responsiblePartnerId, parentOwnership as string, oAny.notes || oAny.reportedIssue);
+
+    const devicePartsCost = o.devices?.reduce((sum, d) => sum + (Number(d.partsCost) || 0), 0) || 0;
+    if (devicePartsCost > 0) {
+      allWithdrawalTransactions.push({
+        id: `order-fallback-${o.id}-${oIdx}`,
+        partName: 'قطع غيار صيانة مسجلة بالأوردر',
+        quantity: 1,
+        unitCost: devicePartsCost,
+        totalCost: devicePartsCost,
+        refNum: `أمر صيانة #${(o as any).orderNumber || o.id}`,
+        customerName: o.customerNameSnapshot || o.guestCustomerName || 'عميل صيانة',
+        date: formatDateISO(o.receivedDate),
+        ownership: parentOwnership,
+        partyLabel,
+        partyNameArabic: partyLabel === 'AHMED' ? 'أحمد' : partyLabel === 'ABDO' ? 'عبده' : 'المحل',
+        sourceType: 'REPAIR_ORDER'
+      });
+    }
+  });
+
   // Filter raw withdrawal transactions by selected party
   const withdrawnItemsList = allWithdrawalTransactions.filter((tx) => {
     if (partyFilter === 'ALL') return true;
     return tx.partyLabel === partyFilter;
   });
 
+  // Filter by search query before aggregation
+  const modalFilteredTransactions = withdrawnItemsList.filter((tx) => {
+    if (!modalSearchQuery.trim()) return true;
+    const q = modalSearchQuery.toLowerCase().trim();
+    return (
+      tx.partName.toLowerCase().includes(q) ||
+      tx.refNum.toLowerCase().includes(q) ||
+      tx.customerName.toLowerCase().includes(q)
+    );
+  });
+
   // Group by real Item Name (اسم الصنف)
   const aggregatedItemsMap = new Map<string, AggregatedItem>();
 
-  withdrawnItemsList.forEach((tx) => {
+  modalFilteredTransactions.forEach((tx) => {
     const key = tx.partName;
     let aggregated = aggregatedItemsMap.get(key);
     if (!aggregated) {
