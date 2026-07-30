@@ -300,28 +300,32 @@ export default function ProfitsSummary({
     });
   });
 
-  // A3. From Direct Inventory Movements (Partner Withdrawals)
+  // A3. From Direct Inventory Movements (Partner Withdrawals & Stock OUT movements)
   try {
     const rawMovements = db.getInventoryMovements() || [];
     rawMovements.forEach((m: any, mIdx: number) => {
-      if (m.movementType === 'PARTNER_WITHDRAWAL' || m.movement_type === 'PARTNER_WITHDRAWAL') {
+      const movType = (m.movementType || m.movement_type || '').toUpperCase();
+      const qtyChange = Number(m.quantityChange || m.quantity_change || 0);
+
+      if (movType === 'PARTNER_WITHDRAWAL' || movType === 'OUT' || movType === 'REPAIR_USAGE' || qtyChange < 0) {
         const dateStr = m.createdAt || m.created_at || new Date().toISOString();
         if (!isDateInFilterRange(dateStr)) return;
 
         const prodId = m.productId || m.product_id;
         const matchedProd = products.find(p => p.id === prodId || p.sku === m.referenceId);
-        const partName = matchedProd?.name || matchedProd?.nameAr || m.notes || '';
+        const partName = (m.productNameSnapshot || m.product_name_snapshot || matchedProd?.name || matchedProd?.nameAr || m.notes || '').trim();
         if (!partName) return;
 
-        const rawPartner = m.partner || m.referenceId || m.reference_id;
+        const rawPartner = m.partner || m.owner || m.referenceId || m.reference_id;
         const partyLabel = normalizePartyLabel(rawPartner, m.notes, m.notes);
 
-        const qty = Math.abs(Number(m.quantityChange || m.quantity_change) || 1);
+        const qty = Math.abs(qtyChange) || 1;
         const uCost = Number(m.costPriceSnapshot || m.cost_price_snapshot) || Number(matchedProd?.purchasePrice) || 0;
         const tCost = qty * uCost;
 
         const exists = allWithdrawalTransactions.some(
-          tx => tx.partName === partName && tx.quantity === qty && tx.date === formatDateISO(dateStr) && tx.partyLabel === partyLabel
+          tx => (tx.id === m.id || tx.id === m.referenceId) ||
+                (tx.partName === partName && tx.quantity === qty && tx.date === formatDateISO(dateStr) && tx.partyLabel === partyLabel)
         );
         if (!exists) {
           allWithdrawalTransactions.push({
@@ -330,7 +334,7 @@ export default function ProfitsSummary({
             quantity: qty,
             unitCost: uCost,
             totalCost: tCost,
-            refNum: 'مسحوبات بضاعة لشريك',
+            refNum: movType === 'PARTNER_WITHDRAWAL' ? 'مسحوبات بضاعة لشريك' : 'سحب مخزن',
             customerName: partyLabel === 'ABDO' ? 'مسحوبات الشريك عبده' : partyLabel === 'AHMED' ? 'مسحوبات الشريك أحمد' : 'مسحوبات المحل',
             date: formatDateISO(dateStr),
             ownership: partyLabel === 'ABDO' ? WorkOwnershipType.PARTNER_2_PRIVATE : partyLabel === 'AHMED' ? WorkOwnershipType.PARTNER_1_PRIVATE : WorkOwnershipType.CUSTOMER_SHARED,
@@ -344,56 +348,6 @@ export default function ProfitsSummary({
   } catch (err) {
     console.warn('Notice parsing inventory movements in ProfitsSummary:', err);
   }
-
-  // B. From Direct Sales Invoices (Prevent duplication: exclude invoices linked to repair orders)
-  invoices.forEach((inv) => {
-    if (inv.isCancelled) return;
-    if (inv.orderId || inv.type === 'repair') return; // Deduplication rule
-
-    const dateStr = inv.date || inv.createdAt;
-    if (!isDateInFilterRange(dateStr)) return;
-
-    if (inv.items && inv.items.length > 0) {
-      inv.items.forEach((item, idx) => {
-        const realPartName = (
-          item.name ||
-          (item as any).productName ||
-          (item as any).description ||
-          ''
-        ).trim();
-
-        if (!realPartName) return;
-
-        const partyLabel = normalizePartyLabel(item.stockOwnership, item.stockOwnership, inv.notes);
-        let ownership = WorkOwnershipType.CUSTOMER_SHARED;
-        if (partyLabel === 'AHMED') ownership = WorkOwnershipType.PARTNER_1_PRIVATE;
-        else if (partyLabel === 'ABDO') ownership = WorkOwnershipType.PARTNER_2_PRIVATE;
-
-        const qty = Number(item.quantity) || 1;
-        const matchedProd = products.find(p => p.name === realPartName || p.id === item.productId);
-        const uCost = Number((item as any).costPrice) || Number(matchedProd?.purchasePrice) || (Number((item as any).price || item.unitPrice) * 0.7);
-        const tCost = qty * uCost;
-
-        const invNum = (inv as any).invoiceNumber || inv.id;
-        const customerName = (inv as any).customerNameSnapshot || inv.guestCustomerName || (inv as any).customerName || 'عميل مبيعات';
-
-        allWithdrawalTransactions.push({
-          id: `inv-${inv.id}-${idx}`,
-          partName: realPartName,
-          quantity: qty,
-          unitCost: uCost,
-          totalCost: tCost,
-          refNum: `فاتورة مبيعات #${invNum}`,
-          customerName,
-          date: formatDateISO(dateStr),
-          ownership,
-          partyLabel,
-          partyNameArabic: partyLabel === 'AHMED' ? 'أحمد' : partyLabel === 'ABDO' ? 'عبده' : 'المحل',
-          sourceType: 'DIRECT_INVOICE'
-        });
-      });
-    }
-  });
 
   // Filter raw withdrawal transactions by selected party
   const withdrawnItemsList = allWithdrawalTransactions.filter((tx) => {
