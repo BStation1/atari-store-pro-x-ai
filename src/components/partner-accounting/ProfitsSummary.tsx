@@ -211,6 +211,35 @@ export default function ProfitsSummary({
     };
   });
 
+  // Helper to normalize party label
+  const normalizePartyLabel = (
+    rawPartnerId?: string,
+    rawOwnership?: string,
+    rawNotes?: string
+  ): 'SHOP' | 'AHMED' | 'ABDO' => {
+    const pId = (rawPartnerId || '').toUpperCase();
+    const own = (rawOwnership || '').toUpperCase();
+    const n = (rawNotes || '').toUpperCase();
+
+    if (
+      pId === 'P-001' || pId === 'AHMED' || pId === 'PARTNER_1_PRIVATE' || pId === 'PARTNER_1' || pId === 'P1' ||
+      own === 'PARTNER_1_PRIVATE' || own === 'AHMED' || own === 'P-001' || own === 'P1' ||
+      n.includes('أحمد') || n.includes('AHMED')
+    ) {
+      return 'AHMED';
+    }
+
+    if (
+      pId === 'P-002' || pId === 'ABDO' || pId === 'PARTNER_2_PRIVATE' || pId === 'PARTNER_2' || pId === 'P2' ||
+      own === 'PARTNER_2_PRIVATE' || own === 'ABDO' || own === 'P-002' || own === 'P2' ||
+      n.includes('عبده') || n.includes('ABDO')
+    ) {
+      return 'ABDO';
+    }
+
+    return 'SHOP';
+  };
+
   // 2. Extract ALL Raw Withdrawn Inventory Items across repair orders and direct sales invoices
   const allWithdrawalTransactions: WithdrawnItemDetail[] = [];
 
@@ -241,22 +270,7 @@ export default function ProfitsSummary({
     }
     if (!ownership) ownership = WorkOwnershipType.CUSTOMER_SHARED;
 
-    let partyLabel: 'SHOP' | 'AHMED' | 'ABDO' = 'SHOP';
-    if (
-      pu.responsiblePartnerId === 'P-001' ||
-      pu.responsiblePartnerId === 'AHMED' ||
-      ownership === WorkOwnershipType.PARTNER_1_PRIVATE ||
-      (ownership as string) === 'PARTNER_1_PRIVATE'
-    ) {
-      partyLabel = 'AHMED';
-    } else if (
-      pu.responsiblePartnerId === 'P-002' ||
-      pu.responsiblePartnerId === 'ABDO' ||
-      ownership === WorkOwnershipType.PARTNER_2_PRIVATE ||
-      (ownership as string) === 'PARTNER_2_PRIVATE'
-    ) {
-      partyLabel = 'ABDO';
-    }
+    const partyLabel = normalizePartyLabel(pu.responsiblePartnerId, ownership as string, pu.notes);
 
     const qty = Number(pu.quantity) || 1;
     const uCost = Number(pu.unitCost) || 0;
@@ -267,7 +281,7 @@ export default function ProfitsSummary({
       ? 'سحب شريك'
       : (parentOrder as any)?.orderNumber || pu.repairOrderId || 'صيانة';
     const customerName = isPartnerWithdrawal
-      ? (partyLabel === 'ABDO' ? 'مسحوبات الشريك عبده' : 'مسحوبات الشريك أحمد')
+      ? (partyLabel === 'ABDO' ? 'مسحوبات الشريك عبده' : partyLabel === 'AHMED' ? 'مسحوبات الشريك أحمد' : 'مسحوبات المحل')
       : parentOrder?.customerNameSnapshot || parentOrder?.guestCustomerName || 'عميل صيانة';
 
     allWithdrawalTransactions.push({
@@ -299,15 +313,15 @@ export default function ProfitsSummary({
         const partName = matchedProd?.name || matchedProd?.nameAr || m.notes || '';
         if (!partName) return;
 
-        const isAbdo = m.partner === 'ABDO' || m.referenceId === 'ABDO' || m.reference_id === 'ABDO' || (m.notes || '').includes('عبده');
-        const partyLabel: 'SHOP' | 'AHMED' | 'ABDO' = isAbdo ? 'ABDO' : 'AHMED';
+        const rawPartner = m.partner || m.referenceId || m.reference_id;
+        const partyLabel = normalizePartyLabel(rawPartner, m.notes, m.notes);
 
         const qty = Math.abs(Number(m.quantityChange || m.quantity_change) || 1);
         const uCost = Number(m.costPriceSnapshot || m.cost_price_snapshot) || Number(matchedProd?.purchasePrice) || 0;
         const tCost = qty * uCost;
 
         const exists = allWithdrawalTransactions.some(
-          tx => tx.partName === partName && tx.quantity === qty && tx.date === formatDateISO(dateStr)
+          tx => tx.partName === partName && tx.quantity === qty && tx.date === formatDateISO(dateStr) && tx.partyLabel === partyLabel
         );
         if (!exists) {
           allWithdrawalTransactions.push({
@@ -317,9 +331,9 @@ export default function ProfitsSummary({
             unitCost: uCost,
             totalCost: tCost,
             refNum: 'مسحوبات بضاعة لشريك',
-            customerName: partyLabel === 'ABDO' ? 'مسحوبات الشريك عبده' : 'مسحوبات الشريك أحمد',
+            customerName: partyLabel === 'ABDO' ? 'مسحوبات الشريك عبده' : partyLabel === 'AHMED' ? 'مسحوبات الشريك أحمد' : 'مسحوبات المحل',
             date: formatDateISO(dateStr),
-            ownership: isAbdo ? WorkOwnershipType.PARTNER_2_PRIVATE : WorkOwnershipType.PARTNER_1_PRIVATE,
+            ownership: partyLabel === 'ABDO' ? WorkOwnershipType.PARTNER_2_PRIVATE : partyLabel === 'AHMED' ? WorkOwnershipType.PARTNER_1_PRIVATE : WorkOwnershipType.CUSTOMER_SHARED,
             partyLabel,
             partyNameArabic: partyLabel === 'AHMED' ? 'أحمد' : partyLabel === 'ABDO' ? 'عبده' : 'المحل',
             sourceType: 'REPAIR_ORDER'
@@ -350,17 +364,10 @@ export default function ProfitsSummary({
 
         if (!realPartName) return;
 
-        const stockOwnership = item.stockOwnership;
-        let partyLabel: 'SHOP' | 'AHMED' | 'ABDO' = 'SHOP';
+        const partyLabel = normalizePartyLabel(item.stockOwnership, item.stockOwnership, inv.notes);
         let ownership = WorkOwnershipType.CUSTOMER_SHARED;
-
-        if (stockOwnership === 'AHMED') {
-          partyLabel = 'AHMED';
-          ownership = WorkOwnershipType.PARTNER_1_PRIVATE;
-        } else if (stockOwnership === 'ABDO') {
-          partyLabel = 'ABDO';
-          ownership = WorkOwnershipType.PARTNER_2_PRIVATE;
-        }
+        if (partyLabel === 'AHMED') ownership = WorkOwnershipType.PARTNER_1_PRIVATE;
+        else if (partyLabel === 'ABDO') ownership = WorkOwnershipType.PARTNER_2_PRIVATE;
 
         const qty = Number(item.quantity) || 1;
         const matchedProd = products.find(p => p.name === realPartName || p.id === item.productId);
@@ -1082,79 +1089,85 @@ export default function ProfitsSummary({
                   return item.partName.toLowerCase().includes(query);
                 });
 
+                const modalTotalProducts = filteredAggregated.length;
+                const modalTotalPieces = filteredAggregated.reduce((sum, item) => sum + item.totalQuantity, 0);
+                const modalTotalCost = roundMoney(filteredAggregated.reduce((sum, item) => sum + item.totalCost, 0));
+
                 return (
-                  <table className="w-full text-xs text-right text-gray-300 border-collapse">
-                    <thead className="bg-[#181b2a] text-gray-400 font-semibold border-b border-[#2a2d42] sticky top-0">
-                      <tr>
-                        <th className="p-3">اسم الصنف</th>
-                        <th className="p-3 text-center">الكمية</th>
-                        <th className="p-3 text-center">سعر تكلفة الشراء (وقت السحب)</th>
-                        <th className="p-3 text-rose-400 font-bold text-left">إجمالي التكلفة</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[#1f2937]">
-                      {filteredAggregated.length > 0 ? (
-                        filteredAggregated.map((item, idx) => (
-                          <tr key={idx} className="hover:bg-[#161927] transition">
-                            <td className="p-3 font-bold text-white flex items-center gap-2">
-                              <Box className="w-4 h-4 text-rose-400 shrink-0" />
-                              <span className="text-sm">{item.partName}</span>
-                            </td>
-                            <td className="p-3 font-extrabold text-cyan-300 text-center text-sm">
-                              {item.totalQuantity} قطعة
-                            </td>
-                            <td className="p-3 text-center text-gray-300 font-medium text-sm">
-                              {item.unitCost.toLocaleString('ar-EG')} {currencySymbol}
-                            </td>
-                            <td className="p-3 font-black text-rose-300 text-sm text-left">
-                              {item.totalCost.toLocaleString('ar-EG')} {currencySymbol}
+                  <>
+                    <table className="w-full text-xs text-right text-gray-300 border-collapse">
+                      <thead className="bg-[#181b2a] text-gray-400 font-semibold border-b border-[#2a2d42] sticky top-0">
+                        <tr>
+                          <th className="p-3">اسم الصنف</th>
+                          <th className="p-3 text-center">الكمية</th>
+                          <th className="p-3 text-center">سعر تكلفة الشراء (وقت السحب)</th>
+                          <th className="p-3 text-rose-400 font-bold text-left">إجمالي التكلفة</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#1f2937]">
+                        {filteredAggregated.length > 0 ? (
+                          filteredAggregated.map((item, idx) => (
+                            <tr key={idx} className="hover:bg-[#161927] transition">
+                              <td className="p-3 font-bold text-white flex items-center gap-2">
+                                <Box className="w-4 h-4 text-rose-400 shrink-0" />
+                                <span className="text-sm">{item.partName}</span>
+                              </td>
+                              <td className="p-3 font-extrabold text-cyan-300 text-center text-sm">
+                                {item.totalQuantity} قطعة
+                              </td>
+                              <td className="p-3 text-center text-gray-300 font-medium text-sm">
+                                {item.unitCost.toLocaleString('ar-EG')} {currencySymbol}
+                              </td>
+                              <td className="p-3 font-black text-rose-300 text-sm text-left">
+                                {item.totalCost.toLocaleString('ar-EG')} {currencySymbol}
+                              </td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan={4} className="p-8 text-center text-gray-500">
+                              لا توجد أصناف بضاعة مسحوبة مطابقة للبحث أو الفلتر المختار
                             </td>
                           </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan={4} className="p-8 text-center text-gray-500">
-                            لا توجد أصناف بضاعة مسحوبة مطابقة للبحث أو الفلتر المختار
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
+                        )}
+                      </tbody>
+                    </table>
+
+                    {/* Modal Footer Summary */}
+                    <div className="mt-4 p-4 border-t-2 border-[#2a2d42] bg-[#141724] flex flex-wrap items-center justify-between gap-4 rounded-xl">
+                      <div className="flex items-center gap-4">
+                        <div className="bg-[#1a1d2d] border border-[#2a2d42] px-3.5 py-2 rounded-xl">
+                          <span className="text-[10px] text-gray-400 font-bold block">إجمالي عدد الأصناف:</span>
+                          <span className="text-sm font-black text-white">
+                            {modalTotalProducts} صنف
+                          </span>
+                        </div>
+
+                        <div className="bg-[#1a1d2d] border border-cyan-500/30 px-3.5 py-2 rounded-xl">
+                          <span className="text-[10px] text-cyan-300 font-bold block">إجمالي عدد القطع:</span>
+                          <span className="text-sm font-black text-cyan-300">
+                            {modalTotalPieces} قطعة
+                          </span>
+                        </div>
+
+                        <div className="bg-[#1a1d2d] border border-rose-500/30 px-3.5 py-2 rounded-xl">
+                          <span className="text-[10px] text-rose-300 font-bold block">إجمالي تكلفة المسحوبات:</span>
+                          <span className="text-sm font-black text-rose-400">
+                            {modalTotalCost.toLocaleString('ar-EG')} {currencySymbol}
+                          </span>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => setIsWithdrawnModalOpen(false)}
+                        className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl transition cursor-pointer"
+                      >
+                        إغلاق التقرير
+                      </button>
+                    </div>
+                  </>
                 );
               })()}
-            </div>
-
-            {/* Modal Footer Summary */}
-            <div className="p-4 border-t-2 border-[#2a2d42] bg-[#141724] flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center gap-4">
-                <div className="bg-[#1a1d2d] border border-[#2a2d42] px-3.5 py-2 rounded-xl">
-                  <span className="text-[10px] text-gray-400 font-bold block">إجمالي عدد الأصناف:</span>
-                  <span className="text-sm font-black text-white">
-                    {aggregatedItemsList.length} صنف
-                  </span>
-                </div>
-
-                <div className="bg-[#1a1d2d] border border-cyan-500/30 px-3.5 py-2 rounded-xl">
-                  <span className="text-[10px] text-cyan-300 font-bold block">إجمالي عدد القطع:</span>
-                  <span className="text-sm font-black text-cyan-300">
-                    {totalWithdrawnQty} قطعة
-                  </span>
-                </div>
-
-                <div className="bg-[#1a1d2d] border border-rose-500/30 px-3.5 py-2 rounded-xl">
-                  <span className="text-[10px] text-rose-300 font-bold block">إجمالي تكلفة المسحوبات:</span>
-                  <span className="text-sm font-black text-rose-400">
-                    {totalWithdrawnCost.toLocaleString('ar-EG')} {currencySymbol}
-                  </span>
-                </div>
-              </div>
-
-              <button
-                onClick={() => setIsWithdrawnModalOpen(false)}
-                className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl transition cursor-pointer"
-              >
-                إغلاق التقرير
-              </button>
             </div>
           </div>
         </div>
