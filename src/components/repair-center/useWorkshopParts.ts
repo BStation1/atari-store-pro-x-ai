@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo, Dispatch, SetStateAction } from "react";
+import { useState, useRef, useCallback, useMemo, Dispatch, SetStateAction } from "react";
 import {
   RepairOrder,
   RepairPartUsage,
@@ -40,6 +40,67 @@ export function calculateSuggestedPriceForFaults(faultLabels: string[]): number 
     const match = QUICK_FAULTS_LIST.find(f => f.label === label);
     return sum + (match ? match.defaultSellingPrice : 0);
   }, 0);
+}
+
+/**
+ * Pure helper function to recalculate repair order device partsCost and totals
+ * based on a specific set of active part usages and products list.
+ */
+export function recalculateOrderTotals(
+  order: RepairOrder,
+  usages: RepairPartUsage[],
+  deviceIdx: number = 0,
+  productsList: Product[] = []
+): RepairOrder {
+  const orderIdsToMatch = new Set<string>([
+    String(order.id || ''),
+    String((order as any).orderNumber || ''),
+    String((order as any).uuid || '')
+  ].filter(Boolean));
+
+  const updatedDevices = [...order.devices];
+  const currentDevice = updatedDevices[deviceIdx];
+  if (!currentDevice) return order;
+
+  const activeUsagesForDevice = usages.filter(
+    pu => (orderIdsToMatch.has(String(pu.repairOrderId)) || pu.repairOrderId === order.id || String(pu.repairOrderId) === String(order.id)) &&
+          pu.accountingStatus !== 'RETURNED' &&
+          pu.accountingStatus !== 'REVERSED' &&
+          ((pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) || order.devices.length === 1)
+  );
+
+  const newPartsCost = activeUsagesForDevice.reduce((sum, pu) => {
+    const sellP = getUsageSellingUnitPrice(pu, productsList);
+    return sum + (pu.quantity * sellP);
+  }, 0);
+
+  const tags = currentDevice.selectedQuickFaults || (currentDevice.issue ? currentDevice.issue.split(" - ").map(s => s.trim()) : []);
+  const faultsCost = currentDevice.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(tags);
+  const newAutoPrice = faultsCost + newPartsCost;
+
+  if (currentDevice.isPriceManuallyEdited) {
+    updatedDevices[deviceIdx] = {
+      ...currentDevice,
+      partsCost: newPartsCost,
+      priceOverrideAcknowledged: false
+    };
+  } else {
+    updatedDevices[deviceIdx] = {
+      ...currentDevice,
+      partsCost: newPartsCost,
+      finalRepairPrice: newAutoPrice,
+      estimatedCost: newAutoPrice
+    };
+  }
+
+  const totalFinal = updatedDevices.reduce((sum, d) => sum + (d.finalRepairPrice ?? d.estimatedCost ?? 0), 0);
+
+  return {
+    ...order,
+    devices: updatedDevices,
+    totalEstimatedCost: totalFinal,
+    finalRepairPrice: totalFinal
+  };
 }
 
 interface UseWorkshopPartsOptions {
@@ -95,6 +156,12 @@ export function useWorkshopParts({
   const currentUserRef = useRef(currentUser);
   currentUserRef.current = currentUser;
 
+  // Sequential mutation queue per repair order to prevent concurrent race conditions
+  const orderMutationQueueRef = useRef<Map<string, Promise<any>>>(new Map());
+
+  // Pending background mutation count per product ID
+  const pendingMutationsRef = useRef<Map<string, number>>(new Map());
+
   const fallbackUser: User = {
     id: "U-101",
     username: "elbanna",
@@ -138,18 +205,13 @@ export function useWorkshopParts({
     }, 0);
   }, [visiblePartUsages, products]);
 
-  // 3. Add part logic
+  // 3. Add part logic with exact snapshot rollback & per-order queue
   const addPart = useCallback((productId: string, qtyToAdd: number = 1, deviceIdx: number = 0) => {
     const t0 = performance.now();
     console.log(`⏱️ [useWorkshopParts:AddPart] Click received for productId=${productId} at ${t0.toFixed(2)}ms`);
 
     const order = selectedOrderRef.current;
     if (!order) return;
-
-    if (busyProductIds.has(productId)) {
-      console.log(`[useWorkshopParts:AddPart] Product ${productId} is busy. Ignoring click.`);
-      return;
-    }
 
     const currentProducts = productsRef.current;
     const product = currentProducts.find(p => p.id === productId);
@@ -161,11 +223,8 @@ export function useWorkshopParts({
       return;
     }
 
-    const updatedDevices = [...order.devices];
-    const currentDevice = updatedDevices[deviceIdx];
+    const currentDevice = order.devices[deviceIdx];
     if (!currentDevice) return;
-
-    setBusyProductIds(prev => new Set(prev).add(productId));
 
     const unitSellingPrice = Number(product.sellPrice || product.price || product.purchasePrice) || 0;
     const unitPurchaseCost = Number(product.purchasePrice || product.costPrice) || 0;
@@ -175,13 +234,6 @@ export function useWorkshopParts({
     let owner: 'SHOP' | 'AHMED' | 'ABDO' = 'SHOP';
     if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) owner = 'AHMED';
     else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) owner = 'ABDO';
-
-    // Optimistic Update: Product stock
-    const newQty = product.quantity - qty;
-    setProductLocal({
-      ...product,
-      quantity: newQty
-    });
 
     const orderIdsToMatch = new Set<string>([
       String(order.id || ''),
@@ -198,26 +250,45 @@ export function useWorkshopParts({
             ((pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) || order.devices.length === 1)
     );
 
+    const mutationId = `mut_add_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+    // Capture IMMUTABLE Snapshot BEFORE optimistic mutation
+    const snapshot = {
+      mutationId,
+      orderId: order.id,
+      productId: product.id,
+      productBefore: { ...product },
+      usageBefore: existingUsage ? { ...existingUsage } : null,
+      qtyDelta: -qty, // stock reduced by qty
+      deviceIdx,
+      tempUsageId: existingUsage ? undefined : `PU-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`
+    };
+
+    // 1. Synchronous Optimistic Update: Product Stock
+    const newQty = product.quantity - qty;
+    setProductLocal({
+      ...product,
+      quantity: newQty
+    });
+
+    // 2. Synchronous Optimistic Update: Part Usages
     let updatedUsageList = [...allUsages];
     let usageRecordToSave: RepairPartUsage;
 
     if (existingUsage) {
       const newUsageQty = existingUsage.quantity + qty;
-      const newUsageTotalCost = newUsageQty * unitPurchaseCost;
-      const newUsageSellingTotal = newUsageQty * unitSellingPrice;
       usageRecordToSave = {
         ...existingUsage,
         quantity: newUsageQty,
         unitCost: unitPurchaseCost,
-        totalCost: newUsageTotalCost,
+        totalCost: newUsageQty * unitPurchaseCost,
         sellingPrice: unitSellingPrice,
-        sellingTotal: newUsageSellingTotal
+        sellingTotal: newUsageQty * unitSellingPrice
       };
       updatedUsageList = allUsages.map(pu => pu.id === existingUsage.id ? usageRecordToSave : pu);
     } else {
-      const tempId = `PU-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
       usageRecordToSave = {
-        id: tempId,
+        id: snapshot.tempUsageId!,
         repairOrderId: order.id,
         inventoryItemId: product.id,
         partName: product.nameAr || product.name,
@@ -238,46 +309,8 @@ export function useWorkshopParts({
 
     persistLocalUsages(updatedUsageList);
 
-    // Recalculate device partsCost and grand total
-    const activeUsagesForDevice = updatedUsageList.filter(
-      pu => (orderIdsToMatch.has(String(pu.repairOrderId)) || pu.repairOrderId === order.id || String(pu.repairOrderId) === String(order.id)) &&
-            pu.accountingStatus !== 'RETURNED' &&
-            pu.accountingStatus !== 'REVERSED' &&
-            ((pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) || order.devices.length === 1)
-    );
-
-    const newPartsCost = activeUsagesForDevice.reduce((sum, pu) => {
-      const sellP = getUsageSellingUnitPrice(pu, currentProducts);
-      return sum + (pu.quantity * sellP);
-    }, 0);
-
-    const tags = currentDevice.selectedQuickFaults || (currentDevice.issue ? currentDevice.issue.split(" - ").map(s => s.trim()) : []);
-    const faultsCost = currentDevice.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(tags);
-    const newAutoPrice = faultsCost + newPartsCost;
-
-    if (currentDevice.isPriceManuallyEdited) {
-      updatedDevices[deviceIdx] = {
-        ...currentDevice,
-        partsCost: newPartsCost,
-        priceOverrideAcknowledged: false
-      };
-    } else {
-      updatedDevices[deviceIdx] = {
-        ...currentDevice,
-        partsCost: newPartsCost,
-        finalRepairPrice: newAutoPrice,
-        estimatedCost: newAutoPrice
-      };
-    }
-
-    const totalFinal = updatedDevices.reduce((sum, d) => sum + (d.finalRepairPrice ?? d.estimatedCost ?? 0), 0);
-
-    let updatedOrder: RepairOrder = {
-      ...order,
-      devices: updatedDevices,
-      totalEstimatedCost: totalFinal,
-      finalRepairPrice: totalFinal
-    };
+    // 3. Synchronous Recalculate Order Totals
+    let updatedOrder = recalculateOrderTotals(selectedOrderRef.current || order, updatedUsageList, deviceIdx, currentProducts);
 
     const currentUserForAction = currentUserRef.current || fallbackUser;
     updatedOrder = addAuditLogRecordHelper(
@@ -302,10 +335,24 @@ export function useWorkshopParts({
     setSelectedOrder(updatedOrder);
     setRepairOrderLocal(updatedOrder);
 
-    // Background Supabase persistence
-    (async () => {
-      const tMutStart = performance.now();
+    // Track busy count per product
+    const pendingCount = (pendingMutationsRef.current.get(product.id) || 0) + 1;
+    pendingMutationsRef.current.set(product.id, pendingCount);
+    setBusyProductIds(prev => new Set(prev).add(product.id));
+
+    // Async task queued per repair order
+    const task = async () => {
       try {
+        // Debug testing hook: Force failure simulation if requested
+        if (
+          (window as any).__FORCE_FAIL_NEXT_ADD_PART__ ||
+          ((window as any).__FORCE_FAIL_A__ && (product.id === 'PROD-A' || product.name.includes('A')))
+        ) {
+          (window as any).__FORCE_FAIL_NEXT_ADD_PART__ = false;
+          (window as any).__FORCE_FAIL_A__ = false;
+          throw new Error("FORCED_FAILURE_SIMULATION");
+        }
+
         const [productUuid, repairOrderUuid] = await Promise.all([
           ensureProductUuidInSupabase(product).then(value => value || product.id),
           ensureRepairOrderUuidInSupabase(order).then(value => value || order.id)
@@ -356,47 +403,76 @@ export function useWorkshopParts({
           });
         }
 
+        const latestOrderForDb = selectedOrderRef.current
+          ? recalculateOrderTotals(selectedOrderRef.current, partUsagesRef.current, deviceIdx, productsRef.current)
+          : updatedOrder;
+
         const [, , persistedUsage] = await Promise.all([
           quantityPromise,
           movementPromise,
           usagePromise,
-          updateRepairOrderInSupabase(updatedOrder)
+          updateRepairOrderInSupabase(latestOrderForDb)
         ]);
 
-        if (!existingUsage && persistedUsage?.id && persistedUsage.id !== usageRecordToSave.id) {
-          replacePartUsageIdLocal(usageRecordToSave.id, {
+        if (!existingUsage && persistedUsage?.id && snapshot.tempUsageId && persistedUsage.id !== snapshot.tempUsageId) {
+          replacePartUsageIdLocal(snapshot.tempUsageId, {
             ...usageRecordToSave,
             ...persistedUsage,
             repairOrderId: order.id
           });
         }
       } catch (mutationError: any) {
-        console.error("❌ [useWorkshopParts:AddPart] Background mutation failed, rolling back:", mutationError);
-        // Rollback optimistic updates
-        setProductLocal({ ...product, quantity: product.quantity });
+        console.error(`❌ [useWorkshopParts:AddPart] Mutation ${mutationId} failed, performing granular rollback:`, mutationError);
+
+        // GRANULAR EXACT ROLLBACK:
+        // 1. Revert product stock by -snapshot.qtyDelta
+        const currentLatestProduct = productsRef.current.find(p => p.id === product.id) || product;
+        const restoredProductQty = currentLatestProduct.quantity - snapshot.qtyDelta;
+        setProductLocal({ ...currentLatestProduct, quantity: restoredProductQty });
+
+        // 2. Revert usages: remove tempUsage or restore usageBefore
         const currentUsages = partUsagesRef.current;
-        if (existingUsage) {
-          persistLocalUsages(currentUsages.map(u => u.id === existingUsage.id ? existingUsage : u));
+        let revertedUsages: RepairPartUsage[];
+        if (snapshot.usageBefore === null) {
+          revertedUsages = currentUsages.filter(u => u.id !== snapshot.tempUsageId);
         } else {
-          persistLocalUsages(currentUsages.filter(u => u.id !== usageRecordToSave.id));
+          revertedUsages = currentUsages.map(u => u.id === snapshot.usageBefore!.id ? snapshot.usageBefore! : u);
         }
-        setSelectedOrder(order);
-        setRepairOrderLocal(order);
+        persistLocalUsages(revertedUsages);
+
+        // 3. Recalculate order totals based on current order state & reverted usages (preserving all other concurrent mutations!)
+        const currentLatestOrder = selectedOrderRef.current || order;
+        const rolledBackOrder = recalculateOrderTotals(currentLatestOrder, revertedUsages, deviceIdx, productsRef.current);
+        setSelectedOrder(rolledBackOrder);
+        setRepairOrderLocal(rolledBackOrder);
+
+        try {
+          await updateRepairOrderInSupabase(rolledBackOrder);
+        } catch (dbErr) {
+          console.error("Failed to sync rolled back order to Supabase:", dbErr);
+        }
 
         dialog.alert({
           message: "حدث خطأ أثناء حفظ قطعة الغيار بالخادم، تم إلغاء العملية وتحديث المخزون.",
           variant: "error"
         });
       } finally {
-        setBusyProductIds(prev => {
-          const next = new Set(prev);
-          next.delete(productId);
-          return next;
-        });
+        const remaining = (pendingMutationsRef.current.get(product.id) || 1) - 1;
+        pendingMutationsRef.current.set(product.id, remaining);
+        if (remaining <= 0) {
+          setBusyProductIds(prev => {
+            const next = new Set(prev);
+            next.delete(product.id);
+            return next;
+          });
+        }
       }
-    })();
+    };
+
+    const prevQueue = orderMutationQueueRef.current.get(order.id) || Promise.resolve();
+    const nextQueue = prevQueue.then(task, task);
+    orderMutationQueueRef.current.set(order.id, nextQueue);
   }, [
-    busyProductIds,
     dialog,
     persistLocalUsages,
     replacePartUsageIdLocal,
@@ -410,7 +486,7 @@ export function useWorkshopParts({
     addPart(productId, 1, deviceIdx);
   }, [addPart]);
 
-  // 5. Remove part logic (supports decreasing quantity or complete removal)
+  // 5. Remove part logic (supports decreasing quantity or complete removal) with granular rollback
   const removePartInternal = useCallback((usageId: string, deviceIdx: number = 0, removeQty: number = 1) => {
     const order = selectedOrderRef.current;
     if (!order) return;
@@ -419,9 +495,6 @@ export function useWorkshopParts({
     const usage = allUsages.find(pu => pu.id === usageId);
     if (!usage) return;
 
-    if (busyProductIds.has(usage.inventoryItemId)) return;
-    setBusyProductIds(prev => new Set(prev).add(usage.inventoryItemId));
-
     const currentProducts = productsRef.current;
     const product = currentProducts.find(p => p.id === usage.inventoryItemId);
 
@@ -429,7 +502,20 @@ export function useWorkshopParts({
     const isFullRemove = (usage.quantity <= qtyToReturn) || removeQty === -1;
     const actualReturnedQty = isFullRemove ? usage.quantity : qtyToReturn;
 
-    // Optimistic Update: Stock
+    const mutationId = `mut_rem_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+    // Capture IMMUTABLE Snapshot BEFORE optimistic mutation
+    const snapshot = {
+      mutationId,
+      orderId: order.id,
+      productId: usage.inventoryItemId,
+      productBefore: product ? { ...product } : null,
+      usageBefore: { ...usage },
+      qtyDelta: actualReturnedQty, // stock increased by actualReturnedQty
+      deviceIdx
+    };
+
+    // 1. Synchronous Optimistic Update: Product Stock
     if (product) {
       setProductLocal({
         ...product,
@@ -437,7 +523,7 @@ export function useWorkshopParts({
       });
     }
 
-    // Optimistic Update: Usages
+    // 2. Synchronous Optimistic Update: Usages
     let updatedUsages: RepairPartUsage[] = [];
     const newQty = usage.quantity - actualReturnedQty;
     const newTotalCost = newQty * usage.unitCost;
@@ -445,87 +531,29 @@ export function useWorkshopParts({
     const newSellingTotal = newQty * usageSellPrice;
 
     if (isFullRemove) {
-      updatedUsages = allUsages.map(pu => {
-        if (pu.id === usageId) {
-          return { ...pu, accountingStatus: 'RETURNED' as const };
-        }
-        return pu;
-      });
+      updatedUsages = allUsages.map(pu => pu.id === usageId ? { ...pu, accountingStatus: 'RETURNED' as const } : pu);
     } else {
-      updatedUsages = allUsages.map(pu => {
-        if (pu.id === usageId) {
-          return {
-            ...pu,
-            quantity: newQty,
-            totalCost: newTotalCost,
-            sellingPrice: usageSellPrice,
-            sellingTotal: newSellingTotal
-          };
-        }
-        return pu;
-      });
+      updatedUsages = allUsages.map(pu => pu.id === usageId ? {
+        ...pu,
+        quantity: newQty,
+        totalCost: newTotalCost,
+        sellingPrice: usageSellPrice,
+        sellingTotal: newSellingTotal
+      } : pu);
     }
     persistLocalUsages(updatedUsages);
 
-    // Recalculate order totals
-    const orderIdsToMatch = new Set<string>([
-      String(order.id || ''),
-      String((order as any).orderNumber || ''),
-      String((order as any).uuid || ''),
-      String(usage.repairOrderId || '')
-    ].filter(Boolean));
+    // 3. Synchronous Recalculate Order Totals
+    let updatedOrder = recalculateOrderTotals(selectedOrderRef.current || order, updatedUsages, deviceIdx, currentProducts);
+    setSelectedOrder(updatedOrder);
+    setRepairOrderLocal(updatedOrder);
 
-    const updatedDevices = [...order.devices];
-    const currentDevice = updatedDevices[deviceIdx];
-    let updatedOrder: RepairOrder = order;
+    // Mark product as busy
+    const pendingCount = (pendingMutationsRef.current.get(usage.inventoryItemId) || 0) + 1;
+    pendingMutationsRef.current.set(usage.inventoryItemId, pendingCount);
+    setBusyProductIds(prev => new Set(prev).add(usage.inventoryItemId));
 
-    if (currentDevice) {
-      const remainingUsages = updatedUsages.filter(
-        pu => orderIdsToMatch.has(String(pu.repairOrderId)) && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
-      );
-      const deviceRemainingUsages = remainingUsages.filter(
-        pu => (pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) || order.devices.length === 1
-      );
-
-      const newPartsCost = deviceRemainingUsages.reduce((sum, pu) => {
-        const sellP = getUsageSellingUnitPrice(pu, currentProducts);
-        return sum + (pu.quantity * sellP);
-      }, 0);
-
-      const tags = currentDevice.selectedQuickFaults || (currentDevice.issue ? currentDevice.issue.split(" - ").map(s => s.trim()) : []);
-      const faultsCost = currentDevice.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(tags);
-      const newAutoPrice = faultsCost + newPartsCost;
-
-      if (currentDevice.isPriceManuallyEdited) {
-        updatedDevices[deviceIdx] = {
-          ...currentDevice,
-          partsCost: newPartsCost,
-          priceOverrideAcknowledged: false
-        };
-      } else {
-        updatedDevices[deviceIdx] = {
-          ...currentDevice,
-          partsCost: newPartsCost,
-          finalRepairPrice: newAutoPrice,
-          estimatedCost: newAutoPrice
-        };
-      }
-
-      const totalFinal = updatedDevices.reduce((sum, d) => sum + (d.finalRepairPrice ?? d.estimatedCost ?? 0), 0);
-
-      updatedOrder = {
-        ...order,
-        devices: updatedDevices,
-        totalEstimatedCost: totalFinal,
-        finalRepairPrice: totalFinal
-      };
-
-      setSelectedOrder(updatedOrder);
-      setRepairOrderLocal(updatedOrder);
-    }
-
-    // Background Supabase persistence
-    (async () => {
+    const task = async () => {
       try {
         const quantityPromise = product
           ? updateProductQuantityInSupabase(product.id, product.quantity + actualReturnedQty)
@@ -567,32 +595,65 @@ export function useWorkshopParts({
           });
         }
 
+        const latestOrderForDb = selectedOrderRef.current
+          ? recalculateOrderTotals(selectedOrderRef.current, partUsagesRef.current, deviceIdx, productsRef.current)
+          : updatedOrder;
+
         await Promise.all([
           quantityPromise,
           movementPromise,
           usagePromise,
-          updateRepairOrderInSupabase(updatedOrder)
+          updateRepairOrderInSupabase(latestOrderForDb)
         ]);
       } catch (err) {
-        console.error("❌ [useWorkshopParts:RemovePart] Background removal sync failed; rolling back:", err);
-        if (product) setProductLocal(product);
-        persistLocalUsages(allUsages);
-        setSelectedOrder(order);
-        setRepairOrderLocal(order);
+        console.error(`❌ [useWorkshopParts:RemovePart] Mutation ${mutationId} failed, performing granular rollback:`, err);
+
+        // GRANULAR EXACT ROLLBACK:
+        // 1. Revert product stock by -snapshot.qtyDelta
+        if (product) {
+          const currentLatestProduct = productsRef.current.find(p => p.id === product.id) || product;
+          const restoredProductQty = currentLatestProduct.quantity - snapshot.qtyDelta;
+          setProductLocal({ ...currentLatestProduct, quantity: restoredProductQty });
+        }
+
+        // 2. Revert usage
+        const currentUsages = partUsagesRef.current;
+        const revertedUsages = currentUsages.map(u => u.id === usageId ? snapshot.usageBefore : u);
+        persistLocalUsages(revertedUsages);
+
+        // 3. Recalculate order totals
+        const currentLatestOrder = selectedOrderRef.current || order;
+        const rolledBackOrder = recalculateOrderTotals(currentLatestOrder, revertedUsages, deviceIdx, productsRef.current);
+        setSelectedOrder(rolledBackOrder);
+        setRepairOrderLocal(rolledBackOrder);
+
+        try {
+          await updateRepairOrderInSupabase(rolledBackOrder);
+        } catch (dbErr) {
+          console.error("Failed to sync rolled back order to Supabase:", dbErr);
+        }
+
         dialog.alert({
           message: "تعذر حفظ تعديل قطعة الغيار، وتمت إعادة الكمية والحساب للحالة السابقة.",
           variant: "error"
         });
       } finally {
-        setBusyProductIds(prev => {
-          const next = new Set(prev);
-          next.delete(usage.inventoryItemId);
-          return next;
-        });
+        const remaining = (pendingMutationsRef.current.get(usage.inventoryItemId) || 1) - 1;
+        pendingMutationsRef.current.set(usage.inventoryItemId, remaining);
+        if (remaining <= 0) {
+          setBusyProductIds(prev => {
+            const next = new Set(prev);
+            next.delete(usage.inventoryItemId);
+            return next;
+          });
+        }
       }
-    })();
+    };
+
+    const prevQueue = orderMutationQueueRef.current.get(order.id) || Promise.resolve();
+    const nextQueue = prevQueue.then(task, task);
+    orderMutationQueueRef.current.set(order.id, nextQueue);
   }, [
-    busyProductIds,
     dialog,
     persistLocalUsages,
     setProductLocal,
