@@ -142,12 +142,16 @@ export function useWorkshopParts({
   replacePartUsageIdLocal,
   dialog
 }: UseWorkshopPartsOptions): UseWorkshopPartsReturn {
-  // Dedicated local workshop display state
-  const [workshopUsages, setWorkshopUsages] = useState<RepairPartUsage[]>([]);
-  const workshopUsagesRef = useRef(workshopUsages);
-  workshopUsagesRef.current = workshopUsages;
-
   const [busyProductIds, setBusyProductIds] = useState<Set<string>>(new Set());
+
+  // Dedicated workshop display state. This is intentionally isolated from the
+  // global Supabase/AppDataContext array so a stale realtime/refetch response
+  // cannot make an optimistic row disappear from the technician's table.
+  const [workshopUsages, setWorkshopUsages] = useState<RepairPartUsage[]>([]);
+  const workshopUsagesRef = useRef<RepairPartUsage[]>([]);
+  useEffect(() => {
+    workshopUsagesRef.current = workshopUsages;
+  }, [workshopUsages]);
 
   // Prevent stale closures in async mutations/callbacks
   const selectedOrderRef = useRef(selectedOrder);
@@ -192,24 +196,66 @@ export function useWorkshopParts({
     pendingRepairPartUsagesRef: sharedPendingRef
   } = useRepairPartUsages();
 
-  // Safely initialize and reconcile workshopUsages with remote partUsages
-  useEffect(() => {
-    setWorkshopUsages(current => {
-      return mergeRepairPartUsages(
-        current,
-        partUsages,
-        sharedPendingRef.current,
-        [],
-        products
-      );
-    });
-  }, [partUsages, products, sharedPendingRef]);
+  // Initialize the local display list when the opened order changes.
+  // For later remote updates we only upsert/patch rows; we never delete an
+  // active local row merely because a remote snapshot is temporarily stale.
+  const activeOrderIdentity = selectedOrder
+    ? `${selectedOrder.id}|${(selectedOrder as any).orderNumber || ''}|${(selectedOrder as any).uuid || ''}`
+    : '';
 
-  // 1. Calculate visible part usages for the current selected order / device strictly from workshopUsages
+  useEffect(() => {
+    if (!selectedOrder) {
+      setWorkshopUsages([]);
+      return;
+    }
+    const initial = partUsages.filter(pu =>
+      isPartUsageForOrderAndDevice(pu, selectedOrder, 0, [], products)
+    );
+    setWorkshopUsages(initial);
+  }, [activeOrderIdentity]);
+
+  useEffect(() => {
+    if (!selectedOrder) return;
+    const incoming = partUsages.filter(pu =>
+      isPartUsageForOrderAndDevice(pu, selectedOrder, 0, [], products)
+    );
+
+    setWorkshopUsages(current => {
+      const next = [...current];
+
+      for (const remote of incoming) {
+        const matchIndex = next.findIndex(local => {
+          if (local.id === remote.id) return true;
+          return isSameOrderIdentity(String(local.repairOrderId), String(remote.repairOrderId), [selectedOrder]) &&
+            isSameProductIdentity(String(local.inventoryItemId), String(remote.inventoryItemId), products) &&
+            isSameDeviceIdentity(local.notes, remote.notes);
+        });
+
+        if (remote.accountingStatus === 'RETURNED' || remote.accountingStatus === 'REVERSED') {
+          if (matchIndex >= 0) next.splice(matchIndex, 1);
+          continue;
+        }
+
+        if (matchIndex >= 0) {
+          // Preserve the local display identity while an optimistic mutation is
+          // pending; otherwise overlay the latest persisted server fields.
+          const local = next[matchIndex];
+          const isPending = local.id.startsWith('PU-') || sharedPendingRef.current.has(local.id);
+          next[matchIndex] = isPending ? local : { ...local, ...remote };
+        } else {
+          next.push(remote);
+        }
+      }
+
+      workshopUsagesRef.current = next;
+      return next;
+    });
+  }, [partUsages, products, activeOrderIdentity, selectedOrder, sharedPendingRef]);
+
+  // PartsTable renders exclusively from the isolated workshop display state.
   const visiblePartUsages = useMemo(() => {
     const order = selectedOrder;
     if (!order) return [];
-
     return workshopUsages.filter(pu =>
       isPartUsageForOrderAndDevice(pu, order, 0, [], products)
     );
@@ -267,7 +313,7 @@ export function useWorkshopParts({
     if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) owner = 'AHMED';
     else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) owner = 'ABDO';
 
-    const allUsages = mergeRepairPartUsages(workshopUsagesRef.current, partUsagesRef.current, sharedPendingRef.current, [], currentProducts);
+    const allUsages = workshopUsagesRef.current;
     const existingUsage = allUsages.find(pu =>
       isPartUsageForOrderAndDevice(pu, order, deviceIdx, [], currentProducts) &&
       isSameProductIdentity(pu.inventoryItemId, product.id, currentProducts)
@@ -294,7 +340,7 @@ export function useWorkshopParts({
       quantity: newQty
     });
 
-    // 2. Synchronous Optimistic Update: Dedicated Workshop Usages State
+    // 2. Synchronous Optimistic Update: Part Usages
     let updatedUsageList = [...allUsages];
     let usageRecordToSave: RepairPartUsage;
 
@@ -332,7 +378,9 @@ export function useWorkshopParts({
       registerPendingPartUsage(usageRecordToSave);
     }
 
+    // Keep the workshop table stable independently from AppDataContext/refetches.
     setWorkshopUsages(updatedUsageList);
+    workshopUsagesRef.current = updatedUsageList;
 
     // 3. Synchronous Recalculate Order Totals
     let updatedOrder = recalculateOrderTotals(selectedOrderRef.current || order, updatedUsageList, deviceIdx, currentProducts);
@@ -430,7 +478,7 @@ export function useWorkshopParts({
         }
 
         const latestOrderForDb = selectedOrderRef.current
-          ? recalculateOrderTotals(selectedOrderRef.current, partUsagesRef.current, deviceIdx, productsRef.current)
+          ? recalculateOrderTotals(selectedOrderRef.current, workshopUsagesRef.current, deviceIdx, productsRef.current)
           : updatedOrder;
 
         const [, , persistedUsage] = await Promise.all([
@@ -447,18 +495,14 @@ export function useWorkshopParts({
             ...persistedUsage,
             repairOrderId: order.id
           };
-          setWorkshopUsages(current =>
-            current.map(row =>
-              row.id === snapshot.tempUsageId
-                ? {
-                    ...row,
-                    ...reconciledUsage,
-                    id: reconciledUsage.id,
-                    repairOrderId: order.id
-                  }
-                : row
-            )
-          );
+          setWorkshopUsages(current => {
+            const next = current.map(row => row.id === snapshot.tempUsageId
+              ? { ...row, ...reconciledUsage, id: reconciledUsage.id, repairOrderId: order.id }
+              : row
+            );
+            workshopUsagesRef.current = next;
+            return next;
+          });
           replacePartUsageIdLocal(snapshot.tempUsageId, reconciledUsage);
         }
       } catch (mutationError: any) {
@@ -470,7 +514,7 @@ export function useWorkshopParts({
         const restoredProductQty = currentLatestProduct.quantity - snapshot.qtyDelta;
         setProductLocal({ ...currentLatestProduct, quantity: restoredProductQty });
 
-        // 2. Revert usages in workshopUsages: remove tempUsage or restore usageBefore
+        // 2. Revert usages: remove tempUsage or restore usageBefore
         let revertedUsages: RepairPartUsage[];
         if (snapshot.usageBefore === null) {
           if (snapshot.tempUsageId) {
@@ -481,7 +525,9 @@ export function useWorkshopParts({
           upsertPartUsageLocal(snapshot.usageBefore);
           revertedUsages = workshopUsagesRef.current.map(u => u.id === snapshot.usageBefore!.id ? snapshot.usageBefore! : u);
         }
+
         setWorkshopUsages(revertedUsages);
+        workshopUsagesRef.current = revertedUsages;
 
         // 3. Recalculate order totals based on current order state & reverted usages (preserving all other concurrent mutations!)
         const currentLatestOrder = selectedOrderRef.current || order;
@@ -595,7 +641,9 @@ export function useWorkshopParts({
       });
     }
 
-    setWorkshopUsages(updatedUsages);
+    const visibleUpdatedUsages = updatedUsages.filter(u => u.accountingStatus !== 'RETURNED' && u.accountingStatus !== 'REVERSED');
+    setWorkshopUsages(visibleUpdatedUsages);
+    workshopUsagesRef.current = visibleUpdatedUsages;
 
     // 3. Synchronous Recalculate Order Totals
     let updatedOrder = recalculateOrderTotals(selectedOrderRef.current || order, updatedUsages, deviceIdx, currentProducts);
@@ -650,7 +698,7 @@ export function useWorkshopParts({
         }
 
         const latestOrderForDb = selectedOrderRef.current
-          ? recalculateOrderTotals(selectedOrderRef.current, partUsagesRef.current, deviceIdx, productsRef.current)
+          ? recalculateOrderTotals(selectedOrderRef.current, workshopUsagesRef.current, deviceIdx, productsRef.current)
           : updatedOrder;
 
         await Promise.all([
@@ -670,11 +718,14 @@ export function useWorkshopParts({
           setProductLocal({ ...currentLatestProduct, quantity: restoredProductQty });
         }
 
-        // 2. Revert usage in workshopUsages
+        // 2. Revert usage
         upsertPartUsageLocal(snapshot.usageBefore);
         const currentUsages = workshopUsagesRef.current;
-        const revertedUsages = currentUsages.map(u => u.id === usageId ? snapshot.usageBefore : u);
+        const revertedUsages = currentUsages.some(u => u.id === usageId)
+          ? currentUsages.map(u => u.id === usageId ? snapshot.usageBefore : u)
+          : [...currentUsages, snapshot.usageBefore];
         setWorkshopUsages(revertedUsages);
+        workshopUsagesRef.current = revertedUsages;
 
         // 3. Recalculate order totals
         const currentLatestOrder = selectedOrderRef.current || order;
