@@ -35,6 +35,7 @@ import { fetchOrMigrateRepairOrders, getLocalRepairOrdersBackup, saveLocalRepair
 import { fetchOrMigrateCustomers, getLocalCustomersBackup, saveLocalCustomersBackup } from '../lib/supabaseCustomers';
 import { fetchOrMigrateProducts, getLocalProductsBackup, saveLocalProductsBackup, getInventoryMovements } from '../lib/supabaseProducts';
 import { fetchOrMigrateRepairPartUsages, getLocalRepairPartUsagesBackup, saveLocalRepairPartUsagesBackup } from '../lib/supabasePartUsages';
+import { mergeRepairPartUsages } from '../lib/partUsageUtils';
 import { fetchOrMigrateInvoices, getLocalInvoicesBackup, saveLocalInvoicesBackup } from '../lib/supabaseInvoices';
 import { fetchOrMigrateExpenses, getLocalExpensesBackup } from '../lib/supabaseExpenses';
 import { fetchOrMigrateSuppliers, getLocalSuppliersBackup } from '../lib/supabaseSuppliers';
@@ -147,6 +148,12 @@ export interface AppDataContextType {
   
   // Selective dataset refetch
   refetchDataset: (key: string) => Promise<void>;
+
+  // Pending Repair Part Usages Registry
+  pendingRepairPartUsagesRef: React.MutableRefObject<Map<string, RepairPartUsage>>;
+  registerPendingPartUsage: (usage: RepairPartUsage) => void;
+  replacePendingPartUsage: (tempId: string, persisted: RepairPartUsage) => void;
+  removePendingPartUsage: (id: string) => void;
 }
 
 const AppDataContext = createContext<AppDataContextType | null>(null);
@@ -217,6 +224,45 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // Concurrency & generation guards
   const fetchGenIdRef = useRef<number>(0);
   const isInitializingRef = useRef<boolean>(false);
+
+  // Shared Pending Repair Part Usages Registry across active mutations
+  const pendingRepairPartUsagesRef = useRef<Map<string, RepairPartUsage>>(new Map());
+
+  const registerPendingPartUsage = useCallback((usage: RepairPartUsage) => {
+    pendingRepairPartUsagesRef.current.set(usage.id, usage);
+    setRepairPartUsagesState(prev => ({
+      ...prev,
+      data: mergeRepairPartUsages(prev.data, [], pendingRepairPartUsagesRef.current, repairOrdersState.data, productsState.data)
+    }));
+  }, [repairOrdersState.data, productsState.data]);
+
+  const replacePendingPartUsage = useCallback((tempId: string, persisted: RepairPartUsage) => {
+    pendingRepairPartUsagesRef.current.delete(tempId);
+    pendingRepairPartUsagesRef.current.set(persisted.id, persisted);
+    setRepairPartUsagesState(prev => {
+      const nextData = prev.data.map(u => u.id === tempId ? persisted : u);
+      if (!nextData.some(u => u.id === persisted.id)) {
+        nextData.push(persisted);
+      }
+      saveLocalRepairPartUsagesBackup(nextData, false);
+      return {
+        ...prev,
+        data: nextData
+      };
+    });
+  }, []);
+
+  const removePendingPartUsage = useCallback((id: string) => {
+    pendingRepairPartUsagesRef.current.delete(id);
+    setRepairPartUsagesState(prev => {
+      const nextData = prev.data.filter(u => u.id !== id);
+      saveLocalRepairPartUsagesBackup(nextData, false);
+      return {
+        ...prev,
+        data: nextData
+      };
+    });
+  }, []);
 
   /**
    * Loads all required business datasets concurrently via Promise.allSettled
@@ -495,7 +541,21 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         });
       } else if (key === 'atari_repair_part_usages') {
         fetchOrMigrateRepairPartUsages().then(res => {
-          if (res.partUsages && res.partUsages.length > 0) setRepairPartUsagesState(createLoadedDataset(res.partUsages));
+          if (res.partUsages && res.partUsages.length > 0) {
+            setRepairPartUsagesState(prev => ({
+              ...prev,
+              data: mergeRepairPartUsages(
+                prev.data,
+                res.partUsages,
+                pendingRepairPartUsagesRef.current,
+                repairOrdersState.data,
+                productsState.data
+              ),
+              isLoaded: true,
+              isLoading: false,
+              error: null
+            }));
+          }
         });
       }
     };
@@ -560,7 +620,21 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     } else if (key === 'repairPartUsages') {
       const res = await fetchOrMigrateRepairPartUsages();
-      if (res.partUsages && res.partUsages.length > 0) setRepairPartUsagesState(createLoadedDataset(res.partUsages));
+      if (res.partUsages && res.partUsages.length > 0) {
+        setRepairPartUsagesState(prev => ({
+          ...prev,
+          data: mergeRepairPartUsages(
+            prev.data,
+            res.partUsages,
+            pendingRepairPartUsagesRef.current,
+            repairOrdersState.data,
+            productsState.data
+          ),
+          isLoaded: true,
+          isLoading: false,
+          error: null
+        }));
+      }
     }
   };
 
@@ -695,7 +769,12 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setUsersData,
         setPartnersData,
 
-        refetchDataset
+        refetchDataset,
+
+        pendingRepairPartUsagesRef,
+        registerPendingPartUsage,
+        replacePendingPartUsage,
+        removePendingPartUsage
       }}
     >
       {children}

@@ -797,7 +797,14 @@ export function usePartnerTransactions() {
 }
 
 export function useRepairPartUsages() {
-  const { repairPartUsagesState, setPartUsagesData } = useAppData();
+  const {
+    repairPartUsagesState,
+    setPartUsagesData,
+    registerPendingPartUsage,
+    replacePendingPartUsage,
+    removePendingPartUsage,
+    pendingRepairPartUsagesRef
+  } = useAppData();
 
   const persistLocalUsages = (next: RepairPartUsage[]) => {
     setPartUsagesData(next);
@@ -815,12 +822,29 @@ export function useRepairPartUsages() {
     });
   };
 
-  const replacePartUsageIdLocal = (temporaryId: string, persisted: RepairPartUsage) => {
+  const patchPartUsageLocal = (id: string, updates: Partial<RepairPartUsage>) => {
     setPartUsagesData(prev => {
-      const next = prev.map(item => item.id === temporaryId ? persisted : item);
+      const next = prev.map(item => item.id === id ? { ...item, ...updates } : item);
       db.saveRepairPartUsages(next);
       return next;
     });
+  };
+
+  const markPartUsageReturnedLocal = (id: string) => {
+    patchPartUsageLocal(id, { accountingStatus: 'RETURNED' });
+  };
+
+  const removeTemporaryPartUsageLocal = (id: string) => {
+    removePendingPartUsage(id);
+    setPartUsagesData(prev => {
+      const next = prev.filter(item => item.id !== id);
+      db.saveRepairPartUsages(next);
+      return next;
+    });
+  };
+
+  const replacePartUsageIdLocal = (temporaryId: string, persisted: RepairPartUsage) => {
+    replacePendingPartUsage(temporaryId, persisted);
   };
 
   const addPartUsage = (part: Omit<RepairPartUsage, "id" | "createdAt">) => {
@@ -837,7 +861,13 @@ export function useRepairPartUsages() {
     addPartUsage,
     persistLocalUsages,
     upsertPartUsageLocal,
-    replacePartUsageIdLocal
+    patchPartUsageLocal,
+    markPartUsageReturnedLocal,
+    removeTemporaryPartUsageLocal,
+    replacePartUsageIdLocal,
+    registerPendingPartUsage,
+    removePendingPartUsage,
+    pendingRepairPartUsagesRef
   };
 }
 
