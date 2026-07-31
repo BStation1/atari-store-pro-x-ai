@@ -213,7 +213,12 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
   useEffect(() => {
     if (busyProductIds.size > 0) return;
     setSelectedOrder(prev => {
-      if (!prev) return null;
+      if (!prev) {
+        if (initialOrderId) {
+          return orders.find(order => order.id === initialOrderId) || null;
+        }
+        return null;
+      }
       const fresh = orders.find(order => order.id === prev.id);
       if (!fresh || fresh === prev) return prev;
       const sameVersion =
@@ -223,7 +228,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
         fresh.devices.length === prev.devices.length;
       return sameVersion ? prev : fresh;
     });
-  }, [orders, busyProductIds.size]);
+  }, [orders, busyProductIds.size, initialOrderId]);
 
   // Receipt Modal trigger
   const [receiptOrder, setReceiptOrder] = useState<RepairOrder | undefined>(undefined);

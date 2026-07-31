@@ -111,7 +111,9 @@ function useDbTrigger(watchedKeys?: string[]) {
 
       // Auth events and unscoped events intentionally refresh all consumers.
       if (!keys || keys.length === 0 || !changedKey || keys.some(key => normalizeKey(key) === changedKey)) {
-        setTrigger(prev => prev + 1);
+        setTimeout(() => {
+          setTrigger(prev => prev + 1);
+        }, 0);
       }
     };
 
