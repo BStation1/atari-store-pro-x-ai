@@ -109,12 +109,12 @@ interface RepairCenterProps {
 
 export default function RepairCenter({ initialStatusFilter, initialOrderId }: RepairCenterProps) {
   const { user: currentLoggedUser } = useCurrentUser();
-  const { orders, updateRepairOrder, deleteRepairOrder, deliverRepairOrder, reopenRepairOrder } = useRepairOrders();
+  const { orders, updateRepairOrder, updateRepairOrderLocal, deleteRepairOrder, deliverRepairOrder, reopenRepairOrder } = useRepairOrders();
   const { customers, updateCustomer } = useCustomers();
-  const { products, updateProduct } = useProducts();
+  const { products, updateProduct, updateProductLocal } = useProducts();
   const { settings } = useSettings();
   const { invoices, addInvoice } = useInvoices();
-  const { partUsages, addPartUsage } = useRepairPartUsages();
+  const { partUsages, addPartUsage, replacePartUsagesLocal } = useRepairPartUsages();
 
   console.log("=== Repair Center: Component rendered ===");
   console.log("=== Repair Center: Orders count ===", orders.length);
@@ -686,7 +686,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
     // 1. Synchronous Optimistic Update
     const newQty = product.quantity - qty;
-    updateProduct({
+    updateProductLocal({
       ...product,
       quantity: newQty
     });
@@ -744,7 +744,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       updatedUsageList.push(usageRecordToSave);
     }
 
-    db.saveRepairPartUsages(updatedUsageList);
+    replacePartUsagesLocal(updatedUsageList);
 
     // Recalculate device partsCost and grand total
     const activeUsagesForDevice = updatedUsageList.filter(
@@ -807,12 +807,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     );
 
     setSelectedOrder(updatedOrder);
-    updateRepairOrder(updatedOrder);
-
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));
-      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
-    }
+    updateRepairOrderLocal(updatedOrder);
 
     const tLocal = performance.now();
     console.log(`⏱️ [AddPart] Local state & UI updated in ${(tLocal - t0).toFixed(2)}ms`);
@@ -875,7 +870,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
             const reconciledList = currentLatestUsages.map(u =>
               u.id === usageRecordToSave.id ? { ...addedUsage, repairOrderId: selectedOrder.id } : u
             );
-            db.saveRepairPartUsages(reconciledList);
+            replacePartUsagesLocal(reconciledList);
           }
         }
 
@@ -887,21 +882,16 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       } catch (mutationError: any) {
         console.error("❌ [AddPart] Background mutation failed, rolling back:", mutationError);
         // Rollback optimistic update
-        updateProduct({ ...product, quantity: product.quantity });
+        updateProductLocal({ ...product, quantity: product.quantity });
         const currentUsages = db.getRepairPartUsages();
         const rollbackUsages = currentUsages.filter(u => u.id !== usageRecordToSave.id);
         if (existingUsage) {
-          db.saveRepairPartUsages(currentUsages.map(u => u.id === existingUsage.id ? existingUsage : u));
+          replacePartUsagesLocal(currentUsages.map(u => u.id === existingUsage.id ? existingUsage : u));
         } else {
-          db.saveRepairPartUsages(rollbackUsages);
+          replacePartUsagesLocal(rollbackUsages);
         }
         setSelectedOrder(selectedOrder);
-        updateRepairOrder(selectedOrder);
-
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));
-          window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
-        }
+        updateRepairOrderLocal(selectedOrder);
 
         dialog.alert({
           message: "حدث خطأ أثناء حفظ قطعة الغيار بالخادم، تم إلغاء العملية وتحديث المخزون.",
