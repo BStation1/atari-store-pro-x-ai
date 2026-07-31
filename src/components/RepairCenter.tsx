@@ -923,50 +923,31 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     const usage = allUsages.find(pu => pu.id === usageId);
     if (!usage) return;
 
+    if (busyProductIds.has(usage.inventoryItemId)) return;
+    setBusyProductIds(prev => new Set(prev).add(usage.inventoryItemId));
+
     const product = products.find(p => p.id === usage.inventoryItemId);
 
     const qtyToReturn = Math.min(usage.quantity, Math.max(1, removeQty));
     const isFullRemove = (usage.quantity <= qtyToReturn) || removeQty === -1; // -1 means remove all
     const actualReturnedQty = isFullRemove ? usage.quantity : qtyToReturn;
 
-    // 1. Restore Product Stock
+    // 1. Instant Synchronous Product Stock Update
     if (product) {
       updateProduct({
         ...product,
         quantity: product.quantity + actualReturnedQty
       });
-      updateProductQuantityInSupabase(product.id, product.quantity + actualReturnedQty).catch(err => console.warn("Supabase qty restore warn:", err));
     }
 
-    // 2. Add Reversal Movement
-    const ownership = selectedOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
-    let owner: 'SHOP' | 'AHMED' | 'ABDO' = 'SHOP';
-    if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) owner = 'AHMED';
-    else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) owner = 'ABDO';
-
-    addInventoryMovementToSupabase({
-      id: `MOV-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
-      productId: usage.inventoryItemId,
-      productNameSnapshot: usage.partName,
-      movementType: 'IN',
-      usageType: 'REPAIR_USAGE_RETURN',
-      quantityChange: actualReturnedQty,
-      previousQuantity: product ? product.quantity : 0,
-      newQuantity: product ? product.quantity + actualReturnedQty : actualReturnedQty,
-      costPriceSnapshot: usage.unitCost,
-      sellingPriceSnapshot: 0,
-      totalCost: usage.unitCost * actualReturnedQty,
-      referenceId: selectedOrder.id,
-      repairOrderId: selectedOrder.id,
-      owner: owner,
-      notes: `إرجاع قطعة غيار صيانة للمخزن: ${usage.partName}`,
-      createdAt: new Date().toISOString()
-    }).catch(err => console.warn("Supabase movement warn:", err));
-
-    // 3. Update or Mark Usage as RETURNED
+    // 2. Instant Synchronous Usage Update
     let updatedUsages: RepairPartUsage[] = [];
+    const newQty = usage.quantity - actualReturnedQty;
+    const newTotalCost = newQty * usage.unitCost;
+    const usageSellPrice = getUsageSellingUnitPrice(usage, products);
+    const newSellingTotal = newQty * usageSellPrice;
+
     if (isFullRemove) {
-      updateRepairPartUsageInSupabase(usageId, { accountingStatus: 'RETURNED' }).catch(err => console.warn(err));
       updatedUsages = allUsages.map(pu => {
         if (pu.id === usageId) {
           return { ...pu, accountingStatus: 'RETURNED' as const };
@@ -974,16 +955,6 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
         return pu;
       });
     } else {
-      const newQty = usage.quantity - actualReturnedQty;
-      const newTotalCost = newQty * usage.unitCost;
-      const usageSellPrice = getUsageSellingUnitPrice(usage, products);
-      const newSellingTotal = newQty * usageSellPrice;
-      updateRepairPartUsageInSupabase(usageId, {
-        quantity: newQty,
-        totalCost: newTotalCost,
-        sellingPrice: usageSellPrice,
-        sellingTotal: newSellingTotal
-      }).catch(err => console.warn(err));
       updatedUsages = allUsages.map(pu => {
         if (pu.id === usageId) {
           return {
@@ -999,7 +970,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     }
     db.saveRepairPartUsages(updatedUsages);
 
-    // 4. Recalculate device partsCost (using selling price)
+    // 3. Instant Synchronous Order Recalculation
     const orderIdsToMatch = new Set<string>([
       String(selectedOrder.id || ''),
       String((selectedOrder as any).orderNumber || ''),
@@ -1009,6 +980,8 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
     const updatedDevices = [...selectedOrder.devices];
     const currentDevice = updatedDevices[deviceIdx];
+    let updatedOrder: RepairOrder = selectedOrder;
+
     if (currentDevice) {
       const remainingUsages = updatedUsages.filter(
         pu => orderIdsToMatch.has(String(pu.repairOrderId)) && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
@@ -1043,7 +1016,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
       const totalFinal = updatedDevices.reduce((sum, d) => sum + (d.finalRepairPrice ?? d.estimatedCost ?? 0), 0);
 
-      const updatedOrder: RepairOrder = {
+      updatedOrder = {
         ...selectedOrder,
         devices: updatedDevices,
         totalEstimatedCost: totalFinal,
@@ -1052,13 +1025,66 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
       setSelectedOrder(updatedOrder);
       updateRepairOrder(updatedOrder);
-      updateRepairOrderInSupabase(updatedOrder).catch(err => console.warn(err));
     }
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));
-      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_inventory_movements' } }));
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
     }
+
+    // 4. Background Persistence to Supabase (Non-blocking)
+    (async () => {
+      try {
+        if (product) {
+          updateProductQuantityInSupabase(product.id, product.quantity + actualReturnedQty).catch(err => console.warn("Supabase qty restore warn:", err));
+        }
+
+        const ownership = selectedOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
+        let owner: 'SHOP' | 'AHMED' | 'ABDO' = 'SHOP';
+        if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) owner = 'AHMED';
+        else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) owner = 'ABDO';
+
+        addInventoryMovementToSupabase({
+          id: `MOV-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+          productId: usage.inventoryItemId,
+          productNameSnapshot: usage.partName,
+          movementType: 'IN',
+          usageType: 'REPAIR_USAGE_RETURN',
+          quantityChange: actualReturnedQty,
+          previousQuantity: product ? product.quantity : 0,
+          newQuantity: product ? product.quantity + actualReturnedQty : actualReturnedQty,
+          costPriceSnapshot: usage.unitCost,
+          sellingPriceSnapshot: 0,
+          totalCost: usage.unitCost * actualReturnedQty,
+          referenceId: selectedOrder.id,
+          repairOrderId: selectedOrder.id,
+          owner: owner,
+          notes: `إرجاع قطعة غيار صيانة للمخزن: ${usage.partName}`,
+          createdAt: new Date().toISOString()
+        }).catch(err => console.warn("Supabase movement warn:", err));
+
+        if (isFullRemove) {
+          updateRepairPartUsageInSupabase(usageId, { accountingStatus: 'RETURNED' }).catch(err => console.warn(err));
+        } else {
+          updateRepairPartUsageInSupabase(usageId, {
+            quantity: newQty,
+            totalCost: newTotalCost,
+            sellingPrice: usageSellPrice,
+            sellingTotal: newSellingTotal
+          }).catch(err => console.warn(err));
+        }
+
+        updateRepairOrderInSupabase(updatedOrder).catch(err => console.warn(err));
+      } catch (err) {
+        console.warn("Background removal sync warning:", err);
+      } finally {
+        setBusyProductIds(prev => {
+          const next = new Set(prev);
+          next.delete(usage.inventoryItemId);
+          return next;
+        });
+      }
+    })();
   };
 
   // Update Work Ownership Type (شغل المحل / أحمد البنا / عبده)
@@ -1947,7 +1973,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
                           {/* Parts Table */}
                           <div className="overflow-x-auto rounded-xl border border-[#2a2d42] bg-[#141624]">
-                            <table className="w-full text-xs text-right text-gray-200 border-collapse">
+                            <table id="repair-center-workshop-parts-table" className="w-full text-xs text-right text-gray-200 border-collapse">
                               <thead className="bg-[#181b2a] text-gray-400 font-bold border-b border-[#2a2d42]">
                                 <tr>
                                   <th className="p-3">القطعة</th>
@@ -1970,11 +1996,19 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                     const lineTotal = pu.quantity * unitSellPrice;
                                     const matchedProd = products.find(p => p.id === pu.inventoryItemId);
                                     const stockAvail = matchedProd ? matchedProd.quantity : 0;
+                                    const isBusy = busyProductIds.has(pu.inventoryItemId);
 
                                     return (
                                       <tr key={pu.id} className="hover:bg-[#181b2a] transition-colors">
                                         <td className="p-3 font-bold text-white">
-                                          <span>{pu.partName}</span>
+                                          <div className="flex items-center gap-2">
+                                            <span>{pu.partName}</span>
+                                            {isBusy && (
+                                              <span className="text-[10px] text-amber-400 bg-amber-950/60 border border-amber-500/30 px-1.5 py-0.5 rounded font-bold animate-pulse">
+                                                جاري التحديث...
+                                              </span>
+                                            )}
+                                          </div>
                                         </td>
 
                                         <td className="p-3 text-center font-mono font-bold text-gray-300">
@@ -1985,8 +2019,9 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                           <div className="inline-flex items-center gap-2 bg-[#181b2a] px-2 py-1 rounded-lg border border-[#2a2d42]">
                                             <button
                                               type="button"
+                                              disabled={isBusy}
                                               onClick={() => handleRemovePartUsage(pu.id, devIdx, 1)}
-                                              className="w-7 h-7 flex items-center justify-center bg-gray-800 hover:bg-gray-700 text-white rounded-md font-bold text-base transition cursor-pointer"
+                                              className="w-7 h-7 flex items-center justify-center bg-gray-800 hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-md font-bold text-base transition cursor-pointer"
                                               title="خصم قطعة (-)"
                                             >
                                               -
@@ -1998,7 +2033,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
                                             <button
                                               type="button"
-                                              disabled={stockAvail <= 0}
+                                              disabled={stockAvail <= 0 || isBusy}
                                               onClick={() => handleAddPartToDevice(devIdx, pu.inventoryItemId, 1)}
                                               className="w-7 h-7 flex items-center justify-center bg-indigo-600 hover:bg-indigo-500 text-white rounded-md font-bold text-base transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                                               title={stockAvail <= 0 ? "المخزون نفذ" : "إضافة قطعة (+)"}
@@ -2015,8 +2050,9 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                         <td className="p-3 text-center">
                                           <button
                                             type="button"
+                                            disabled={isBusy}
                                             onClick={() => handleRemovePartUsage(pu.id, devIdx, -1)}
-                                            className="p-1.5 bg-rose-500/10 hover:bg-rose-600 text-rose-400 hover:text-white rounded-lg transition cursor-pointer"
+                                            className="p-1.5 bg-rose-500/10 hover:bg-rose-600 disabled:opacity-30 disabled:cursor-not-allowed text-rose-400 hover:text-white rounded-lg transition cursor-pointer"
                                             title="حذف القطعة"
                                           >
                                             <Trash2 className="w-4 h-4" />
