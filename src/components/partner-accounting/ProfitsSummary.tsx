@@ -170,16 +170,7 @@ export default function ProfitsSummary({
     } else {
       const devicePartsCost = o.devices?.reduce((sum, d) => sum + (Number(d.partsCost) || 0), 0) || 0;
       partsCost = devicePartsCost;
-      if (devicePartsCost > 0) {
-        partsList = [
-          {
-            partName: 'قطع غيار صيانة مسجلة بالأوردر',
-            quantity: 1,
-            unitCost: devicePartsCost,
-            totalCost: devicePartsCost
-          }
-        ];
-      }
+      partsList = [];
     }
 
     const netProfit = Math.max(0, totalInvoice - partsCost);
@@ -369,37 +360,7 @@ export default function ProfitsSummary({
     console.warn('Notice parsing inventory movements in ProfitsSummary:', err);
   }
 
-  // A4. Fallback from Repair Orders where parts were logged directly on the order/devices without a separate partUsage
-  orders.forEach((o, oIdx) => {
-    if (!isDateInFilterRange(o.receivedDate)) return;
-
-    const orderParts = partUsages.filter(pu => isPartBelongsToOrder(pu.repairOrderId, o) && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED');
-    if (orderParts.length > 0) return; // Already processed via partUsages
-
-    const oAny = o as any;
-    const parentOwnership = o.jobType || o.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
-    const partyLabel = normalizePartyLabel(oAny.responsiblePartnerId, parentOwnership as string, oAny.notes || oAny.reportedIssue);
-
-    const devicePartsCost = o.devices?.reduce((sum, d) => sum + (Number(d.partsCost) || 0), 0) || 0;
-    if (devicePartsCost > 0) {
-      allWithdrawalTransactions.push({
-        id: `order-fallback-${o.id}-${oIdx}`,
-        partName: 'قطع غيار صيانة مسجلة بالأوردر',
-        quantity: 1,
-        unitCost: devicePartsCost,
-        totalCost: devicePartsCost,
-        refNum: `أمر صيانة #${(o as any).orderNumber || o.id}`,
-        customerName: o.customerNameSnapshot || o.guestCustomerName || 'عميل صيانة',
-        date: formatDateISO(o.receivedDate),
-        ownership: parentOwnership,
-        partyLabel,
-        partyNameArabic: partyLabel === 'AHMED' ? 'أحمد' : partyLabel === 'ABDO' ? 'عبده' : 'المحل',
-        sourceType: 'REPAIR_ORDER'
-      });
-    }
-  });
-
-  // Filter raw withdrawal transactions by selected party
+  // A4. Filter raw withdrawal transactions by selected party
   const withdrawnItemsList = allWithdrawalTransactions.filter((tx) => {
     if (partyFilter === 'ALL') return true;
     return tx.partyLabel === partyFilter;

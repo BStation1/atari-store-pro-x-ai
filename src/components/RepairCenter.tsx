@@ -130,6 +130,12 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
   const [newProcedureCost, setNewProcedureCost] = useState<number>(0);
   const [newProcedurePrice, setNewProcedurePrice] = useState<number>(0);
 
+  // Add Part Modal State
+  const [addPartModalOpen, setAddPartModalOpen] = useState(false);
+  const [addPartDevIdx, setAddPartDevIdx] = useState<number>(0);
+  const [addPartProductId, setAddPartProductId] = useState<string>('');
+  const [addPartQty, setAddPartQty] = useState<number>(1);
+
   const dialog = useDialog();
 
   const handleDeleteOrder = async (orderId: string, e?: React.MouseEvent) => {
@@ -618,8 +624,8 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     if (!currentDevice) return;
 
     const unitSellingPrice = Number(product.sellPrice || product.price || product.purchasePrice) || 0;
-    const unitPurchaseCost = Number(product.purchasePrice) || 0;
-    const totalCost = unitSellingPrice * qty;
+    const unitPurchaseCost = Number(product.purchasePrice || product.costPrice) || 0;
+    const totalCost = unitPurchaseCost * qty;
 
     const ownership = selectedOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
     let owner: 'SHOP' | 'AHMED' | 'ABDO' = 'SHOP';
@@ -678,18 +684,18 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
       if (existingUsage) {
         const newUsageQty = existingUsage.quantity + qty;
-        const newUsageTotalCost = newUsageQty * unitSellingPrice;
+        const newUsageTotalCost = newUsageQty * unitPurchaseCost;
         const updatedUsageRecord = {
           ...existingUsage,
           quantity: newUsageQty,
-          unitCost: unitSellingPrice,
+          unitCost: unitPurchaseCost,
           totalCost: newUsageTotalCost
         };
         updatedUsageList = allUsages.map(pu => pu.id === existingUsage.id ? updatedUsageRecord : pu);
         db.saveRepairPartUsages(updatedUsageList);
         updateRepairPartUsageInSupabase(existingUsage.id, {
           quantity: newUsageQty,
-          unitCost: unitSellingPrice,
+          unitCost: unitPurchaseCost,
           totalCost: newUsageTotalCost
         }).catch(err => console.warn("Supabase update usage warn:", err));
       } else {
@@ -699,7 +705,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
           partName: product.nameAr || product.name,
           sku: product.sku || product.id,
           quantity: qty,
-          unitCost: unitSellingPrice,
+          unitCost: unitPurchaseCost,
           totalCost: totalCost,
           ownershipType: ownership,
           responsiblePartnerId: owner === 'AHMED' ? 'P-001' : owner === 'ABDO' ? 'P-002' : 'SHOP',
@@ -707,7 +713,12 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
           notes: `deviceId:${currentDevice.id || deviceIdx}`
         });
         if (addedUsage) {
-          updatedUsageList.push(addedUsage);
+          const existsLocally = updatedUsageList.some(u => u.id === addedUsage.id);
+          if (!existsLocally) {
+            updatedUsageList.push(addedUsage);
+          } else {
+            updatedUsageList = updatedUsageList.map(u => u.id === addedUsage.id ? addedUsage : u);
+          }
           db.saveRepairPartUsages(updatedUsageList);
         }
       }
@@ -1685,11 +1696,23 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                 <div className="flex flex-wrap justify-between items-center gap-2">
                                   <h5 className="text-xs font-bold text-rose-300 flex items-center gap-1.5">
                                     <Package className="w-4 h-4 text-rose-400" />
-                                    <span>2. قطع الغيار والمكونات من المخزن (اختيار وسحب فورى)</span>
+                                    <span>2. قطع الغيار المستخدمة من المخزن</span>
                                   </h5>
-                                  <span className="text-[10px] text-emerald-300 font-mono font-bold">
-                                    تُحسب بسعر البيع وتُخصم تلقائياً من المخزون
-                                  </span>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setAddPartDevIdx(devIdx);
+                                      const avail = products.find(p => !p.isArchived && p.quantity > 0) || products.find(p => !p.isArchived);
+                                      setAddPartProductId(avail ? avail.id : '');
+                                      setAddPartQty(1);
+                                      setAddPartModalOpen(true);
+                                    }}
+                                    className="bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs px-3 py-1.5 rounded-xl shadow-md flex items-center gap-1.5 transition cursor-pointer"
+                                  >
+                                    <Plus className="w-4 h-4" />
+                                    <span>إضافة قطعة من المخزن</span>
+                                  </button>
                                 </div>
 
                                 {/* Part Search Filter Input */}
@@ -1698,7 +1721,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                     <Search className="w-3.5 h-3.5 text-gray-400 absolute right-3 top-2.5" />
                                     <input
                                       type="text"
-                                      placeholder="ابحث في قطع الغيار المتاحة بالمخزن (مثال: HDMI, IC, شاشة, كابل...)"
+                                      placeholder="ابحث في قطع الغيار المتاحة بالمخزن..."
                                       value={partSearch}
                                       onChange={e => setPartSearch(e.target.value)}
                                       className="w-full bg-[#11131e] border border-rose-500/30 rounded-xl pr-9 pl-3 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-rose-500"
@@ -1706,7 +1729,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                   </div>
                                 )}
 
-                                {/* Inventory Choice Chips (Template Style with Quick Add/Subtract Controls) */}
+                                {/* Inventory Choice Chips */}
                                 {(() => {
                                   const availableParts = products.filter(p => !p.isArchived);
                                   const filteredParts = availableParts.filter(p =>
@@ -1725,13 +1748,13 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                   }
 
                                   return (
-                                    <div className="flex flex-wrap gap-2 pt-1 max-h-[220px] overflow-y-auto p-1 custom-scrollbar">
+                                    <div className="flex flex-wrap gap-2 pt-1 max-h-[180px] overflow-y-auto p-1 custom-scrollbar">
                                       {filteredParts.map(p => {
                                         const linkedUsages = deviceLinkedUsages.filter(pu => pu.inventoryItemId === p.id || pu.partName === (p.nameAr || p.name));
                                         const isSelected = linkedUsages.length > 0;
                                         const totalUsedQty = linkedUsages.reduce((sum, pu) => sum + (pu.quantity || 1), 0);
                                         const isOutOfStock = p.quantity <= 0 && !isSelected;
-                                        const unitSellingPrice = Number(p.sellPrice || p.price || p.purchasePrice) || 0;
+                                        const unitCost = Number(p.purchasePrice || p.costPrice || 0);
 
                                         return (
                                           <div
@@ -1759,7 +1782,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                               <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-mono font-bold ${
                                                 isSelected ? "bg-rose-800 text-amber-200" : "bg-gray-900 text-emerald-400"
                                               }`}>
-                                                +{unitSellingPrice.toLocaleString('ar-EG')} ج.م
+                                                +{unitCost.toLocaleString('ar-EG')} ج.م
                                               </span>
                                             </button>
 
@@ -1815,20 +1838,20 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                 })()}
 
                                 {/* Active Linked Parts Detailed Table Summary */}
-                                {deviceLinkedUsages.length > 0 && (
+                                {deviceLinkedUsages.length > 0 ? (
                                   <div className="overflow-x-auto rounded-xl border border-rose-500/30 bg-gray-950/90 mt-3 p-1">
                                     <div className="px-3 py-1.5 bg-[#181b2a] border-b border-[#2a2d42] flex justify-between items-center text-xs font-bold text-rose-300">
-                                      <span>📋 قائمة قطع الغيار المحددة لهذا الجهاز:</span>
-                                      <span className="text-[11px] text-gray-400">إجمالي الأصناف: ({deviceLinkedUsages.length})</span>
+                                      <span>📋 قطع الغيار المستخدمة بالجهاز:</span>
+                                      <span className="text-[11px] text-gray-400">عدد الأصناف: ({deviceLinkedUsages.length})</span>
                                     </div>
                                     <table className="w-full text-xs text-right text-gray-300 border-collapse">
                                       <thead className="bg-[#11131e] text-gray-400 font-semibold border-b border-[#2a2d42]">
                                         <tr>
-                                          <th className="p-2.5">اسم قطعة الغيار</th>
-                                          <th className="p-2.5 text-center">الكمية المسحوبة</th>
-                                          <th className="p-2.5 text-center">سعر البيع للقطعة</th>
-                                          <th className="p-2.5 text-left font-bold text-emerald-300">إجمالي سعر البيع</th>
-                                          <th className="p-2.5 text-center">حذف / إرجاع للمخزن</th>
+                                          <th className="p-2.5">اسم القطعة</th>
+                                          <th className="p-2.5 text-center">الكمية</th>
+                                          <th className="p-2.5 text-center">سعر تكلفة الشراء</th>
+                                          <th className="p-2.5 text-left font-bold text-emerald-300">إجمالي التكلفة</th>
+                                          <th className="p-2.5 text-center">إجراءات</th>
                                         </tr>
                                       </thead>
                                       <tbody className="divide-y divide-[#1f2937]">
@@ -1885,12 +1908,16 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                       </tbody>
                                     </table>
                                   </div>
+                                ) : (
+                                  <div className="p-3 bg-[#11131e]/50 border border-dashed border-rose-500/20 rounded-xl text-center text-xs text-gray-400">
+                                    لم يتم إضافة قطع غيار لهذا الجهاز بعد. انقر على زر "إضافة قطعة من المخزن" لإضافة قطع غيار وسحبها من المخزون.
+                                  </div>
                                 )}
 
                                 {/* Display calculated read-only parts total */}
                                 <div className="pt-2 border-t border-rose-500/20 flex justify-between items-center text-xs">
-                                  <span className="text-gray-300 font-bold">إجمالي سعر قطع الغيار المسحوبة (سعر البيع):</span>
-                                  <span className="font-mono font-extrabold text-emerald-400 text-sm bg-emerald-950/60 px-3 py-1 rounded-lg border border-emerald-500/30">
+                                  <span className="text-gray-300 font-bold">إجمالي تكلفة قطع الغيار المسحوبة:</span>
+                                  <span className="font-mono font-extrabold text-rose-400 text-sm bg-rose-950/60 px-3 py-1 rounded-lg border border-rose-500/30">
                                     {devicePartsTotalCost.toLocaleString('ar-EG')} ج.م
                                   </span>
                                 </div>
@@ -2297,6 +2324,143 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
           currentUser={currentUserForAction}
           onConfirmCancel={handleConfirmCancelWarranty}
         />
+      )}
+
+      {/* MODAL: Add Part From Inventory with Quantity & Purchase Cost Preview */}
+      {addPartModalOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 dir-rtl text-right">
+          <div className="bg-[#11131e] border border-[#2a2d42] rounded-2xl w-full max-w-md p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-[#2a2d42] pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-rose-500/20 text-rose-400 rounded-xl border border-rose-500/30">
+                  <Package className="w-5 h-5" />
+                </div>
+                <h4 className="text-sm font-black text-white">إضافة قطعة من المخزن للجهاز</h4>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAddPartModalOpen(false)}
+                className="text-gray-400 hover:text-white p-1 rounded-lg transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Product Selector */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-gray-300 block">اختر قطعة الغيار من المخزن *</label>
+              <select
+                value={addPartProductId}
+                onChange={(e) => {
+                  setAddPartProductId(e.target.value);
+                  setAddPartQty(1);
+                }}
+                className="w-full bg-[#181b2a] border border-[#2a2d42] text-white text-xs p-2.5 rounded-xl outline-none focus:border-rose-500"
+              >
+                <option value="">-- اختر قطعة --</option>
+                {products.filter(p => !p.isArchived).map((p) => {
+                  const cost = Number(p.purchasePrice || p.costPrice || 0);
+                  return (
+                    <option key={p.id} value={p.id} disabled={p.quantity <= 0}>
+                      {p.nameAr || p.name} (المتاح: {p.quantity} قطعة | تكلفة الشراء: {cost} ج.م)
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+
+            {(() => {
+              const selectedProd = products.find(p => p.id === addPartProductId);
+              const unitCost = selectedProd ? Number(selectedProd.purchasePrice || selectedProd.costPrice || 0) : 0;
+              const maxQty = selectedProd ? selectedProd.quantity : 1;
+              const totalCost = addPartQty * unitCost;
+
+              return (
+                <>
+                  {/* Stock & Cost Info */}
+                  {selectedProd && (
+                    <div className="bg-[#181b2a] p-3 rounded-xl border border-[#2a2d42] space-y-2 text-xs">
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-400">الكمية المتاحة بالمخزن:</span>
+                        <span className={`font-bold font-mono ${selectedProd.quantity > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {selectedProd.quantity} قطعة
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-400">سعر تكلفة الشراء للقطعة:</span>
+                        <span className="font-bold font-mono text-amber-300">{unitCost.toLocaleString('ar-EG')} ج.م</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Quantity Selector */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-300 block">الكمية المطلوبة *</label>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        disabled={addPartQty <= 1}
+                        onClick={() => setAddPartQty(prev => Math.max(1, prev - 1))}
+                        className="w-10 h-10 bg-[#181b2a] border border-[#2a2d42] hover:bg-[#25293e] text-white font-black rounded-xl flex items-center justify-center cursor-pointer transition disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        -
+                      </button>
+                      <input
+                        type="number"
+                        min="1"
+                        max={maxQty}
+                        value={addPartQty}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value) || 1;
+                          setAddPartQty(Math.min(maxQty, Math.max(1, val)));
+                        }}
+                        className="flex-1 bg-[#181b2a] border border-[#2a2d42] text-center text-white text-base font-mono font-black p-2 rounded-xl outline-none focus:border-rose-500"
+                      />
+                      <button
+                        type="button"
+                        disabled={!selectedProd || addPartQty >= maxQty}
+                        onClick={() => setAddPartQty(prev => Math.min(maxQty, prev + 1))}
+                        className="w-10 h-10 bg-[#181b2a] border border-[#2a2d42] hover:bg-[#25293e] text-white font-black rounded-xl flex items-center justify-center cursor-pointer transition disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Calculated Total Cost */}
+                  <div className="p-3 bg-rose-950/30 border border-rose-500/30 rounded-xl flex justify-between items-center text-xs">
+                    <span className="font-bold text-rose-300">إجمالي تكلفة قطع الغيار:</span>
+                    <span className="font-extrabold font-mono text-emerald-400 text-sm">
+                      {totalCost.toLocaleString('ar-EG')} ج.م
+                    </span>
+                  </div>
+
+                  {/* Confirm / Cancel Buttons */}
+                  <div className="flex gap-2 pt-2">
+                    <button
+                      type="button"
+                      disabled={!selectedProd || selectedProd.quantity < addPartQty || addPartQty <= 0}
+                      onClick={async () => {
+                        await handleAddPartToDevice(addPartDevIdx, addPartProductId, addPartQty);
+                        setAddPartModalOpen(false);
+                      }}
+                      className="flex-1 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold py-2.5 rounded-xl transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      تأكيد إضافة القطعة
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAddPartModalOpen(false)}
+                      className="px-4 bg-[#1a1d2d] hover:bg-[#25293e] text-gray-300 text-xs font-bold py-2.5 rounded-xl transition cursor-pointer"
+                    >
+                      إلغاء
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        </div>
       )}
     </div>
   );
