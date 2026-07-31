@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { supabase, isSupabaseConfigured } from "../lib/supabaseClient";
 import { fetchOrMigrateRepairPartUsages, addRepairPartUsageToSupabase } from "../lib/supabasePartUsages";
 import { fetchOrMigrateExpenses, addExpenseToSupabase } from "../lib/supabaseExpenses";
@@ -92,21 +92,27 @@ import {
 // Global Supabase Realtime channel subscription flag
 let realtimeSubscribed = false;
 
-export function safeDispatchEvent(eventName: string, detail?: any) {
-  if (typeof window !== 'undefined') {
-    setTimeout(() => {
-      window.dispatchEvent(new CustomEvent(eventName, { detail }));
-    }, 0);
-  }
-}
-
 // Global trigger listener
-function useDbTrigger() {
+function useDbTrigger(watchedKeys?: string[]) {
   const [trigger, setTrigger] = useState(0);
+  const watchedKeysRef = useRef<string[] | undefined>(watchedKeys);
+  watchedKeysRef.current = watchedKeys;
 
   useEffect(() => {
-    const handleDbChange = () => {
-      setTrigger(prev => prev + 1);
+    const normalizeKey = (value?: string) => {
+      if (!value) return '';
+      return value.startsWith('atari_') ? value : `atari_${value}`;
+    };
+
+    const handleDbChange = (event?: Event) => {
+      const detail = (event as CustomEvent | undefined)?.detail as any;
+      const changedKey = normalizeKey(detail?.key || detail?.table);
+      const keys = watchedKeysRef.current;
+
+      // Auth events and unscoped events intentionally refresh all consumers.
+      if (!keys || keys.length === 0 || !changedKey || keys.some(key => normalizeKey(key) === changedKey)) {
+        setTrigger(prev => prev + 1);
+      }
     };
 
     window.addEventListener("atari_db_changed", handleDbChange);
@@ -123,7 +129,7 @@ function useDbTrigger() {
             { event: '*', schema: 'public' },
             (payload) => {
               console.log('⚡ Supabase Realtime change event received:', payload.table, payload.eventType);
-              safeDispatchEvent('atari_db_changed', payload);
+              window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: payload }));
             }
           )
           .subscribe((status) => {
@@ -189,14 +195,14 @@ export function useCustomers() {
       const filtered = prev.filter(c => c.id !== newCust.id && c.phone !== newCust.phone);
       return [newCust, ...filtered];
     });
-    safeDispatchEvent('atari_db_changed', { key: 'atari_customers' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_customers' } }));
     return newCust;
   };
 
   const updateCustomer = async (customer: Customer, currentUser?: User) => {
     const updated = await updateCustomerInSupabase(customer, currentUser);
     setCustomers(prev => prev.map(c => c.id === updated.id ? updated : c));
-    safeDispatchEvent('atari_db_changed', { key: 'atari_customers' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_customers' } }));
     return updated;
   };
 
@@ -204,7 +210,7 @@ export function useCustomers() {
     const res = await deleteCustomerFromSupabase(id, currentUser);
     if (res.success) {
       setCustomers(prev => prev.filter(c => c.id !== id));
-      safeDispatchEvent('atari_db_changed', { key: 'atari_customers' });
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_customers' } }));
     }
     return res;
   };
@@ -213,7 +219,7 @@ export function useCustomers() {
 }
 
 export function useRepairOrders() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_repair_orders']);
   const [orders, setOrders] = useState<RepairOrder[]>(getLocalRepairOrdersBackup());
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -272,18 +278,14 @@ export function useRepairOrders() {
   ) => {
     const created = await addRepairOrderToSupabase(order, currentUser);
     setOrders(prev => [created, ...prev.filter(o => o.id !== created.id)]);
-    safeDispatchEvent('atari_db_changed', { key: 'atari_repair_orders' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_orders' } }));
     return created;
-  };
-
-  const updateRepairOrderLocal = (order: RepairOrder) => {
-    setOrders(prev => prev.map(o => o.id === order.id ? order : o));
   };
 
   const updateRepairOrder = async (order: RepairOrder, currentUser?: User) => {
     const updated = await updateRepairOrderInSupabase(order, currentUser);
     setOrders(prev => prev.map(o => o.id === updated.id ? updated : o));
-    safeDispatchEvent('atari_db_changed', { key: 'atari_repair_orders' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_orders' } }));
     return updated;
   };
 
@@ -291,7 +293,7 @@ export function useRepairOrders() {
     const res = await deleteRepairOrderFromSupabase(id, currentUser);
     if (res.success) {
       setOrders(prev => prev.filter(o => o.id !== id));
-      safeDispatchEvent('atari_db_changed', { key: 'atari_repair_orders' });
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_orders' } }));
     }
     return res;
   };
@@ -314,9 +316,9 @@ export function useRepairOrders() {
         });
       }
       setOrders(prev => prev.map(o => o.id === res.order!.id ? res.order! : o));
-      safeDispatchEvent('atari_db_changed', { key: 'atari_repair_orders' });
-      safeDispatchEvent('atari_db_changed', { key: 'atari_invoices' });
-      safeDispatchEvent('atari_db_changed', { key: 'atari_customers' });
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_orders' } }));
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_invoices' } }));
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_customers' } }));
     }
     return res;
   };
@@ -328,18 +330,22 @@ export function useRepairOrders() {
         console.warn("Could not sync reopen status to Supabase:", err);
       });
       setOrders(prev => prev.map(o => o.id === res.order!.id ? res.order! : o));
-      safeDispatchEvent('atari_db_changed', { key: 'atari_repair_orders' });
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_orders' } }));
     }
     return res;
+  };
+
+  const setRepairOrderLocal = (order: RepairOrder) => {
+    setOrders(prev => prev.map(item => item.id === order.id ? order : item));
   };
 
   return {
     orders,
     loading,
     error,
+    setRepairOrderLocal,
     addRepairOrder,
     updateRepairOrder,
-    updateRepairOrderLocal,
     deleteRepairOrder,
     deliverRepairOrder,
     reopenRepairOrder
@@ -347,7 +353,7 @@ export function useRepairOrders() {
 }
 
 export function useProducts() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_products']);
   const [products, setProducts] = useState<Product[]>(getLocalProductsBackup());
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -381,18 +387,14 @@ export function useProducts() {
   const addProduct = async (product: Omit<Product, "id">, userId?: string) => {
     const newProd = await addProductToSupabase(product, userId);
     setProducts(prev => [newProd, ...prev.filter(p => p.id !== newProd.id)]);
-    safeDispatchEvent('atari_db_changed', { key: 'atari_products' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
     return newProd;
-  };
-
-  const updateProductLocal = (product: Product) => {
-    setProducts(prev => prev.map(p => p.id === product.id ? product : p));
   };
 
   const updateProduct = async (product: Product, userId?: string, reason?: string) => {
     const updated = await updateProductInSupabase(product, userId, reason);
     setProducts(prev => prev.map(p => p.id === updated.id ? updated : p));
-    safeDispatchEvent('atari_db_changed', { key: 'atari_products' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
     return updated;
   };
 
@@ -400,7 +402,7 @@ export function useProducts() {
     const res = await deleteProductFromSupabase(id, currentUser);
     if (res.success) {
       setProducts(prev => prev.filter(p => p.id !== id));
-      safeDispatchEvent('atari_db_changed', { key: 'atari_products' });
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
     }
     return res;
   };
@@ -437,7 +439,11 @@ export function useProducts() {
     return res;
   };
 
-  return { products, loading, error, addProduct, updateProduct, updateProductLocal, deleteProduct, withdrawProduct, returnProduct };
+  const setProductLocal = (product: Product) => {
+    setProducts(prev => prev.map(item => item.id === product.id ? product : item));
+  };
+
+  return { products, loading, error, setProductLocal, addProduct, updateProduct, deleteProduct, withdrawProduct, returnProduct };
 }
 
 export function useInventoryMovements(productId?: string) {
@@ -510,14 +516,14 @@ export function useSuppliers() {
   const addSupplier = async (supplier: Omit<Supplier, "id">, currentUser?: User) => {
     const newSupplier = await addSupplierToSupabase(supplier, currentUser);
     setSuppliers(prev => [newSupplier, ...prev.filter(s => s.id !== newSupplier.id)]);
-    safeDispatchEvent('atari_db_changed', { key: 'atari_suppliers' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_suppliers' } }));
     return newSupplier;
   };
 
   const updateSupplier = async (supplier: Supplier, currentUser?: User) => {
     const updated = await updateSupplierInSupabase(supplier, currentUser);
     setSuppliers(prev => prev.map(s => s.id === updated.id ? updated : s));
-    safeDispatchEvent('atari_db_changed', { key: 'atari_suppliers' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_suppliers' } }));
     return updated;
   };
 
@@ -525,7 +531,7 @@ export function useSuppliers() {
     const res = await deleteSupplierFromSupabase(id, currentUser);
     if (res.success) {
       setSuppliers(prev => prev.filter(s => s.id !== id));
-      safeDispatchEvent('atari_db_changed', { key: 'atari_suppliers' });
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_suppliers' } }));
     }
     return res;
   };
@@ -574,7 +580,7 @@ export function useInvoices() {
   ) => {
     const newInv = await addInvoiceToSupabase(invoiceData, currentUser);
     setInvoices(prev => [newInv, ...prev.filter(i => i.id !== newInv.id)]);
-    safeDispatchEvent('atari_db_changed', { key: 'atari_invoices' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_invoices' } }));
     return newInv;
   };
 
@@ -582,7 +588,7 @@ export function useInvoices() {
     const res = await cancelInvoiceInSupabase(invoiceId, reason, currentUser);
     if (res.success) {
       setInvoices(prev => prev.map(i => i.id === invoiceId ? { ...i, status: 'cancelled', isPaid: false } : i));
-      safeDispatchEvent('atari_db_changed', { key: 'atari_invoices' });
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_invoices' } }));
     }
     return res;
   };
@@ -608,7 +614,7 @@ export function useExpenses() {
     addExpenseToSupabase(expense);
     const created = db.addExpense(expense);
     setExpenses(prev => [created, ...prev]);
-    safeDispatchEvent('atari_db_changed', { key: 'atari_expenses' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_expenses' } }));
     return created;
   };
 
@@ -637,7 +643,7 @@ export function useSettings() {
   const updateSettings = (newSettings: SystemSettings) => {
     db.saveSettings(newSettings);
     setSettings(newSettings);
-    safeDispatchEvent('atari_db_changed', { key: 'atari_settings' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_settings' } }));
   };
 
   return { settings, updateSettings };
@@ -654,7 +660,7 @@ export function useCurrentUser() {
   const changeCurrentUser = (newUser: User) => {
     db.setCurrentUser(newUser);
     setUser(newUser);
-    safeDispatchEvent('atari_auth_changed', { key: 'atari_auth' });
+    window.dispatchEvent(new CustomEvent('atari_auth_changed', { detail: { key: 'atari_auth' } }));
   };
 
   return { user, changeCurrentUser };
@@ -678,7 +684,7 @@ export function useUsers() {
     db.saveUsers(list);
     db.logActivity("U-101", "أحمد محمد", "إضافة مستخدم", `تم إضافة الموظف الجديد ${newUser.name}`);
     setUsers(prev => [...prev, newUser]);
-    safeDispatchEvent('atari_db_changed', { key: 'atari_users' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_users' } }));
     return newUser;
   };
 
@@ -689,7 +695,7 @@ export function useUsers() {
       list[index] = user;
       db.saveUsers(list);
       setUsers(prev => prev.map(u => u.id === user.id ? user : u));
-      safeDispatchEvent('atari_db_changed', { key: 'atari_users' });
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_users' } }));
     }
   };
 
@@ -743,7 +749,7 @@ export function useCategories() {
     const newCat = await addCategoryToSupabase(cat);
     const refreshed = await getCategoriesFromSupabase();
     setCategories(refreshed);
-    safeDispatchEvent('atari_db_changed', { key: 'atari_categories' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_categories' } }));
     return newCat;
   };
 
@@ -751,7 +757,7 @@ export function useCategories() {
     const updated = await updateCategoryInSupabase(cat);
     const refreshed = await getCategoriesFromSupabase();
     setCategories(refreshed);
-    safeDispatchEvent('atari_db_changed', { key: 'atari_categories' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_categories' } }));
     return updated;
   };
 
@@ -762,7 +768,7 @@ export function useCategories() {
     if (res.success) {
       const refreshed = await getCategoriesFromSupabase();
       setCategories(refreshed);
-      safeDispatchEvent('atari_db_changed', { key: 'atari_categories' });
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_categories' } }));
     }
     return res;
   };
@@ -784,7 +790,7 @@ export function useDeviceTypes() {
     const created = await addDeviceTypeToSupabase(dt);
     const refreshed = await fetchDeviceTypesFromSupabase();
     setDeviceTypes(refreshed);
-    safeDispatchEvent('atari_db_changed', { key: 'atari_device_types' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_device_types' } }));
     return created;
   };
 
@@ -792,14 +798,14 @@ export function useDeviceTypes() {
     await updateDeviceTypeInSupabase(dt);
     const refreshed = await fetchDeviceTypesFromSupabase();
     setDeviceTypes(refreshed);
-    safeDispatchEvent('atari_db_changed', { key: 'atari_device_types' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_device_types' } }));
   };
 
   const deleteDeviceType = async (id: string) => {
     const res = await deleteDeviceTypeInSupabase(id);
     const refreshed = await fetchDeviceTypesFromSupabase();
     setDeviceTypes(refreshed);
-    safeDispatchEvent('atari_db_changed', { key: 'atari_device_types' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_device_types' } }));
     return res;
   };
 
@@ -820,7 +826,7 @@ export function useDeviceModels() {
     const created = await addDeviceModelToSupabase(m);
     const refreshed = await fetchDeviceModelsFromSupabase();
     setDeviceModels(refreshed);
-    safeDispatchEvent('atari_db_changed', { key: 'atari_device_models' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_device_models' } }));
     return created;
   };
 
@@ -828,14 +834,14 @@ export function useDeviceModels() {
     await updateDeviceModelInSupabase(m);
     const refreshed = await fetchDeviceModelsFromSupabase();
     setDeviceModels(refreshed);
-    safeDispatchEvent('atari_db_changed', { key: 'atari_device_models' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_device_models' } }));
   };
 
   const deleteDeviceModel = async (id: string) => {
     const res = await deleteDeviceModelInSupabase(id);
     const refreshed = await fetchDeviceModelsFromSupabase();
     setDeviceModels(refreshed);
-    safeDispatchEvent('atari_db_changed', { key: 'atari_device_models' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_device_models' } }));
     return res;
   };
 
@@ -853,20 +859,20 @@ export function useCommonFaults() {
   const addCommonFault = (f: Omit<CommonFault, "id">) => {
     const created = db.addCommonFault(f);
     setCommonFaults(db.getCommonFaults());
-    safeDispatchEvent('atari_db_changed', { key: 'atari_common_faults' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_common_faults' } }));
     return created;
   };
 
   const updateCommonFault = (f: CommonFault) => {
     db.updateCommonFault(f);
     setCommonFaults(db.getCommonFaults());
-    safeDispatchEvent('atari_db_changed', { key: 'atari_common_faults' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_common_faults' } }));
   };
 
   const deleteCommonFault = (id: string) => {
     const res = db.deleteCommonFault(id);
     setCommonFaults(db.getCommonFaults());
-    safeDispatchEvent('atari_db_changed', { key: 'atari_common_faults' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_common_faults' } }));
     return res;
   };
 
@@ -884,20 +890,20 @@ export function useRepairServices() {
   const addRepairService = (s: Omit<RepairService, "id">) => {
     const created = db.addRepairService(s);
     setRepairServices(db.getRepairServices());
-    safeDispatchEvent('atari_db_changed', { key: 'atari_repair_services' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_services' } }));
     return created;
   };
 
   const updateRepairService = (s: RepairService) => {
     db.updateRepairService(s);
     setRepairServices(db.getRepairServices());
-    safeDispatchEvent('atari_db_changed', { key: 'atari_repair_services' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_services' } }));
   };
 
   const deleteRepairService = (id: string) => {
     const res = db.deleteRepairService(id);
     setRepairServices(db.getRepairServices());
-    safeDispatchEvent('atari_db_changed', { key: 'atari_repair_services' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_services' } }));
     return res;
   };
 
@@ -915,20 +921,20 @@ export function useDefaultPrices() {
   const addDefaultPrice = (p: Omit<DefaultPrice, "id">) => {
     const created = db.addDefaultPrice(p);
     setDefaultPrices(db.getDefaultPrices());
-    safeDispatchEvent('atari_db_changed', { key: 'atari_default_prices' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_default_prices' } }));
     return created;
   };
 
   const updateDefaultPrice = (p: DefaultPrice) => {
     db.updateDefaultPrice(p);
     setDefaultPrices(db.getDefaultPrices());
-    safeDispatchEvent('atari_db_changed', { key: 'atari_default_prices' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_default_prices' } }));
   };
 
   const deleteDefaultPrice = (id: string) => {
     const res = db.deleteDefaultPrice(id);
     setDefaultPrices(db.getDefaultPrices());
-    safeDispatchEvent('atari_db_changed', { key: 'atari_default_prices' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_default_prices' } }));
     return res;
   };
 
@@ -946,20 +952,20 @@ export function useReceivedAccessories() {
   const addReceivedAccessory = (acc: Omit<ReceivedAccessory, "id">) => {
     const created = db.addReceivedAccessory(acc);
     setReceivedAccessories(db.getReceivedAccessories());
-    safeDispatchEvent('atari_db_changed', { key: 'atari_received_accessories' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_received_accessories' } }));
     return created;
   };
 
   const updateReceivedAccessory = (acc: ReceivedAccessory) => {
     db.updateReceivedAccessory(acc);
     setReceivedAccessories(db.getReceivedAccessories());
-    safeDispatchEvent('atari_db_changed', { key: 'atari_received_accessories' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_received_accessories' } }));
   };
 
   const deleteReceivedAccessory = (id: string) => {
     const res = db.deleteReceivedAccessory(id);
     setReceivedAccessories(db.getReceivedAccessories());
-    safeDispatchEvent('atari_db_changed', { key: 'atari_received_accessories' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_received_accessories' } }));
     return res;
   };
 
@@ -977,20 +983,20 @@ export function useDeviceConditions() {
   const addDeviceCondition = (cond: Omit<DeviceCondition, "id">) => {
     const created = db.addDeviceCondition(cond);
     setDeviceConditions(db.getDeviceConditions());
-    safeDispatchEvent('atari_db_changed', { key: 'atari_device_conditions' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_device_conditions' } }));
     return created;
   };
 
   const updateDeviceCondition = (cond: DeviceCondition) => {
     db.updateDeviceCondition(cond);
     setDeviceConditions(db.getDeviceConditions());
-    safeDispatchEvent('atari_db_changed', { key: 'atari_device_conditions' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_device_conditions' } }));
   };
 
   const deleteDeviceCondition = (id: string) => {
     const res = db.deleteDeviceCondition(id);
     setDeviceConditions(db.getDeviceConditions());
-    safeDispatchEvent('atari_db_changed', { key: 'atari_device_conditions' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_device_conditions' } }));
     return res;
   };
 
@@ -1011,7 +1017,7 @@ export function useRepairTemplates() {
     const created = await addRepairTemplateToSupabase(item);
     const refreshed = await fetchRepairTemplatesFromSupabase();
     setRepairTemplates(refreshed);
-    safeDispatchEvent('atari_db_changed', { key: 'atari_repair_templates' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_templates' } }));
     return created;
   };
 
@@ -1019,7 +1025,7 @@ export function useRepairTemplates() {
     const updated = await updateRepairTemplateInSupabase(item);
     const refreshed = await fetchRepairTemplatesFromSupabase();
     setRepairTemplates(refreshed);
-    safeDispatchEvent('atari_db_changed', { key: 'atari_repair_templates' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_templates' } }));
     return updated;
   };
 
@@ -1027,7 +1033,7 @@ export function useRepairTemplates() {
     const res = await deleteRepairTemplateInSupabase(id);
     const refreshed = await fetchRepairTemplatesFromSupabase();
     setRepairTemplates(refreshed);
-    safeDispatchEvent('atari_db_changed', { key: 'atari_repair_templates' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_templates' } }));
     return res;
   };
 
@@ -1045,7 +1051,7 @@ export function usePartners() {
   const updatePartner = (partner: Partner) => {
     db.updatePartner(partner);
     setPartners(db.getPartners());
-    safeDispatchEvent('atari_db_changed', { key: 'atari_partners' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_partners' } }));
   };
 
   return { partners, updatePartner };
@@ -1068,7 +1074,7 @@ export function usePartnerLedger() {
   const addLedgerEntry = (entry: Omit<PartnerLedgerEntry, "id" | "createdAt" | "updatedAt">) => {
     const created = db.addPartnerLedgerEntry(entry);
     setLedger(db.getPartnerLedger());
-    safeDispatchEvent('atari_db_changed', { key: 'atari_partner_ledger' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_partner_ledger' } }));
     return created;
   };
 
@@ -1095,25 +1101,25 @@ export function usePartnerSettlements() {
     createDraftSettlement: (...args: Parameters<typeof db.createDraftSettlement>) => {
       const res = db.createDraftSettlement(...args);
       setSettlements(db.getPartnerSettlements());
-      safeDispatchEvent('atari_db_changed', { key: 'atari_partner_settlements' });
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_partner_settlements' } }));
       return res;
     },
     lockSettlement: (...args: Parameters<typeof db.lockSettlement>) => {
       const res = db.lockSettlement(...args);
       setSettlements(db.getPartnerSettlements());
-      safeDispatchEvent('atari_db_changed', { key: 'atari_partner_settlements' });
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_partner_settlements' } }));
       return res;
     },
     reverseSettlement: (...args: Parameters<typeof db.reverseSettlement>) => {
       const res = db.reverseSettlement(...args);
       setSettlements(db.getPartnerSettlements());
-      safeDispatchEvent('atari_db_changed', { key: 'atari_partner_settlements' });
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_partner_settlements' } }));
       return res;
     },
     recordSettlementPayment: (...args: Parameters<typeof db.recordSettlementPayment>) => {
       const res = db.recordSettlementPayment(...args);
       setSettlements(db.getPartnerSettlements());
-      safeDispatchEvent('atari_db_changed', { key: 'atari_partner_settlements' });
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_partner_settlements' } }));
       return res;
     }
   };
@@ -1136,21 +1142,21 @@ export function usePartnerTransactions() {
   const addTransaction = (tx: Omit<PartnerTransaction, "id" | "createdAt" | "status">) => {
     const created = db.addPartnerTransaction(tx);
     setTransactions(db.getPartnerTransactions());
-    safeDispatchEvent('atari_db_changed', { key: 'atari_partner_transactions' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_partner_transactions' } }));
     return created;
   };
 
   const reverseTransaction = (id: string, userId: string, reason: string) => {
     const res = db.reversePartnerTransaction(id, userId, reason);
     setTransactions(db.getPartnerTransactions());
-    safeDispatchEvent('atari_db_changed', { key: 'atari_partner_transactions' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_partner_transactions' } }));
     return res;
   };
 
   const deleteDraftTransaction = (id: string, userId: string) => {
     const res = db.deleteDraftPartnerTransaction(id, userId);
     setTransactions(db.getPartnerTransactions());
-    safeDispatchEvent('atari_db_changed', { key: 'atari_partner_transactions' });
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_partner_transactions' } }));
     return res;
   };
 
@@ -1158,7 +1164,7 @@ export function usePartnerTransactions() {
 }
 
 export function useRepairPartUsages() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_repair_part_usages']);
   const [partUsages, setPartUsages] = useState<RepairPartUsage[]>(() => db.getRepairPartUsages());
 
   useEffect(() => {
@@ -1171,25 +1177,46 @@ export function useRepairPartUsages() {
     return () => { active = false; };
   }, [trigger]);
 
-  const replacePartUsagesLocal = (next: RepairPartUsage[] | ((prev: RepairPartUsage[]) => RepairPartUsage[])) => {
+  const persistLocalUsages = (next: RepairPartUsage[]) => {
+    setPartUsages(next);
+    db.saveRepairPartUsages(next);
+  };
+
+  const upsertPartUsageLocal = (usage: RepairPartUsage) => {
     setPartUsages(prev => {
-      const resolved = typeof next === 'function'
-        ? (next as (prev: RepairPartUsage[]) => RepairPartUsage[])(prev)
-        : next;
-      setTimeout(() => db.saveRepairPartUsages(resolved), 0);
-      return resolved;
+      const exists = prev.some(item => item.id === usage.id);
+      const next = exists
+        ? prev.map(item => item.id === usage.id ? usage : item)
+        : [...prev, usage];
+      db.saveRepairPartUsages(next);
+      return next;
+    });
+  };
+
+  const replacePartUsageIdLocal = (temporaryId: string, persisted: RepairPartUsage) => {
+    setPartUsages(prev => {
+      const next = prev.map(item => item.id === temporaryId ? persisted : item);
+      db.saveRepairPartUsages(next);
+      return next;
     });
   };
 
   const addPartUsage = (part: Omit<RepairPartUsage, "id" | "createdAt">) => {
-    addRepairPartUsageToSupabase(part);
     const created = db.addRepairPartUsage(part);
-    setPartUsages(db.getRepairPartUsages());
-    safeDispatchEvent('atari_db_changed', { key: 'atari_repair_part_usages' });
+    upsertPartUsageLocal(created);
+    void addRepairPartUsageToSupabase(part).catch(err => {
+      console.warn('Could not sync repair part usage:', err);
+    });
     return created;
   };
 
-  return { partUsages, addPartUsage, replacePartUsagesLocal };
+  return {
+    partUsages,
+    addPartUsage,
+    persistLocalUsages,
+    upsertPartUsageLocal,
+    replacePartUsageIdLocal
+  };
 }
 
 export function useSettlementAuditLogs() {

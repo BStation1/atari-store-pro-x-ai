@@ -41,7 +41,7 @@ import {
   X,
   Truck
 } from "lucide-react";
-import { useRepairOrders, useCustomers, useProducts, useSettings, useInvoices, useCurrentUser, useRepairPartUsages, safeDispatchEvent } from "../hooks/useData";
+import { useRepairOrders, useCustomers, useProducts, useSettings, useInvoices, useCurrentUser, useRepairPartUsages } from "../hooks/useData";
 import { RepairOrder, RepairDevice, RepairStatus, DeviceType, PaymentMethod, WorkOwnershipType, User as UserType, QUICK_FAULTS_LIST, SelectedRepairItem, RepairPartUsage, Product } from "../types";
 import { getCustomerNameHelper, getCustomerPhoneHelper, getCustomerBadgeHelper, getDeviceDisplayName } from "../lib/customerDisplayHelper";
 import { PhoneDisplay } from "./PhoneDisplay";
@@ -109,54 +109,18 @@ interface RepairCenterProps {
 
 export default function RepairCenter({ initialStatusFilter, initialOrderId }: RepairCenterProps) {
   const { user: currentLoggedUser } = useCurrentUser();
-  const { orders, updateRepairOrder, updateRepairOrderLocal, deleteRepairOrder, deliverRepairOrder, reopenRepairOrder } = useRepairOrders();
+  const { orders, updateRepairOrder, setRepairOrderLocal, deleteRepairOrder, deliverRepairOrder, reopenRepairOrder } = useRepairOrders();
   const { customers, updateCustomer } = useCustomers();
-  const { products, updateProduct, updateProductLocal } = useProducts();
+  const { products, updateProduct, setProductLocal } = useProducts();
   const { settings } = useSettings();
   const { invoices, addInvoice } = useInvoices();
-  const { partUsages, addPartUsage, replacePartUsagesLocal } = useRepairPartUsages();
-
-  console.log("=== Repair Center: Component rendered ===");
-  console.log("=== Repair Center: Orders count ===", orders.length);
-
-  useEffect(() => {
-    const handleDbChanged = (e: any) => {
-      console.log("=== Repair Center: Event received ===", e?.detail);
-    };
-    window.addEventListener("atari_db_changed", handleDbChanged);
-    return () => window.removeEventListener("atari_db_changed", handleDbChanged);
-  }, []);
-
-  useEffect(() => {
-    console.log("=== Repair Center: Orders after refetch ===", orders.length);
-    if (orders.length > 0) {
-      const latest = orders[0];
-      console.log("Latest created Repair Order ID:", latest.id);
-      console.log("Latest status:", latest.status);
-      console.log("Latest branch_id:", (latest as any).branch_id || (latest as any).branchId || "N/A");
-      console.log("Latest customer_id:", latest.customerId || "N/A");
-      console.log("Latest guest_name:", latest.guestCustomerName || latest.guest_name || latest.customerNameSnapshot || "N/A");
-      console.log("Latest guest_phone:", latest.guestCustomerPhone || latest.guest_phone || latest.customerPhoneSnapshot || "N/A");
-      console.log("Latest created_at:", latest.receivedDate || "N/A");
-    }
-  }, [orders]);
+  const { partUsages, persistLocalUsages, upsertPartUsageLocal, replacePartUsageIdLocal } = useRepairPartUsages();
 
   const [activeTab, setActiveTab] = useState<string>(initialStatusFilter || "active_all");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedOrder, setSelectedOrder] = useState<RepairOrder | null>(
     initialOrderId ? orders.find(o => o.id === initialOrderId) || null : null
   );
-
-  // Sync selectedOrder whenever orders array updates if content actually changed
-  useEffect(() => {
-    setSelectedOrder(prev => {
-      if (!prev) return null;
-      const fresh = orders.find(o => o.id === prev.id);
-      if (!fresh) return prev;
-      if (JSON.stringify(fresh) === JSON.stringify(prev)) return prev;
-      return fresh;
-    });
-  }, [orders]);
 
   // Sub-Navigation Tabs inside Order Workspace
   const [workspaceTab, setWorkspaceTab] = useState<"workshop" | "timeline" | "audit">("workshop");
@@ -244,6 +208,22 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
   const [selectedPartIndex, setSelectedPartIndex] = useState<number | null>(null);
   const [showQuickFaultsDropdown, setShowQuickFaultsDropdown] = useState(false);
   const [busyProductIds, setBusyProductIds] = useState<Set<string>>(new Set());
+
+  // Keep the open order fresh, but never replace an optimistic workshop edit while a part mutation is running.
+  useEffect(() => {
+    if (busyProductIds.size > 0) return;
+    setSelectedOrder(prev => {
+      if (!prev) return null;
+      const fresh = orders.find(order => order.id === prev.id);
+      if (!fresh || fresh === prev) return prev;
+      const sameVersion =
+        fresh.updatedAt === prev.updatedAt &&
+        fresh.status === prev.status &&
+        fresh.finalRepairPrice === prev.finalRepairPrice &&
+        fresh.devices.length === prev.devices.length;
+      return sameVersion ? prev : fresh;
+    });
+  }, [orders, busyProductIds.size]);
 
   // Receipt Modal trigger
   const [receiptOrder, setReceiptOrder] = useState<RepairOrder | undefined>(undefined);
@@ -686,7 +666,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
     // 1. Synchronous Optimistic Update
     const newQty = product.quantity - qty;
-    updateProductLocal({
+    setProductLocal({
       ...product,
       quantity: newQty
     });
@@ -697,7 +677,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       String((selectedOrder as any).uuid || '')
     ].filter(Boolean));
 
-    const allUsages = db.getRepairPartUsages();
+    const allUsages = partUsages;
     const existingUsage = allUsages.find(
       pu => (orderIdsToMatch.has(String(pu.repairOrderId)) || pu.repairOrderId === selectedOrder.id || String(pu.repairOrderId) === String(selectedOrder.id)) &&
             (pu.inventoryItemId === product.id || ((product as any).uuid && pu.inventoryItemId === (product as any).uuid)) &&
@@ -744,7 +724,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       updatedUsageList.push(usageRecordToSave);
     }
 
-    replacePartUsagesLocal(updatedUsageList);
+    persistLocalUsages(updatedUsageList);
 
     // Recalculate device partsCost and grand total
     const activeUsagesForDevice = updatedUsageList.filter(
@@ -807,7 +787,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     );
 
     setSelectedOrder(updatedOrder);
-    updateRepairOrderLocal(updatedOrder);
+    setRepairOrderLocal(updatedOrder);
 
     const tLocal = performance.now();
     console.log(`⏱️ [AddPart] Local state & UI updated in ${(tLocal - t0).toFixed(2)}ms`);
@@ -818,12 +798,13 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       console.log(`⏱️ [AddPart] Background Supabase mutation started at ${(tMutStart - t0).toFixed(2)}ms`);
 
       try {
-        const productUuid = (await ensureProductUuidInSupabase(product)) || product.id;
-        const repairOrderUuid = (await ensureRepairOrderUuidInSupabase(selectedOrder)) || selectedOrder.id;
+        const [productUuid, repairOrderUuid] = await Promise.all([
+          ensureProductUuidInSupabase(product).then(value => value || product.id),
+          ensureRepairOrderUuidInSupabase(selectedOrder).then(value => value || selectedOrder.id)
+        ]);
 
-        updateProductQuantityInSupabase(productUuid, newQty).catch(err => console.warn("Supabase qty update warn:", err));
-
-        addInventoryMovementToSupabase({
+        const quantityPromise = updateProductQuantityInSupabase(productUuid, newQty);
+        const movementPromise = addInventoryMovementToSupabase({
           productId: productUuid,
           productNameSnapshot: product.nameAr || product.name,
           movementType: 'REPAIR_USAGE',
@@ -834,23 +815,24 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
           sellingPriceSnapshot: unitSellingPrice,
           totalCost: totalCost,
           referenceId: selectedOrder.id,
-          repairOrderId: selectedOrder.id,
+          repairOrderId: repairOrderUuid,
           owner: owner,
           notes: `صرف قطعة غيار صيانة: ${product.nameAr || product.name} للجهاز (${getDeviceDisplayName(currentDevice)})`,
           createdAt: new Date().toISOString()
-        }).catch(err => console.warn("Supabase movement warn:", err));
+        });
 
+        let usagePromise: Promise<any>;
         if (existingUsage) {
-          updateRepairPartUsageInSupabase(existingUsage.id, {
+          usagePromise = updateRepairPartUsageInSupabase(existingUsage.id, {
             quantity: usageRecordToSave.quantity,
             unitCost: unitPurchaseCost,
             totalCost: usageRecordToSave.totalCost,
             sellingPrice: unitSellingPrice,
             sellingTotal: usageRecordToSave.sellingTotal
-          }).catch(err => console.warn("Supabase usage update warn:", err));
+          });
         } else {
-          const addedUsage = await addRepairPartUsageToSupabase({
-            repairOrderId: selectedOrder.id,
+          usagePromise = addRepairPartUsageToSupabase({
+            repairOrderId: repairOrderUuid,
             inventoryItemId: productUuid,
             partName: product.nameAr || product.name,
             sku: product.sku || product.id,
@@ -864,17 +846,22 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
             accountingStatus: 'CONSUMED',
             notes: `deviceId:${currentDevice.id || deviceIdx}`
           });
-
-          if (addedUsage && addedUsage.id !== usageRecordToSave.id) {
-            const currentLatestUsages = db.getRepairPartUsages();
-            const reconciledList = currentLatestUsages.map(u =>
-              u.id === usageRecordToSave.id ? { ...addedUsage, repairOrderId: selectedOrder.id } : u
-            );
-            replacePartUsagesLocal(reconciledList);
-          }
         }
 
-        updateRepairOrderInSupabase(updatedOrder).catch(err => console.warn("Supabase order update warn:", err));
+        const [, , persistedUsage] = await Promise.all([
+          quantityPromise,
+          movementPromise,
+          usagePromise,
+          updateRepairOrderInSupabase(updatedOrder)
+        ]);
+
+        if (!existingUsage && persistedUsage?.id && persistedUsage.id !== usageRecordToSave.id) {
+          replacePartUsageIdLocal(usageRecordToSave.id, {
+            ...usageRecordToSave,
+            ...persistedUsage,
+            repairOrderId: selectedOrder.id
+          });
+        }
 
         const tMutEnd = performance.now();
         console.log(`⏱️ [AddPart] Background Supabase mutation completed in ${(tMutEnd - tMutStart).toFixed(2)}ms (Total since click: ${(tMutEnd - t0).toFixed(2)}ms)`);
@@ -882,16 +869,17 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       } catch (mutationError: any) {
         console.error("❌ [AddPart] Background mutation failed, rolling back:", mutationError);
         // Rollback optimistic update
-        updateProductLocal({ ...product, quantity: product.quantity });
-        const currentUsages = db.getRepairPartUsages();
+        setProductLocal({ ...product, quantity: product.quantity });
+        const currentUsages = partUsages;
         const rollbackUsages = currentUsages.filter(u => u.id !== usageRecordToSave.id);
         if (existingUsage) {
-          replacePartUsagesLocal(currentUsages.map(u => u.id === existingUsage.id ? existingUsage : u));
+          persistLocalUsages(currentUsages.map(u => u.id === existingUsage.id ? existingUsage : u));
         } else {
-          replacePartUsagesLocal(rollbackUsages);
+          persistLocalUsages(rollbackUsages);
         }
         setSelectedOrder(selectedOrder);
-        updateRepairOrderLocal(selectedOrder);
+        setRepairOrderLocal(selectedOrder);
+
 
         dialog.alert({
           message: "حدث خطأ أثناء حفظ قطعة الغيار بالخادم، تم إلغاء العملية وتحديث المخزون.",
@@ -909,7 +897,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
   const handleRemovePartUsage = (usageId: string, deviceIdx: number, removeQty: number = 1) => {
     if (!selectedOrder) return;
-    const allUsages = db.getRepairPartUsages();
+    const allUsages = partUsages;
     const usage = allUsages.find(pu => pu.id === usageId);
     if (!usage) return;
 
@@ -924,7 +912,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
     // 1. Instant Synchronous Product Stock Update
     if (product) {
-      updateProduct({
+      setProductLocal({
         ...product,
         quantity: product.quantity + actualReturnedQty
       });
@@ -958,7 +946,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
         return pu;
       });
     }
-    db.saveRepairPartUsages(updatedUsages);
+    persistLocalUsages(updatedUsages);
 
     // 3. Instant Synchronous Order Recalculation
     const orderIdsToMatch = new Set<string>([
@@ -1014,25 +1002,23 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       };
 
       setSelectedOrder(updatedOrder);
-      updateRepairOrder(updatedOrder);
+      setRepairOrderLocal(updatedOrder);
     }
 
-    safeDispatchEvent('atari_db_changed', { key: 'atari_repair_part_usages' });
-    safeDispatchEvent('atari_db_changed', { key: 'atari_products' });
 
     // 4. Background Persistence to Supabase (Non-blocking)
     (async () => {
       try {
-        if (product) {
-          updateProductQuantityInSupabase(product.id, product.quantity + actualReturnedQty).catch(err => console.warn("Supabase qty restore warn:", err));
-        }
+        const quantityPromise = product
+          ? updateProductQuantityInSupabase(product.id, product.quantity + actualReturnedQty)
+          : Promise.resolve();
 
         const ownership = selectedOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
         let owner: 'SHOP' | 'AHMED' | 'ABDO' = 'SHOP';
         if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) owner = 'AHMED';
         else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) owner = 'ABDO';
 
-        addInventoryMovementToSupabase({
+        const movementPromise = addInventoryMovementToSupabase({
           id: `MOV-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
           productId: usage.inventoryItemId,
           productNameSnapshot: usage.partName,
@@ -1049,22 +1035,36 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
           owner: owner,
           notes: `إرجاع قطعة غيار صيانة للمخزن: ${usage.partName}`,
           createdAt: new Date().toISOString()
-        }).catch(err => console.warn("Supabase movement warn:", err));
+        });
 
+        let usagePromise: Promise<any>;
         if (isFullRemove) {
-          updateRepairPartUsageInSupabase(usageId, { accountingStatus: 'RETURNED' }).catch(err => console.warn(err));
+          usagePromise = updateRepairPartUsageInSupabase(usageId, { accountingStatus: 'RETURNED' });
         } else {
-          updateRepairPartUsageInSupabase(usageId, {
+          usagePromise = updateRepairPartUsageInSupabase(usageId, {
             quantity: newQty,
             totalCost: newTotalCost,
             sellingPrice: usageSellPrice,
             sellingTotal: newSellingTotal
-          }).catch(err => console.warn(err));
+          });
         }
 
-        updateRepairOrderInSupabase(updatedOrder).catch(err => console.warn(err));
+        await Promise.all([
+          quantityPromise,
+          movementPromise,
+          usagePromise!,
+          updateRepairOrderInSupabase(updatedOrder)
+        ]);
       } catch (err) {
-        console.warn("Background removal sync warning:", err);
+        console.error("Background removal sync failed; rolling back:", err);
+        if (product) setProductLocal(product);
+        persistLocalUsages(partUsages);
+        setSelectedOrder(selectedOrder);
+        setRepairOrderLocal(selectedOrder);
+        dialog.alert({
+          message: "تعذر حفظ تعديل قطعة الغيار، وتمت إعادة الكمية والحساب للحالة السابقة.",
+          variant: "error"
+        });
       } finally {
         setBusyProductIds(prev => {
           const next = new Set(prev);
