@@ -713,7 +713,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
       const allUsages = db.getRepairPartUsages();
       const existingUsage = allUsages.find(
-        pu => orderIdsToMatch.has(String(pu.repairOrderId)) &&
+        pu => (orderIdsToMatch.has(String(pu.repairOrderId)) || pu.repairOrderId === selectedOrder.id) &&
               (pu.inventoryItemId === productUuid || pu.inventoryItemId === product.id) &&
               pu.accountingStatus !== 'RETURNED' &&
               pu.accountingStatus !== 'REVERSED' &&
@@ -745,7 +745,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
         }).catch(err => console.warn("Supabase update usage warn:", err));
       } else {
         const addedUsage = await addRepairPartUsageToSupabase({
-          repairOrderId: repairOrderUuid,
+          repairOrderId: selectedOrder.id,
           inventoryItemId: productUuid,
           partName: product.nameAr || product.name,
           sku: product.sku || product.id,
@@ -760,11 +760,12 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
           notes: `deviceId:${currentDevice.id || deviceIdx}`
         });
         if (addedUsage) {
+          const usageWithOrderId = { ...addedUsage, repairOrderId: selectedOrder.id };
           const existsLocally = updatedUsageList.some(u => u.id === addedUsage.id);
           if (!existsLocally) {
-            updatedUsageList.push(addedUsage);
+            updatedUsageList.push(usageWithOrderId);
           } else {
-            updatedUsageList = updatedUsageList.map(u => u.id === addedUsage.id ? addedUsage : u);
+            updatedUsageList = updatedUsageList.map(u => u.id === addedUsage.id ? usageWithOrderId : u);
           }
           db.saveRepairPartUsages(updatedUsageList);
         }
@@ -837,6 +838,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));
         window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_inventory_movements' } }));
+        window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
       }
     } catch (err: any) {
       console.error("❌ Exception adding part to repair order:", err);
@@ -1065,7 +1067,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       const totalOrderPartsCost = selectedOrder.devices.reduce((sum, d) => sum + (Number(d.partsCost) || 0), 0);
       if (totalOrderPartsCost > 0) {
         const linkedUsages = partUsages.filter(
-          pu => pu.repairOrderId === selectedOrder.id && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
+          pu => (pu.repairOrderId === selectedOrder.id || String(pu.repairOrderId) === String(selectedOrder.id) || String(pu.repairOrderId) === String((selectedOrder as any).orderNumber)) && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
         );
         if (linkedUsages.length === 0) {
           dialog.alert({
@@ -1593,7 +1595,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
                 // Linked part usages for current device
                 const deviceLinkedUsages = partUsages.filter(
-                  pu => orderIdsToMatch.has(String(pu.repairOrderId)) &&
+                  pu => (orderIdsToMatch.has(String(pu.repairOrderId)) || pu.repairOrderId === selectedOrder.id || String(pu.repairOrderId) === String(selectedOrder.id)) &&
                         pu.accountingStatus !== 'RETURNED' &&
                         pu.accountingStatus !== 'REVERSED' &&
                         ((pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || devIdx}`)) || selectedOrder.devices.length === 1)
