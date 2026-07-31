@@ -36,10 +36,10 @@ export default function PartnerTransactionsModal({
     if ((type === "INVENTORY_WITHDRAWAL" || type === "INVENTORY_WITHDRAWAL_RETURN") && !selectedProductId && products.length > 0) {
       const avail = products.find(p => p.quantity > 0) || products[0];
       if (avail) {
-        setSelectedProductId(prev => prev || avail.id);
+        setSelectedProductId(avail.id);
       }
     }
-  }, [type, products, selectedProductId]);
+  }, [type, products.length, selectedProductId]);
 
   // Sync amount when product or quantity changes for INVENTORY_WITHDRAWAL or INVENTORY_WITHDRAWAL_RETURN
   useEffect(() => {

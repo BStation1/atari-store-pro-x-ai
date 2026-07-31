@@ -60,6 +60,46 @@ import {
   AUDIT_ACTION_LABELS 
 } from "../lib/repairLogging";
 
+export function getUsageSellingUnitPrice(pu: RepairPartUsage, productsList: Product[]): number {
+  if (pu.sellingPrice && pu.sellingPrice > 0) return pu.sellingPrice;
+  const prod = productsList.find(p => p.id === pu.inventoryItemId || (p.nameAr || p.name) === pu.partName);
+  if (prod && Number(prod.sellPrice || prod.price) > 0) {
+    return Number(prod.sellPrice || prod.price);
+  }
+  return pu.unitCost || 0;
+}
+
+export function isProductCompatibleWithDevice(product: Product, deviceType?: string, deviceModel?: string): boolean {
+  if (!product) return false;
+  const compTypes = product.compatibleDeviceTypes || [];
+  const compModels = product.compatibleModels || [];
+
+  if (compTypes.length === 0 && compModels.length === 0) {
+    return true; // Universal part if no restrictions
+  }
+
+  const dType = (deviceType || "").trim().toLowerCase();
+  const dModel = (deviceModel || "").trim().toLowerCase();
+
+  const typeMatch = compTypes.some(t => {
+    const tClean = t.trim().toLowerCase();
+    return tClean === dType || (dType && dType.includes(tClean)) || tClean.includes(dType);
+  });
+
+  const modelMatch = compModels.some(m => {
+    const mClean = m.trim().toLowerCase();
+    return mClean === dModel || (dModel && dModel.includes(mClean)) || mClean.includes(dModel) || (dType && dType.includes(mClean));
+  });
+
+  if (compTypes.length > 0 && compModels.length > 0) {
+    return typeMatch || modelMatch;
+  }
+  if (compTypes.length > 0) return typeMatch;
+  if (compModels.length > 0) return modelMatch;
+
+  return true;
+}
+
 interface RepairCenterProps {
   initialStatusFilter?: RepairStatus;
   initialOrderId?: string;
@@ -107,16 +147,13 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
   // Sync selectedOrder whenever orders array updates if content actually changed
   useEffect(() => {
-    if (selectedOrder) {
-      const fresh = orders.find(o => o.id === selectedOrder.id);
-      if (fresh) {
-        setSelectedOrder(prev => {
-          if (!prev) return fresh;
-          if (JSON.stringify(fresh) === JSON.stringify(prev)) return prev;
-          return fresh;
-        });
-      }
-    }
+    setSelectedOrder(prev => {
+      if (!prev) return null;
+      const fresh = orders.find(o => o.id === prev.id);
+      if (!fresh) return prev;
+      if (JSON.stringify(fresh) === JSON.stringify(prev)) return prev;
+      return fresh;
+    });
   }, [orders]);
 
   // Sub-Navigation Tabs inside Order Workspace
@@ -685,18 +722,23 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       if (existingUsage) {
         const newUsageQty = existingUsage.quantity + qty;
         const newUsageTotalCost = newUsageQty * unitPurchaseCost;
+        const newUsageSellingTotal = newUsageQty * unitSellingPrice;
         const updatedUsageRecord = {
           ...existingUsage,
           quantity: newUsageQty,
           unitCost: unitPurchaseCost,
-          totalCost: newUsageTotalCost
+          totalCost: newUsageTotalCost,
+          sellingPrice: unitSellingPrice,
+          sellingTotal: newUsageSellingTotal
         };
         updatedUsageList = allUsages.map(pu => pu.id === existingUsage.id ? updatedUsageRecord : pu);
         db.saveRepairPartUsages(updatedUsageList);
         updateRepairPartUsageInSupabase(existingUsage.id, {
           quantity: newUsageQty,
           unitCost: unitPurchaseCost,
-          totalCost: newUsageTotalCost
+          totalCost: newUsageTotalCost,
+          sellingPrice: unitSellingPrice,
+          sellingTotal: newUsageSellingTotal
         }).catch(err => console.warn("Supabase update usage warn:", err));
       } else {
         const addedUsage = await addRepairPartUsageToSupabase({
@@ -707,6 +749,8 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
           quantity: qty,
           unitCost: unitPurchaseCost,
           totalCost: totalCost,
+          sellingPrice: unitSellingPrice,
+          sellingTotal: unitSellingPrice * qty,
           ownershipType: ownership,
           responsiblePartnerId: owner === 'AHMED' ? 'P-001' : owner === 'ABDO' ? 'P-002' : 'SHOP',
           accountingStatus: 'CONSUMED',
@@ -723,7 +767,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
         }
       }
 
-      // 4. Recalculate device partsCost
+      // 4. Recalculate device partsCost (using selling price)
       const activeUsagesForDevice = updatedUsageList.filter(
         pu => orderIdsToMatch.has(String(pu.repairOrderId)) &&
               pu.accountingStatus !== 'RETURNED' &&
@@ -731,7 +775,10 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
               ((pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) || selectedOrder.devices.length === 1)
       );
 
-      const newPartsCost = activeUsagesForDevice.reduce((sum, pu) => sum + (Number(pu.totalCost) || (pu.quantity * pu.unitCost)), 0);
+      const newPartsCost = activeUsagesForDevice.reduce((sum, pu) => {
+        const sellP = getUsageSellingUnitPrice(pu, products);
+        return sum + (pu.quantity * sellP);
+      }, 0);
 
       const tags = currentDevice.selectedQuickFaults || (currentDevice.issue ? currentDevice.issue.split(" - ").map(s => s.trim()) : []);
       const faultsCost = currentDevice.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(tags);
@@ -852,17 +899,30 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     } else {
       const newQty = usage.quantity - actualReturnedQty;
       const newTotalCost = newQty * usage.unitCost;
-      updateRepairPartUsageInSupabase(usageId, { quantity: newQty, totalCost: newTotalCost }).catch(err => console.warn(err));
+      const usageSellPrice = getUsageSellingUnitPrice(usage, products);
+      const newSellingTotal = newQty * usageSellPrice;
+      updateRepairPartUsageInSupabase(usageId, {
+        quantity: newQty,
+        totalCost: newTotalCost,
+        sellingPrice: usageSellPrice,
+        sellingTotal: newSellingTotal
+      }).catch(err => console.warn(err));
       updatedUsages = allUsages.map(pu => {
         if (pu.id === usageId) {
-          return { ...pu, quantity: newQty, totalCost: newTotalCost };
+          return {
+            ...pu,
+            quantity: newQty,
+            totalCost: newTotalCost,
+            sellingPrice: usageSellPrice,
+            sellingTotal: newSellingTotal
+          };
         }
         return pu;
       });
     }
     db.saveRepairPartUsages(updatedUsages);
 
-    // 4. Recalculate device partsCost
+    // 4. Recalculate device partsCost (using selling price)
     const orderIdsToMatch = new Set<string>([
       String(selectedOrder.id || ''),
       String((selectedOrder as any).orderNumber || ''),
@@ -880,7 +940,10 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
         pu => (pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) || selectedOrder.devices.length === 1
       );
 
-      const newPartsCost = deviceRemainingUsages.reduce((sum, pu) => sum + (Number(pu.totalCost) || (pu.quantity * pu.unitCost)), 0);
+      const newPartsCost = deviceRemainingUsages.reduce((sum, pu) => {
+        const sellP = getUsageSellingUnitPrice(pu, products);
+        return sum + (pu.quantity * sellP);
+      }, 0);
 
       const tags = currentDevice.selectedQuickFaults || (currentDevice.issue ? currentDevice.issue.split(" - ").map(s => s.trim()) : []);
       const faultsCost = currentDevice.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(tags);
@@ -1689,21 +1752,36 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                     pu.accountingStatus !== 'REVERSED' &&
                                     ((pu.notes && pu.notes.includes(`deviceId:${device.id || devIdx}`)) || selectedOrder.devices.length === 1)
                             );
-                            const devicePartsTotalCost = deviceLinkedUsages.reduce((sum, pu) => sum + (Number(pu.totalCost) || (pu.quantity * pu.unitCost)), 0);
+
+                            const devicePartsTotalSelling = deviceLinkedUsages.reduce((sum, pu) => {
+                              const sellP = getUsageSellingUnitPrice(pu, products);
+                              return sum + (pu.quantity * sellP);
+                            }, 0);
+
+                            // Filter products compatible with device
+                            const compatibleParts = products.filter(p => !p.isArchived && isProductCompatibleWithDevice(p, device.type, device.model));
+                            const hasCompatibilityFilter = compatibleParts.length > 0 && compatibleParts.length < products.filter(p => !p.isArchived).length;
 
                             return (
                               <div className="bg-rose-950/20 border border-rose-500/30 p-4 rounded-xl space-y-3">
                                 <div className="flex flex-wrap justify-between items-center gap-2">
-                                  <h5 className="text-xs font-bold text-rose-300 flex items-center gap-1.5">
-                                    <Package className="w-4 h-4 text-rose-400" />
-                                    <span>2. قطع الغيار المستخدمة من المخزن</span>
-                                  </h5>
+                                  <div className="flex items-center gap-2">
+                                    <h5 className="text-xs font-bold text-rose-300 flex items-center gap-1.5">
+                                      <Package className="w-4 h-4 text-rose-400" />
+                                      <span>2. قطع الغيار المستخدمة من المخزن</span>
+                                    </h5>
+                                    {(device.type || device.model) && (
+                                      <span className="text-[10px] bg-rose-900/60 text-rose-200 border border-rose-500/30 px-2 py-0.5 rounded-full font-semibold">
+                                        قطع متوافقة مع {device.type || ''} {device.model || ''}
+                                      </span>
+                                    )}
+                                  </div>
 
                                   <button
                                     type="button"
                                     onClick={() => {
                                       setAddPartDevIdx(devIdx);
-                                      const avail = products.find(p => !p.isArchived && p.quantity > 0) || products.find(p => !p.isArchived);
+                                      const avail = compatibleParts.find(p => p.quantity > 0) || compatibleParts[0] || products.find(p => !p.isArchived);
                                       setAddPartProductId(avail ? avail.id : '');
                                       setAddPartQty(1);
                                       setAddPartModalOpen(true);
@@ -1721,7 +1799,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                     <Search className="w-3.5 h-3.5 text-gray-400 absolute right-3 top-2.5" />
                                     <input
                                       type="text"
-                                      placeholder="ابحث في قطع الغيار المتاحة بالمخزن..."
+                                      placeholder="ابحث في قطع الغيار المتاحة..."
                                       value={partSearch}
                                       onChange={e => setPartSearch(e.target.value)}
                                       className="w-full bg-[#11131e] border border-rose-500/30 rounded-xl pr-9 pl-3 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-rose-500"
@@ -1729,32 +1807,31 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                   </div>
                                 )}
 
-                                {/* Inventory Choice Chips */}
+                                {/* Compatible Inventory Choice Chips */}
                                 {(() => {
-                                  const availableParts = products.filter(p => !p.isArchived);
-                                  const filteredParts = availableParts.filter(p =>
+                                  const displayParts = (partSearch.trim() || !hasCompatibilityFilter ? products.filter(p => !p.isArchived) : compatibleParts).filter(p =>
                                     !partSearch.trim() ||
                                     p.name.toLowerCase().includes(partSearch.toLowerCase()) ||
                                     (p.nameAr && p.nameAr.toLowerCase().includes(partSearch.toLowerCase())) ||
                                     (p.category && p.category.toLowerCase().includes(partSearch.toLowerCase()))
                                   );
 
-                                  if (filteredParts.length === 0) {
+                                  if (displayParts.length === 0) {
                                     return (
                                       <p className="text-xs text-gray-400 italic py-2">
-                                        لا توجد قطع غيار مطابقة في المخزون.
+                                        لا توجد قطع غيار مطابقة في المخزون لهذا الجهاز.
                                       </p>
                                     );
                                   }
 
                                   return (
                                     <div className="flex flex-wrap gap-2 pt-1 max-h-[180px] overflow-y-auto p-1 custom-scrollbar">
-                                      {filteredParts.map(p => {
+                                      {displayParts.map(p => {
                                         const linkedUsages = deviceLinkedUsages.filter(pu => pu.inventoryItemId === p.id || pu.partName === (p.nameAr || p.name));
                                         const isSelected = linkedUsages.length > 0;
                                         const totalUsedQty = linkedUsages.reduce((sum, pu) => sum + (pu.quantity || 1), 0);
                                         const isOutOfStock = p.quantity <= 0 && !isSelected;
-                                        const unitCost = Number(p.purchasePrice || p.costPrice || 0);
+                                        const sellingPrice = Number(p.sellPrice || p.price || p.purchasePrice || 0);
 
                                         return (
                                           <div
@@ -1774,7 +1851,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                                 handleAddPartToDevice(devIdx, p.id, 1);
                                               }}
                                               className="flex items-center gap-1.5 px-2 py-0.5 cursor-pointer disabled:cursor-not-allowed hover:opacity-90 transition"
-                                              title={isSelected ? "انقر لإضافة قطعة إضافية من نفس النوع" : "انقر لإضافة القطعة للطلب"}
+                                              title={isSelected ? "انقر لإضافة قطعة إضافية" : "انقر لإضافة القطعة للطلب"}
                                             >
                                               <span className="text-[10px] text-emerald-400">{isSelected ? "☑" : "□"}</span>
                                               <span>{p.nameAr || p.name}</span>
@@ -1782,7 +1859,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                               <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-mono font-bold ${
                                                 isSelected ? "bg-rose-800 text-amber-200" : "bg-gray-900 text-emerald-400"
                                               }`}>
-                                                +{unitCost.toLocaleString('ar-EG')} ج.م
+                                                {sellingPrice.toLocaleString('ar-EG')} ج.م
                                               </span>
                                             </button>
 
@@ -1799,7 +1876,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                                     }
                                                   }}
                                                   className="text-rose-400 hover:text-white hover:bg-rose-600/50 px-1.5 py-0.2 rounded font-bold transition cursor-pointer"
-                                                  title="إنقاص قطعة واحدة"
+                                                  title="إنقاص الكمية (-1)"
                                                 >
                                                   -
                                                 </button>
@@ -1816,7 +1893,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                                     handleAddPartToDevice(devIdx, p.id, 1);
                                                   }}
                                                   className="text-emerald-400 hover:text-white hover:bg-emerald-600/50 px-1.5 py-0.2 rounded font-bold transition disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
-                                                  title="زيادة قطعة أخرى"
+                                                  title="زيادة الكمية (+1)"
                                                 >
                                                   +
                                                 </button>
@@ -1837,88 +1914,92 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                   );
                                 })()}
 
-                                {/* Active Linked Parts Detailed Table Summary */}
+                                {/* Simplified Table (ONLY 5 Columns) */}
                                 {deviceLinkedUsages.length > 0 ? (
-                                  <div className="overflow-x-auto rounded-xl border border-rose-500/30 bg-gray-950/90 mt-3 p-1">
-                                    <div className="px-3 py-1.5 bg-[#181b2a] border-b border-[#2a2d42] flex justify-between items-center text-xs font-bold text-rose-300">
-                                      <span>📋 قطع الغيار المستخدمة بالجهاز:</span>
-                                      <span className="text-[11px] text-gray-400">عدد الأصناف: ({deviceLinkedUsages.length})</span>
-                                    </div>
+                                  <div className="overflow-x-auto rounded-xl border border-rose-500/30 bg-gray-950/90 mt-3">
                                     <table className="w-full text-xs text-right text-gray-300 border-collapse">
                                       <thead className="bg-[#11131e] text-gray-400 font-semibold border-b border-[#2a2d42]">
                                         <tr>
                                           <th className="p-2.5">اسم القطعة</th>
+                                          <th className="p-2.5 text-center">سعر البيع</th>
                                           <th className="p-2.5 text-center">الكمية</th>
-                                          <th className="p-2.5 text-center">سعر تكلفة الشراء</th>
-                                          <th className="p-2.5 text-left font-bold text-emerald-300">إجمالي التكلفة</th>
+                                          <th className="p-2.5 text-left font-bold text-emerald-300">إجمالي الصنف</th>
                                           <th className="p-2.5 text-center">إجراءات</th>
                                         </tr>
                                       </thead>
                                       <tbody className="divide-y divide-[#1f2937]">
-                                        {deviceLinkedUsages.map((pu, puIdx) => (
-                                          <tr key={`${pu.id || 'pu'}-${puIdx}`} className="hover:bg-[#161927]">
-                                            <td className="p-2.5 font-bold text-white flex items-center gap-2">
-                                              <span className="w-2 h-2 rounded-full bg-rose-500 inline-block"></span>
-                                              <span>{pu.partName}</span>
-                                            </td>
-                                            <td className="p-2.5 text-center font-bold">
-                                              <div className="inline-flex items-center gap-1.5 bg-[#181b2a] px-2 py-1 rounded-lg border border-gray-700">
+                                        {deviceLinkedUsages.map((pu, puIdx) => {
+                                          const unitSellingP = getUsageSellingUnitPrice(pu, products);
+                                          const lineTotal = pu.quantity * unitSellingP;
+                                          const matchedProduct = products.find(p => p.id === pu.inventoryItemId);
+                                          const maxStock = matchedProduct ? matchedProduct.quantity : 0;
+
+                                          return (
+                                            <tr key={`${pu.id || 'pu'}-${puIdx}`} className="hover:bg-[#161927]">
+                                              <td className="p-2.5 font-bold text-white flex items-center gap-2">
+                                                <span className="w-2 h-2 rounded-full bg-rose-500 inline-block"></span>
+                                                <span>{pu.partName}</span>
+                                              </td>
+                                              <td className="p-2.5 text-center text-amber-300 font-mono font-bold">
+                                                {unitSellingP.toLocaleString('ar-EG')} ج.م
+                                              </td>
+                                              <td className="p-2.5 text-center font-bold">
+                                                <div className="inline-flex items-center gap-1.5 bg-[#181b2a] px-2 py-1 rounded-lg border border-gray-700">
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => handleRemovePartUsage(pu.id, devIdx, 1)}
+                                                    className="w-5 h-5 flex items-center justify-center bg-rose-950 hover:bg-rose-800 text-rose-200 rounded font-bold cursor-pointer transition"
+                                                    title="إنقاص الكمية (-1)"
+                                                  >
+                                                    -
+                                                  </button>
+
+                                                  <span className="font-mono text-cyan-300 text-xs px-1 min-w-[20px]">
+                                                    {pu.quantity}
+                                                  </span>
+
+                                                  <button
+                                                    type="button"
+                                                    disabled={maxStock <= 0}
+                                                    onClick={() => handleAddPartToDevice(devIdx, pu.inventoryItemId, 1)}
+                                                    className="w-5 h-5 flex items-center justify-center bg-emerald-950 hover:bg-emerald-800 text-emerald-200 rounded font-bold cursor-pointer transition disabled:opacity-30 disabled:cursor-not-allowed"
+                                                    title={maxStock <= 0 ? "المخزون المتاح نفذ" : "زيادة الكمية (+1)"}
+                                                  >
+                                                    +
+                                                  </button>
+                                                </div>
+                                              </td>
+                                              <td className="p-2.5 text-left font-mono font-bold text-emerald-400">
+                                                {lineTotal.toLocaleString('ar-EG')} ج.م
+                                              </td>
+                                              <td className="p-2.5 text-center">
                                                 <button
                                                   type="button"
-                                                  onClick={() => handleRemovePartUsage(pu.id, devIdx, 1)}
-                                                  className="w-5 h-5 flex items-center justify-center bg-rose-950 hover:bg-rose-800 text-rose-200 rounded font-bold cursor-pointer transition"
-                                                  title="خصم قطعة واحدة"
+                                                  onClick={() => handleRemovePartUsage(pu.id, devIdx, -1)}
+                                                  className="p-1.5 bg-rose-500/20 hover:bg-rose-500/40 text-rose-300 rounded-lg transition cursor-pointer inline-flex items-center gap-1"
+                                                  title="حذف القطعة وإرجاع كافة الكمية للمخزن"
                                                 >
-                                                  -
+                                                  <Trash2 className="w-3.5 h-3.5" />
+                                                  <span className="text-[10px]">إزالة</span>
                                                 </button>
-
-                                                <span className="font-mono text-cyan-300 text-xs px-1 min-w-[20px]">
-                                                  {pu.quantity}
-                                                </span>
-
-                                                <button
-                                                  type="button"
-                                                  onClick={() => handleAddPartToDevice(devIdx, pu.inventoryItemId, 1)}
-                                                  className="w-5 h-5 flex items-center justify-center bg-emerald-950 hover:bg-emerald-800 text-emerald-200 rounded font-bold cursor-pointer transition"
-                                                  title="إضافة قطعة أخرى من نفس النوع"
-                                                >
-                                                  +
-                                                </button>
-                                              </div>
-                                            </td>
-                                            <td className="p-2.5 text-center text-amber-300 font-mono font-bold">
-                                              {pu.unitCost.toLocaleString('ar-EG')} ج.م
-                                            </td>
-                                            <td className="p-2.5 text-left font-mono font-bold text-emerald-400">
-                                              {pu.totalCost.toLocaleString('ar-EG')} ج.م
-                                            </td>
-                                            <td className="p-2.5 text-center">
-                                              <button
-                                                type="button"
-                                                onClick={() => handleRemovePartUsage(pu.id, devIdx, -1)}
-                                                className="p-1.5 bg-rose-500/20 hover:bg-rose-500/40 text-rose-300 rounded-lg transition cursor-pointer flex items-center gap-1 mx-auto"
-                                                title="إلغاء و إرجاع كامل الحركة للمخزن"
-                                              >
-                                                <Trash2 className="w-3.5 h-3.5" />
-                                                <span className="text-[10px]">إرجاع للمخزن</span>
-                                              </button>
-                                            </td>
-                                          </tr>
-                                        ))}
+                                              </td>
+                                            </tr>
+                                          );
+                                        })}
                                       </tbody>
                                     </table>
                                   </div>
                                 ) : (
                                   <div className="p-3 bg-[#11131e]/50 border border-dashed border-rose-500/20 rounded-xl text-center text-xs text-gray-400">
-                                    لم يتم إضافة قطع غيار لهذا الجهاز بعد. انقر على زر "إضافة قطعة من المخزن" لإضافة قطع غيار وسحبها من المخزون.
+                                    لم يتم إضافة قطع غيار لهذا الجهاز بعد.
                                   </div>
                                 )}
 
-                                {/* Display calculated read-only parts total */}
+                                {/* Bottom Summary Box */}
                                 <div className="pt-2 border-t border-rose-500/20 flex justify-between items-center text-xs">
-                                  <span className="text-gray-300 font-bold">إجمالي تكلفة قطع الغيار المسحوبة:</span>
+                                  <span className="text-gray-300 font-bold">إجمالي سعر بيع قطع الغيار:</span>
                                   <span className="font-mono font-extrabold text-rose-400 text-sm bg-rose-950/60 px-3 py-1 rounded-lg border border-rose-500/30">
-                                    {devicePartsTotalCost.toLocaleString('ar-EG')} ج.م
+                                    {devicePartsTotalSelling.toLocaleString('ar-EG')} ج.م
                                   </span>
                                 </div>
                               </div>
@@ -2359,10 +2440,12 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
               >
                 <option value="">-- اختر قطعة --</option>
                 {products.filter(p => !p.isArchived).map((p) => {
-                  const cost = Number(p.purchasePrice || p.costPrice || 0);
+                  const currentDevice = selectedOrder?.devices?.[addPartDevIdx];
+                  const isComp = currentDevice ? isProductCompatibleWithDevice(p, currentDevice.type, currentDevice.model) : true;
+                  const price = Number(p.sellPrice || p.price || p.purchasePrice || 0);
                   return (
                     <option key={p.id} value={p.id} disabled={p.quantity <= 0}>
-                      {p.nameAr || p.name} (المتاح: {p.quantity} قطعة | تكلفة الشراء: {cost} ج.م)
+                      {p.nameAr || p.name} {isComp ? '✓' : '(غير محدد)'} - (المتاح: {p.quantity} | سعر البيع: {price} ج.م)
                     </option>
                   );
                 })}
@@ -2371,13 +2454,13 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
             {(() => {
               const selectedProd = products.find(p => p.id === addPartProductId);
-              const unitCost = selectedProd ? Number(selectedProd.purchasePrice || selectedProd.costPrice || 0) : 0;
+              const unitSellingPrice = selectedProd ? Number(selectedProd.sellPrice || selectedProd.price || selectedProd.purchasePrice || 0) : 0;
               const maxQty = selectedProd ? selectedProd.quantity : 1;
-              const totalCost = addPartQty * unitCost;
+              const lineTotalSelling = addPartQty * unitSellingPrice;
 
               return (
                 <>
-                  {/* Stock & Cost Info */}
+                  {/* Stock & Selling Price Info */}
                   {selectedProd && (
                     <div className="bg-[#181b2a] p-3 rounded-xl border border-[#2a2d42] space-y-2 text-xs">
                       <div className="flex justify-between items-center">
@@ -2387,8 +2470,8 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                         </span>
                       </div>
                       <div className="flex justify-between items-center">
-                        <span className="text-gray-400">سعر تكلفة الشراء للقطعة:</span>
-                        <span className="font-bold font-mono text-amber-300">{unitCost.toLocaleString('ar-EG')} ج.م</span>
+                        <span className="text-gray-400">سعر البيع للقطعة:</span>
+                        <span className="font-bold font-mono text-amber-300">{unitSellingPrice.toLocaleString('ar-EG')} ج.م</span>
                       </div>
                     </div>
                   )}
@@ -2427,11 +2510,11 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                     </div>
                   </div>
 
-                  {/* Calculated Total Cost */}
+                  {/* Calculated Total Selling Price */}
                   <div className="p-3 bg-rose-950/30 border border-rose-500/30 rounded-xl flex justify-between items-center text-xs">
-                    <span className="font-bold text-rose-300">إجمالي تكلفة قطع الغيار:</span>
+                    <span className="font-bold text-rose-300">إجمالي سعر بيع القطع:</span>
                     <span className="font-extrabold font-mono text-emerald-400 text-sm">
-                      {totalCost.toLocaleString('ar-EG')} ج.م
+                      {lineTotalSelling.toLocaleString('ar-EG')} ج.م
                     </span>
                   </div>
 

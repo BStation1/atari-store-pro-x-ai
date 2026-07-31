@@ -922,6 +922,8 @@ export interface RepairPartUsage {
   quantity: number;
   unitCost: number;
   totalCost: number;
+  sellingPrice?: number;
+  sellingTotal?: number;
   ownershipType: WorkOwnershipType;
   responsiblePartnerId: string;
   accountingStatus: "RESERVED" | "CONSUMED" | "RETURNED" | "SETTLED" | "REVERSED";

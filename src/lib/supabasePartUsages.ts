@@ -32,11 +32,13 @@ export async function fetchOrMigrateRepairPartUsages(): Promise<{
       id: String(r.id),
       repairOrderId: String(r.repair_order_id || r.repairOrderId || ''),
       inventoryItemId: String(r.inventory_item_id || r.inventoryItemId || ''),
-      partName: String(r.part_name || r.partName || ''),
+      partName: String(r.part_name_snapshot || r.part_name || r.partName || ''),
       sku: String(r.sku || ''),
       quantity: Number(r.quantity || 0),
-      unitCost: Number(r.unit_cost ?? r.unitCost ?? 0),
+      unitCost: Number(r.cost_price_snapshot ?? r.unit_cost ?? r.unitCost ?? 0),
       totalCost: Number(r.total_cost ?? r.totalCost ?? 0),
+      sellingPrice: Number(r.selling_price_snapshot ?? r.selling_unit_price_snapshot ?? r.sellingPrice ?? 0),
+      sellingTotal: Number(r.selling_total ?? r.sellingTotal ?? (Number(r.quantity || 0) * Number(r.selling_price_snapshot ?? r.sellingPrice ?? 0))),
       ownershipType: (r.ownership_type || r.ownershipType || 'CUSTOMER_SHARED') as any,
       responsiblePartnerId: String(r.responsible_partner_id || r.responsiblePartnerId || 'SHOP'),
       accountingStatus: (r.accounting_status || r.accountingStatus || 'CONSUMED') as any,
@@ -133,8 +135,9 @@ export async function addRepairPartUsageToSupabase(
     quantity: Number(partUsage.quantity || 1),
     cost_price_snapshot: Number(partUsage.unitCost || 0),
     unit_cost: Number(partUsage.unitCost || 0),
-    selling_price_snapshot: Number(partUsage.totalCost || (partUsage.quantity * partUsage.unitCost)),
+    selling_price_snapshot: Number(partUsage.sellingPrice || partUsage.unitCost || 0),
     total_cost: Number(partUsage.totalCost || (partUsage.quantity * partUsage.unitCost)),
+    selling_total: Number(partUsage.sellingTotal || (partUsage.quantity * (partUsage.sellingPrice || partUsage.unitCost || 0))),
     stock_ownership_snapshot: ownershipEnum,
     ownership_type: partUsage.ownershipType || 'CUSTOMER_SHARED',
     responsible_partner_id: partUsage.responsiblePartnerId || 'SHOP',
@@ -187,6 +190,8 @@ export async function updateRepairPartUsageInSupabase(id: string, updates: Parti
       if (updates.quantity !== undefined) rowUpdates.quantity = updates.quantity;
       if (updates.unitCost !== undefined) rowUpdates.unit_cost = updates.unitCost;
       if (updates.totalCost !== undefined) rowUpdates.total_cost = updates.totalCost;
+      if (updates.sellingPrice !== undefined) rowUpdates.selling_price_snapshot = updates.sellingPrice;
+      if (updates.sellingTotal !== undefined) rowUpdates.selling_total = updates.sellingTotal;
 
       const { error } = await supabase.from('repair_part_usages').update(rowUpdates).eq('id', id);
       if (error) {
