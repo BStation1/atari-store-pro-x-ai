@@ -104,6 +104,7 @@ export interface AppDataContextType {
   currentUser: User | null;
   hasOwner: boolean;
   timeline: BootstrapTimeline;
+  isRefreshing: boolean;
   
   // Datasets
   repairOrdersState: DatasetState<RepairOrder[]>;
@@ -150,11 +151,38 @@ export interface AppDataContextType {
 
 const AppDataContext = createContext<AppDataContextType | null>(null);
 
+function logStateTransition(field: string, prev: any, next: any, reason: string) {
+  const ts = new Date().toISOString().substring(11, 23);
+  console.log(`[STATE_TRACE ${ts}] [${field}] ${JSON.stringify(prev)} -> ${JSON.stringify(next)} | Reason: ${reason}`);
+}
+
+let subscriptionRegistrationCount = 0;
+
 export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [bootstrapState, setBootstrapState] = useState<BootstrapState>('BOOTING');
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [hasOwner, setHasOwner] = useState<boolean>(true);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+
+  const bootstrapStateRef = useRef<BootstrapState>('BOOTING');
+  const activeUserIdRef = useRef<string | null>(null);
+
+  const updateBootstrapState = (nextState: BootstrapState, reason: string) => {
+    const prev = bootstrapStateRef.current;
+    
+    // Monotonic Rule: Once APP_READY is reached, background refreshes must NOT revert to DATA_LOADING or AUTH_LOADING
+    if (prev === 'APP_READY' && (nextState === 'DATA_LOADING' || nextState === 'AUTH_LOADING' || nextState === 'BOOTING')) {
+      logStateTransition('bootstrapState', prev, nextState, `[BLOCKED non-monotonic transition] ${reason}`);
+      return;
+    }
+
+    if (prev !== nextState) {
+      logStateTransition('bootstrapState', prev, nextState, reason);
+      bootstrapStateRef.current = nextState;
+      setBootstrapState(nextState);
+    }
+  };
 
   // Performance timeline tracking
   const [timeline, setTimeline] = useState<BootstrapTimeline>({
@@ -193,11 +221,16 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   /**
    * Loads all required business datasets concurrently via Promise.allSettled
    */
-  const loadAppData = useCallback(async (user: User) => {
+  const loadAppData = useCallback(async (user: User, callerReason = 'Bootstrap') => {
     const fetchStart = performance.now();
     const currentGen = ++fetchGenIdRef.current;
 
-    setBootstrapState('DATA_LOADING');
+    const isInitialLoad = bootstrapStateRef.current !== 'APP_READY';
+    if (isInitialLoad) {
+      updateBootstrapState('DATA_LOADING', callerReason);
+    } else {
+      setIsRefreshing(true);
+    }
     setBootstrapError(null);
 
     setTimeline(prev => ({
@@ -205,7 +238,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       initialFetchStartTime: fetchStart
     }));
 
-    console.log(`🚀 [Bootstrap] Starting data load generation #${currentGen} for user ${user.fullName} (${user.id})`);
+    console.log(`🚀 [Bootstrap] Starting data load generation #${currentGen} for user ${user.fullName} (${user.id}) | Reason: ${callerReason}`);
 
     try {
       const completionTimes: Record<string, number> = {};
@@ -256,27 +289,29 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return;
       }
 
-      // Check critical data fetching failures
-      const criticalFailures: string[] = [];
-      if (!repairOrdersRes.success && repairOrdersRes.error && !repairOrdersRes.orders?.length) {
-        criticalFailures.push(`أوامر الصيانة: ${repairOrdersRes.error}`);
-      }
-      if (!customersRes.success && customersRes.error && !customersRes.customers?.length) {
-        criticalFailures.push(`العملاء: ${customersRes.error}`);
-      }
-      if (!productsRes.products) {
-        criticalFailures.push(`قطع الغيار/المنتجات: تعذر الاتصال بـ Supabase`);
+      // Check critical data fetching failures only on initial load
+      if (isInitialLoad) {
+        const criticalFailures: string[] = [];
+        if (!repairOrdersRes.success && repairOrdersRes.error && !repairOrdersRes.orders?.length) {
+          criticalFailures.push(`أوامر الصيانة: ${repairOrdersRes.error}`);
+        }
+        if (!customersRes.success && customersRes.error && !customersRes.customers?.length) {
+          criticalFailures.push(`العملاء: ${customersRes.error}`);
+        }
+        if (!productsRes.products) {
+          criticalFailures.push(`قطع الغيار/المنتجات: تعذر الاتصال بـ Supabase`);
+        }
+
+        if (criticalFailures.length > 0) {
+          const errorMsg = `تعذر تحميل البيانات الأولية المطلوبة (${criticalFailures.join(' | ')})`;
+          console.error('❌ [Bootstrap] Critical data load failure:', errorMsg);
+          setBootstrapError(errorMsg);
+          updateBootstrapState('ERROR', 'Critical Data Load Failure');
+          return;
+        }
       }
 
-      if (criticalFailures.length > 0) {
-        const errorMsg = `تعذر تحميل البيانات الأولية المطلوبة (${criticalFailures.join(' | ')})`;
-        console.error('❌ [Bootstrap] Critical data load failure:', errorMsg);
-        setBootstrapError(errorMsg);
-        setBootstrapState('ERROR');
-        return;
-      }
-
-      // Populate datasets cleanly
+      // Populate datasets cleanly preserving previous data on background errors
       const orders = repairOrdersRes.orders || getLocalRepairOrdersBackup();
       const customers = customersRes.customers || getLocalCustomersBackup();
       const products = productsRes.products || getLocalProductsBackup();
@@ -297,27 +332,35 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const partners = db.getPartners() || [];
       const actLogs = db.getActivityLogs() || [];
 
-      // Save to local backup stores for offline compatibility
-      saveLocalRepairOrdersBackup(orders);
-      saveLocalCustomersBackup(customers);
-      saveLocalProductsBackup(products);
-      saveLocalRepairPartUsagesBackup(usages);
-      saveLocalInvoicesBackup(invoices);
+      // Save to local backup stores for offline compatibility WITHOUT dispatching 'atari_db_changed'
+      saveLocalRepairOrdersBackup(orders, false);
+      saveLocalCustomersBackup(customers, false);
+      saveLocalProductsBackup(products, false);
+      saveLocalRepairPartUsagesBackup(usages, false);
+      saveLocalInvoicesBackup(invoices, false);
 
-
-      setRepairOrdersState(createLoadedDataset(orders));
+      setRepairOrdersState(prev => {
+        logStateTransition('repairOrders length', prev.data.length, orders.length, callerReason);
+        return createLoadedDataset(orders);
+      });
       setCustomersState(createLoadedDataset(customers));
       setProductsState(createLoadedDataset(products));
       setRepairPartUsagesState(createLoadedDataset(usages));
       setInventoryMovementsState(createLoadedDataset(movements));
-      setInvoicesState(createLoadedDataset(invoices));
+      setInvoicesState(prev => {
+        logStateTransition('invoices length', prev.data.length, invoices.length, callerReason);
+        return createLoadedDataset(invoices);
+      });
       setSettingsState(createLoadedDataset(settings));
       setCategoriesState(createLoadedDataset(categories));
       setSuppliersState(createLoadedDataset(suppliers));
       setExpensesState(createLoadedDataset(expenses));
       setPartnerLedgerState(createLoadedDataset(pLedger));
       setPartnerSettlementsState(createLoadedDataset(pSettlements));
-      setPartnerTransactionsState(createLoadedDataset(pTransactions));
+      setPartnerTransactionsState(prev => {
+        logStateTransition('partnerTransactions length', prev.data.length, pTransactions.length, callerReason);
+        return createLoadedDataset(pTransactions);
+      });
       setDeviceTypesState(createLoadedDataset(devTypes));
       setDeviceModelsState(createLoadedDataset(devModels));
       setRepairTemplatesState(createLoadedDataset(repTemplates));
@@ -335,22 +378,30 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }));
 
       console.log(`✅ [Bootstrap] App Ready in ${totalBootstrapMs}ms! Dataset Timings:`, completionTimes);
-      setBootstrapState('APP_READY');
+      updateBootstrapState('APP_READY', callerReason);
     } catch (err: any) {
       console.error('❌ [Bootstrap] Unexpected exception loading app data:', err);
-      setBootstrapError(err?.message || 'حدث خطأ غير متوقع أثناء الاتصال بالخادم وقراءة البيانات.');
-      setBootstrapState('ERROR');
+      if (isInitialLoad) {
+        setBootstrapError(err?.message || 'حدث خطأ غير متوقع أثناء الاتصال بالخادم وقراءة البيانات.');
+        updateBootstrapState('ERROR', 'Unexpected Exception');
+      }
+    } finally {
+      setIsRefreshing(false);
     }
   }, [timeline.appMountTime]);
 
   /**
    * Initializes auth session, checks owner status, and triggers data loading
    */
-  const initializeAuthAndData = useCallback(async () => {
+  const initializeAuthAndData = useCallback(async (reason = 'Initial Mount') => {
     if (isInitializingRef.current) return;
-    isInitializingRef.current = true;
+    if (bootstrapStateRef.current === 'APP_READY' && activeUserIdRef.current) {
+      console.log(`🔒 [Bootstrap] System already APP_READY for user ${activeUserIdRef.current} - skipping duplicate initializeAuthAndData`);
+      return;
+    }
 
-    setBootstrapState('AUTH_LOADING');
+    isInitializingRef.current = true;
+    updateBootstrapState('AUTH_LOADING', reason);
     setBootstrapError(null);
 
     try {
@@ -368,23 +419,27 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
 
       if (user) {
+        logStateTransition('auth session/user ID', activeUserIdRef.current, user.id, reason);
+        activeUserIdRef.current = user.id;
         console.log(`👤 [Bootstrap] Authenticated session active for: ${user.fullName}`);
         setCurrentUser(user);
         setHasOwner(true);
         // User logged in -> proceed to load business data
-        await loadAppData(user);
+        await loadAppData(user, reason);
       } else {
+        logStateTransition('auth session/user ID', activeUserIdRef.current, null, reason);
+        activeUserIdRef.current = null;
         console.log('🔒 [Bootstrap] No active auth session found.');
         setCurrentUser(null);
         // Check if system has an owner
         const ownerStatus = await authStore.checkHasOwnerStatus();
         setHasOwner(ownerStatus.hasOwner);
-        setBootstrapState('AUTH_READY');
+        updateBootstrapState('AUTH_READY', reason);
       }
     } catch (err: any) {
       console.error('❌ [Bootstrap] Exception resolving auth session:', err);
       setBootstrapError(err?.message || 'تعذر التحقق من جلسة تسجيل الدخول.');
-      setBootstrapState('ERROR');
+      updateBootstrapState('ERROR', 'Auth Exception');
     } finally {
       isInitializingRef.current = false;
     }
@@ -392,12 +447,15 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   // Initial mount trigger
   useEffect(() => {
-    initializeAuthAndData();
+    initializeAuthAndData('AppDataProvider Mount');
   }, [initializeAuthAndData]);
 
   // Single Realtime Subscription or Custom DB Change Handler
   useEffect(() => {
     if (!isSupabaseConfigured) return;
+
+    subscriptionRegistrationCount++;
+    console.log(`📡 [Subscriptions] Registered atari_db_changed listener (Active count: ${subscriptionRegistrationCount})`);
 
     const handleCustomDbChange = (e: Event) => {
       const customEvent = e as CustomEvent;
@@ -408,32 +466,44 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
       if (key === 'atari_repair_orders') {
         fetchOrMigrateRepairOrders().then(res => {
-          if (res.orders) setRepairOrdersState(createLoadedDataset(res.orders));
+          if (res.orders && res.orders.length > 0) {
+            setRepairOrdersState(prev => {
+              logStateTransition('repairOrders length', prev.data.length, res.orders.length, 'atari_db_changed: atari_repair_orders');
+              return createLoadedDataset(res.orders);
+            });
+          }
         });
       } else if (key === 'atari_customers') {
         fetchOrMigrateCustomers().then(res => {
-          if (res.customers) setCustomersState(createLoadedDataset(res.customers));
+          if (res.customers && res.customers.length > 0) setCustomersState(createLoadedDataset(res.customers));
         });
       } else if (key === 'atari_products') {
         fetchOrMigrateProducts().then(res => {
-          if (res.products) setProductsState(createLoadedDataset(res.products));
+          if (res.products && res.products.length > 0) setProductsState(createLoadedDataset(res.products));
         });
         getInventoryMovements().then(res => {
-          setInventoryMovementsState(createLoadedDataset(res));
+          if (res) setInventoryMovementsState(createLoadedDataset(res));
         });
       } else if (key === 'atari_invoices') {
         fetchOrMigrateInvoices().then(res => {
-          if (res.invoices) setInvoicesState(createLoadedDataset(res.invoices));
+          if (res.invoices && res.invoices.length > 0) {
+            setInvoicesState(prev => {
+              logStateTransition('invoices length', prev.data.length, res.invoices.length, 'atari_db_changed: atari_invoices');
+              return createLoadedDataset(res.invoices);
+            });
+          }
         });
       } else if (key === 'atari_repair_part_usages') {
         fetchOrMigrateRepairPartUsages().then(res => {
-          if (res.partUsages) setRepairPartUsagesState(createLoadedDataset(res.partUsages));
+          if (res.partUsages && res.partUsages.length > 0) setRepairPartUsagesState(createLoadedDataset(res.partUsages));
         });
       }
     };
 
     window.addEventListener('atari_db_changed', handleCustomDbChange);
     return () => {
+      subscriptionRegistrationCount--;
+      console.log(`📡 [Subscriptions] Cleaned up atari_db_changed listener (Active count: ${subscriptionRegistrationCount})`);
       window.removeEventListener('atari_db_changed', handleCustomDbChange);
     };
   }, []);
@@ -441,42 +511,56 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   // Actions
   const retryBootstrap = async () => {
     isInitializingRef.current = false;
-    await initializeAuthAndData();
+    await initializeAuthAndData('User Retry Bootstrap');
   };
 
   const handleLoginSuccess = async (user: User) => {
+    logStateTransition('auth session/user ID', activeUserIdRef.current, user.id, 'Login Success');
+    activeUserIdRef.current = user.id;
     setCurrentUser(user);
     setHasOwner(true);
-    await loadAppData(user);
+    await loadAppData(user, 'Login Success');
   };
 
   const handleLogout = async () => {
     await authStore.logout();
+    logStateTransition('auth session/user ID', activeUserIdRef.current, null, 'User Logout');
+    activeUserIdRef.current = null;
     setCurrentUser(null);
     setRepairOrdersState(createEmptyDataset([]));
     setCustomersState(createEmptyDataset([]));
     setProductsState(createEmptyDataset([]));
     setInvoicesState(createEmptyDataset([]));
     setRepairPartUsagesState(createEmptyDataset([]));
-    setBootstrapState('AUTH_READY');
+    updateBootstrapState('AUTH_READY', 'User Logout');
   };
 
   const refetchDataset = async (key: string) => {
     if (key === 'repairOrders') {
       const res = await fetchOrMigrateRepairOrders();
-      if (res.orders) setRepairOrdersState(createLoadedDataset(res.orders));
+      if (res.orders && res.orders.length > 0) {
+        setRepairOrdersState(prev => {
+          logStateTransition('repairOrders length', prev.data.length, res.orders.length, 'refetchDataset: repairOrders');
+          return createLoadedDataset(res.orders);
+        });
+      }
     } else if (key === 'customers') {
       const res = await fetchOrMigrateCustomers();
-      if (res.customers) setCustomersState(createLoadedDataset(res.customers));
+      if (res.customers && res.customers.length > 0) setCustomersState(createLoadedDataset(res.customers));
     } else if (key === 'products') {
       const res = await fetchOrMigrateProducts();
-      if (res.products) setProductsState(createLoadedDataset(res.products));
+      if (res.products && res.products.length > 0) setProductsState(createLoadedDataset(res.products));
     } else if (key === 'invoices') {
       const res = await fetchOrMigrateInvoices();
-      if (res.invoices) setInvoicesState(createLoadedDataset(res.invoices));
+      if (res.invoices && res.invoices.length > 0) {
+        setInvoicesState(prev => {
+          logStateTransition('invoices length', prev.data.length, res.invoices.length, 'refetchDataset: invoices');
+          return createLoadedDataset(res.invoices);
+        });
+      }
     } else if (key === 'repairPartUsages') {
       const res = await fetchOrMigrateRepairPartUsages();
-      if (res.partUsages) setRepairPartUsagesState(createLoadedDataset(res.partUsages));
+      if (res.partUsages && res.partUsages.length > 0) setRepairPartUsagesState(createLoadedDataset(res.partUsages));
     }
   };
 
@@ -484,7 +568,8 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const setRepairOrdersData = (updater: RepairOrder[] | ((prev: RepairOrder[]) => RepairOrder[])) => {
     setRepairOrdersState(prev => {
       const nextData = typeof updater === 'function' ? updater(prev.data) : updater;
-      saveLocalRepairOrdersBackup(nextData);
+      saveLocalRepairOrdersBackup(nextData, false);
+      logStateTransition('repairOrders length', prev.data.length, nextData.length, 'setRepairOrdersData mutation');
       return createLoadedDataset(nextData);
     });
   };
@@ -492,7 +577,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const setCustomersData = (updater: Customer[] | ((prev: Customer[]) => Customer[])) => {
     setCustomersState(prev => {
       const nextData = typeof updater === 'function' ? updater(prev.data) : updater;
-      saveLocalCustomersBackup(nextData);
+      saveLocalCustomersBackup(nextData, false);
       return createLoadedDataset(nextData);
     });
   };
@@ -500,7 +585,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const setProductsData = (updater: Product[] | ((prev: Product[]) => Product[])) => {
     setProductsState(prev => {
       const nextData = typeof updater === 'function' ? updater(prev.data) : updater;
-      saveLocalProductsBackup(nextData);
+      saveLocalProductsBackup(nextData, false);
       return createLoadedDataset(nextData);
     });
   };
@@ -508,7 +593,8 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const setInvoicesData = (updater: Invoice[] | ((prev: Invoice[]) => Invoice[])) => {
     setInvoicesState(prev => {
       const nextData = typeof updater === 'function' ? updater(prev.data) : updater;
-      saveLocalInvoicesBackup(nextData);
+      saveLocalInvoicesBackup(nextData, false);
+      logStateTransition('invoices length', prev.data.length, nextData.length, 'setInvoicesData mutation');
       return createLoadedDataset(nextData);
     });
   };
@@ -516,7 +602,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const setPartUsagesData = (updater: RepairPartUsage[] | ((prev: RepairPartUsage[]) => RepairPartUsage[])) => {
     setRepairPartUsagesState(prev => {
       const nextData = typeof updater === 'function' ? updater(prev.data) : updater;
-      saveLocalRepairPartUsagesBackup(nextData);
+      saveLocalRepairPartUsagesBackup(nextData, false);
       return createLoadedDataset(nextData);
     });
   };
@@ -571,6 +657,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         currentUser,
         hasOwner,
         timeline,
+        isRefreshing,
 
         repairOrdersState,
         customersState,

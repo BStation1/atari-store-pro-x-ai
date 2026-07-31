@@ -632,9 +632,14 @@ export const authStore = {
 // Listen to Supabase Auth state changes automatically for real-time session verification
 if (typeof window !== "undefined") {
   supabase.auth.onAuthStateChange(async (event, session) => {
+    const activeUser = authStore.getCurrentUser();
+    if (event === "TOKEN_REFRESHED" && activeUser && session?.user?.id === activeUser.id) {
+      console.log(`ℹ️ [authStore] Ignoring TOKEN_REFRESHED for active user ${activeUser.id}`);
+      return;
+    }
     if (event === "SIGNED_OUT" || !session) {
       authStore.clearSession();
-    } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || session?.user) {
+    } else if (event === "SIGNED_IN" || session?.user) {
       await authStore.validateAndSyncSession();
     }
   });

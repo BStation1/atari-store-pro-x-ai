@@ -207,7 +207,10 @@ export function getLocalRepairPartUsagesBackup(): RepairPartUsage[] {
   return db.getRepairPartUsages();
 }
 
-export function saveLocalRepairPartUsagesBackup(data: RepairPartUsage[]): void {
+export function saveLocalRepairPartUsagesBackup(data: RepairPartUsage[], dispatchEvent = true): void {
   db.saveRepairPartUsages(data);
+  if (dispatchEvent && typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));
+  }
 }
 
