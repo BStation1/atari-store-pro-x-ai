@@ -38,7 +38,8 @@ import {
   Tag,
   Plus,
   Gamepad2,
-  X
+  X,
+  Truck
 } from "lucide-react";
 import { useRepairOrders, useCustomers, useProducts, useSettings, useInvoices, useCurrentUser, useRepairPartUsages } from "../hooks/useData";
 import { RepairOrder, RepairDevice, RepairStatus, DeviceType, PaymentMethod, WorkOwnershipType, User as UserType, QUICK_FAULTS_LIST, SelectedRepairItem, RepairPartUsage, Product } from "../types";
@@ -241,6 +242,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
   // Parts Used Search state
   const [partSearch, setPartSearch] = useState("");
   const [selectedPartIndex, setSelectedPartIndex] = useState<number | null>(null);
+  const [showQuickFaultsDropdown, setShowQuickFaultsDropdown] = useState(false);
 
   // Receipt Modal trigger
   const [receiptOrder, setReceiptOrder] = useState<RepairOrder | undefined>(undefined);
@@ -1627,395 +1629,440 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                 });
 
                 return (
-                  <div className="space-y-5">
+                  <div className="space-y-4 font-sans text-right">
                     {/* -----------------------------------------
-                        HEADER
+                        SECTION 1: COMPACT HEADER CARD
                        ----------------------------------------- */}
-                    <div className="bg-[#11131e] border border-[#2a2d42] p-4 rounded-2xl flex flex-wrap items-center justify-between gap-4 shadow-xl">
-                      <div className="flex items-center gap-3">
-                        <div className="px-3.5 py-2 bg-indigo-600/20 border border-indigo-500/40 rounded-xl text-indigo-400 font-black text-lg font-mono">
-                          #{selectedOrder.orderNumber || selectedOrder.id.slice(0, 8)}
+                    <div className="bg-[#11131e] border border-[#2a2d42] p-3.5 rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs">
+                      <div className="flex flex-wrap items-center gap-4 text-white">
+                        <div className="flex items-center gap-1.5 bg-[#181b2a] px-3 py-1.5 rounded-lg border border-[#2a2d42]">
+                          <span className="text-gray-400 font-medium">رقم أمر الصيانة:</span>
+                          <span className="font-extrabold text-indigo-400 font-mono text-sm">
+                            #{selectedOrder.orderNumber || selectedOrder.id.slice(0, 8)}
+                          </span>
                         </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h3 className="text-base font-black text-white flex items-center gap-1.5">
-                              <Gamepad2 className="w-5 h-5 text-indigo-400" />
-                              <span>{currentDevice.type || "جهاز بلايستيشن"}</span>
-                              {currentDevice.model && <span className="text-indigo-300 font-extrabold">- {currentDevice.model}</span>}
-                            </h3>
-                            {currentDevice.serialNumber && (
-                              <span className="text-[11px] font-mono text-gray-400 bg-gray-900/90 px-2 py-0.5 rounded border border-gray-800">
-                                S/N: {currentDevice.serialNumber}
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-xs text-gray-400 mt-1 flex items-center gap-2">
-                            <span>العميل: <strong className="text-white font-bold">{getCustomerNameHelper(selectedOrder, customers)}</strong></span>
-                            <span className="text-gray-600">•</span>
-                            <span className="font-mono text-cyan-400 font-bold">{getCustomerPhoneHelper(selectedOrder, customers)}</span>
-                          </p>
+
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-gray-400 font-medium">الجهاز:</span>
+                          <span className="font-bold text-white">{currentDevice.type || "غير محدد"}</span>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-gray-400 font-medium">الموديل:</span>
+                          <span className="font-bold text-white">{currentDevice.model || "غير محدد"}</span>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-gray-400 font-medium">الرقم التسلسلي:</span>
+                          <span className="font-mono text-gray-300 bg-gray-900 px-2 py-0.5 rounded border border-gray-800">
+                            {currentDevice.serialNumber || "غير متوفر"}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-gray-400 font-medium">اسم العميل:</span>
+                          <span className="font-bold text-white">{getCustomerNameHelper(selectedOrder, customers)}</span>
+                          <span className="text-cyan-400 font-mono font-bold mr-1">({getCustomerPhoneHelper(selectedOrder, customers)})</span>
                         </div>
                       </div>
 
-                      {/* Current Status Dropdown */}
-                      <div className="flex items-center gap-2 bg-[#181b2a] p-1.5 rounded-xl border border-indigo-500/30">
-                        <span className="text-xs text-gray-400 font-bold px-2">الحالة الحالية:</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-400 font-medium whitespace-nowrap">الحالة الحالية:</span>
                         <select
                           value={selectedOrder.status}
                           onChange={(e) => handleUpdateOrderStatus(e.target.value as RepairStatus)}
-                          className="bg-indigo-950/80 border border-indigo-500/50 text-white font-extrabold text-xs rounded-lg px-3 py-1.5 focus:outline-none cursor-pointer"
+                          className="bg-[#181b2a] border border-indigo-500/40 text-white font-bold text-xs rounded-lg px-3 py-1.5 focus:outline-none cursor-pointer hover:border-indigo-500"
                         >
-                          <option value={RepairStatus.Received}>📥 تم الاستلام</option>
-                          <option value={RepairStatus.Diagnosing}>🔍 قيد التشخيص</option>
-                          <option value={RepairStatus.Repairing}>🔧 قيد الإصلاح</option>
-                          <option value={RepairStatus.WaitingParts}>⏳ بانتظار قطع الغيار</option>
-                          <option value={RepairStatus.Ready}>✅ جاهز للتسليم</option>
-                          <option value={RepairStatus.Delivered}>🎉 تم التسليم</option>
-                          <option value={RepairStatus.Cancelled}>❌ ملغى</option>
+                          <option value={RepairStatus.Received}>تم الاستلام</option>
+                          <option value={RepairStatus.Diagnosing}>قيد التشخيص</option>
+                          <option value={RepairStatus.Repairing}>قيد الإصلاح</option>
+                          <option value={RepairStatus.WaitingParts}>بانتظار قطع الغيار</option>
+                          <option value={RepairStatus.Ready}>جاهز للتسليم</option>
+                          <option value={RepairStatus.Delivered}>تم التسليم</option>
+                          <option value={RepairStatus.Cancelled}>ملغى</option>
                         </select>
                       </div>
                     </div>
 
-                    {/* -----------------------------------------
-                        PROBLEM & DIAGNOSIS
-                       ----------------------------------------- */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {/* Customer Complaint */}
-                      <div className="bg-[#11131e] border border-[#2a2d42] p-4 rounded-2xl space-y-3">
-                        <h4 className="text-xs font-extrabold text-amber-400 flex items-center gap-1.5">
-                          <AlertTriangle className="w-4 h-4 text-amber-400" />
-                          <span>شكوى العميل والأعطال (Customer Complaint)</span>
-                        </h4>
+                    {/* TWO-COLUMN WORKSHOP LAYOUT ON DESKTOP */}
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                      {/* MAIN WORKFLOW AREA (2 Spans) */}
+                      <div className="lg:col-span-2 space-y-4">
+                        {/* SECTION 2 & 3: COMPLAINT & DIAGNOSIS */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {/* SECTION 2: CUSTOMER COMPLAINT */}
+                          <div className="bg-[#11131e] border border-[#2a2d42] p-4 rounded-xl space-y-2.5">
+                            <div className="flex items-center justify-between">
+                              <label className="text-xs font-extrabold text-white">
+                                شكوى العميل
+                              </label>
 
-                        {/* Quick Fault Chips */}
-                        <div className="flex flex-wrap gap-1.5">
-                          {QUICK_FAULTS_LIST.map((fault) => {
-                            const isSelected = reportedFaults.includes(fault.label);
-                            return (
-                              <button
-                                key={fault.id}
-                                type="button"
-                                onClick={() => handleToggleQuickFaultInRepairCenter(devIdx, fault.label)}
-                                className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition cursor-pointer flex items-center gap-1 ${
-                                  isSelected
-                                    ? "bg-amber-600 text-white border-amber-400 shadow-md shadow-amber-950/50"
-                                    : "bg-gray-900/90 text-gray-300 border-gray-800 hover:border-gray-700 hover:text-white"
-                                }`}
-                              >
-                                <span className="text-[10px]">{isSelected ? "✓" : "+"}</span>
-                                <span>{fault.label}</span>
-                              </button>
-                            );
-                          })}
-                        </div>
+                              {/* Dropdown Button */}
+                              <div className="relative">
+                                <button
+                                  type="button"
+                                  onClick={() => setShowQuickFaultsDropdown(!showQuickFaultsDropdown)}
+                                  className="text-[11px] font-bold text-indigo-400 hover:text-indigo-300 bg-indigo-950/60 hover:bg-indigo-900/60 border border-indigo-500/30 px-2.5 py-1 rounded-lg transition flex items-center gap-1 cursor-pointer"
+                                >
+                                  <span>+ إدراج شكوى شائعة</span>
+                                </button>
 
-                        <input
-                          type="text"
-                          placeholder="تفاصيل العطل أو ملاحظات الاستلام..."
-                          value={currentDevice.issue || ""}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            const updatedDevices = [...selectedOrder.devices];
-                            if (updatedDevices[devIdx]) {
-                              updatedDevices[devIdx].issue = val;
-                              const updatedOrder = { ...selectedOrder, devices: updatedDevices };
-                              setSelectedOrder(updatedOrder);
-                              updateRepairOrder(updatedOrder);
-                            }
-                          }}
-                          className="w-full bg-[#181b2a] border border-[#2a2d42] rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-amber-500"
-                        />
-                      </div>
-
-                      {/* Diagnosis & Notes */}
-                      <div className="bg-[#11131e] border border-[#2a2d42] p-4 rounded-2xl space-y-3">
-                        <h4 className="text-xs font-extrabold text-cyan-400 flex items-center gap-1.5">
-                          <Wrench className="w-4 h-4 text-cyan-400" />
-                          <span>التشخيص الفني والملاحظات (Diagnosis)</span>
-                        </h4>
-
-                        <textarea
-                          rows={3}
-                          placeholder="أدخل نتائج الفحص، التشخيص الفني، الملاحظات..."
-                          value={currentDevice.technicalNotes || selectedOrder.notes || ""}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            const updatedDevices = [...selectedOrder.devices];
-                            if (updatedDevices[devIdx]) {
-                              updatedDevices[devIdx].technicalNotes = val;
-                            }
-                            const updatedOrder = { ...selectedOrder, notes: val, devices: updatedDevices };
-                            setSelectedOrder(updatedOrder);
-                            updateRepairOrder(updatedOrder);
-                          }}
-                          className="w-full bg-[#181b2a] border border-[#2a2d42] rounded-xl p-3 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500 resize-none"
-                        />
-                      </div>
-                    </div>
-
-                    {/* -----------------------------------------
-                        USED PARTS (POS INSTANT SEARCH & TABLE)
-                       ----------------------------------------- */}
-                    <div className="bg-[#11131e] border border-rose-500/30 p-5 rounded-2xl space-y-4 shadow-xl">
-                      <div className="flex items-center justify-between">
-                        <h4 className="text-sm font-extrabold text-rose-300 flex items-center gap-2">
-                          <Package className="w-4.5 h-4.5 text-rose-400" />
-                          <span>قطع الغيار المستخدمة (Used Parts)</span>
-                        </h4>
-                        <span className="text-xs text-rose-300/80 font-semibold bg-rose-950/60 border border-rose-500/30 px-3 py-1 rounded-full">
-                          قطع متوافقة مع {currentDevice.type} {currentDevice.model}
-                        </span>
-                      </div>
-
-                      {/* Instant Search Input Box */}
-                      <div className="relative">
-                        <Search className="w-5 h-5 text-gray-400 absolute right-4 top-3.5" />
-                        <input
-                          type="text"
-                          placeholder="🔍 Search inventory... (اسم القطعة، SKU، الباركود)"
-                          value={partSearch}
-                          onChange={(e) => setPartSearch(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' && matchedSearchResults.length > 0) {
-                              e.preventDefault();
-                              const firstP = matchedSearchResults[0];
-                              if (firstP && firstP.quantity > 0) {
-                                handleAddPartToDevice(devIdx, firstP.id, 1);
-                                setPartSearch('');
-                              }
-                            }
-                          }}
-                          className="w-full bg-[#181b2a] border-2 border-rose-500/40 rounded-2xl pr-11 pl-4 py-3 text-sm text-white placeholder-gray-400 focus:outline-none focus:border-rose-500 font-medium shadow-inner"
-                        />
-                        {partSearch && (
-                          <button
-                            type="button"
-                            onClick={() => setPartSearch('')}
-                            className="absolute left-3 top-3 text-gray-400 hover:text-white bg-gray-800 rounded-full w-6 h-6 flex items-center justify-center text-xs cursor-pointer"
-                          >
-                            ✕
-                          </button>
-                        )}
-                      </div>
-
-                      {/* Matching Results Chips when typing */}
-                      {partSearch.trim() !== '' && (
-                        <div className="bg-[#181b2a] border-2 border-rose-500/50 p-3 rounded-2xl max-h-[220px] overflow-y-auto custom-scrollbar space-y-2">
-                          <div className="flex justify-between items-center px-1">
-                            <span className="text-[11px] text-gray-300 font-bold">نتائج البحث الفوري ({matchedSearchResults.length}):</span>
-                            <span className="text-[10px] text-gray-400">اضغط Enter لإضافة النتيجة الأولى</span>
-                          </div>
-                          {matchedSearchResults.length === 0 ? (
-                            <p className="text-xs text-rose-400 italic py-3 text-center">لا توجد قطع غيار مطابقة للبحث.</p>
-                          ) : (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-                              {matchedSearchResults.map((p) => {
-                                const price = Number(p.sellPrice || (p as any).price || p.purchasePrice || 0);
-                                const isOutOfStock = p.quantity <= 0;
-                                return (
-                                  <button
-                                    key={p.id}
-                                    type="button"
-                                    disabled={isOutOfStock}
-                                    onClick={() => {
-                                      handleAddPartToDevice(devIdx, p.id, 1);
-                                      setPartSearch('');
-                                    }}
-                                    className={`p-2.5 rounded-xl text-xs font-bold border text-right transition flex items-center justify-between gap-2 cursor-pointer ${
-                                      isOutOfStock
-                                        ? "bg-gray-900 text-gray-600 border-gray-800 cursor-not-allowed opacity-50"
-                                        : "bg-[#11131e] text-white border-rose-500/30 hover:border-rose-500 hover:bg-rose-950/50"
-                                    }`}
-                                  >
-                                    <div className="truncate">
-                                      <p className="font-bold text-white truncate">{p.nameAr || p.name}</p>
-                                      <p className="text-[10px] text-gray-400 font-mono">المتاح: {p.quantity} قطعة</p>
-                                    </div>
-                                    <span className="font-mono font-extrabold text-emerald-400 bg-emerald-950/70 px-2.5 py-1 rounded-lg border border-emerald-500/30 shrink-0">
-                                      {price.toLocaleString('ar-EG')}
-                                    </span>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Parts Table */}
-                      <div className="overflow-x-auto rounded-xl border border-rose-500/30 bg-gray-950">
-                        <table className="w-full text-xs text-right text-gray-200 border-collapse">
-                          <thead className="bg-[#181b2a] text-gray-400 font-bold border-b border-[#2a2d42]">
-                            <tr>
-                              <th className="p-3">Product</th>
-                              <th className="p-3 text-center">Price</th>
-                              <th className="p-3 text-center">Quantity</th>
-                              <th className="p-3 text-left font-bold text-emerald-400">Total</th>
-                              <th className="p-3 text-center">Delete</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-[#1f2937]">
-                            {deviceLinkedUsages.length === 0 ? (
-                              <tr>
-                                <td colSpan={5} className="p-8 text-center text-gray-500 text-xs font-bold">
-                                  لم يتم إضافة قطع غيار لهذا الجهاز بعد. ابحث في المربع أعلاه واضغط لإضافة القطعة مباشرة.
-                                </td>
-                              </tr>
-                            ) : (
-                              deviceLinkedUsages.map((pu) => {
-                                const unitSellPrice = getUsageSellingUnitPrice(pu, products);
-                                const lineTotal = pu.quantity * unitSellPrice;
-                                const matchedProd = products.find(p => p.id === pu.inventoryItemId);
-                                const stockAvail = matchedProd ? matchedProd.quantity : 0;
-
-                                return (
-                                  <tr key={pu.id} className="hover:bg-[#161927] transition-colors">
-                                    {/* Product Name */}
-                                    <td className="p-3 font-extrabold text-white">
-                                      <div className="flex items-center gap-2">
-                                        <span className="w-2 h-2 rounded-full bg-rose-500 inline-block"></span>
-                                        <span>{pu.partName}</span>
-                                      </div>
-                                    </td>
-
-                                    {/* Selling Price */}
-                                    <td className="p-3 text-center font-mono font-extrabold text-amber-300">
-                                      {unitSellPrice.toLocaleString('ar-EG')}
-                                    </td>
-
-                                    {/* Quantity Controls */}
-                                    <td className="p-3 text-center">
-                                      <div className="inline-flex items-center gap-2 bg-[#181b2a] px-2.5 py-1 rounded-xl border border-gray-700">
-                                        <button
-                                          type="button"
-                                          onClick={() => handleRemovePartUsage(pu.id, devIdx, 1)}
-                                          className="w-6 h-6 flex items-center justify-center bg-rose-950 hover:bg-rose-800 text-rose-200 rounded-lg font-extrabold text-sm transition cursor-pointer"
-                                          title="خصم قطعة واحدة (-)"
-                                        >
-                                          -
-                                        </button>
-
-                                        <span className="font-mono text-cyan-300 text-sm font-extrabold px-1.5 min-w-[24px]">
-                                          {pu.quantity}
-                                        </span>
-
-                                        <button
-                                          type="button"
-                                          disabled={stockAvail <= 0}
-                                          onClick={() => handleAddPartToDevice(devIdx, pu.inventoryItemId, 1)}
-                                          className="w-6 h-6 flex items-center justify-center bg-emerald-950 hover:bg-emerald-800 text-emerald-200 rounded-lg font-extrabold text-sm transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                                          title={stockAvail <= 0 ? "المخزون نفذ" : "إضافة قطعة أخرى (+)"}
-                                        >
-                                          +
-                                        </button>
-                                      </div>
-                                    </td>
-
-                                    {/* Line Total */}
-                                    <td className="p-3 text-left font-mono font-extrabold text-emerald-400 text-sm">
-                                      {lineTotal.toLocaleString('ar-EG')}
-                                    </td>
-
-                                    {/* Delete Button */}
-                                    <td className="p-3 text-center">
+                                {showQuickFaultsDropdown && (
+                                  <div className="absolute left-0 top-full mt-1.5 w-64 bg-[#181b2a] border border-[#2a2d42] rounded-xl shadow-2xl p-2 z-30 max-h-56 overflow-y-auto custom-scrollbar">
+                                    <div className="text-[10px] text-gray-400 font-bold px-2 py-1 border-b border-gray-800 mb-1 flex justify-between items-center">
+                                      <span>اختر شكوى شائعة لإدراجها:</span>
                                       <button
                                         type="button"
-                                        onClick={() => handleRemovePartUsage(pu.id, devIdx, -1)}
-                                        className="p-2 bg-rose-500/10 hover:bg-rose-600 text-rose-400 hover:text-white rounded-xl transition cursor-pointer"
-                                        title="حذف القطعة وإرجاع المخزون"
+                                        onClick={() => setShowQuickFaultsDropdown(false)}
+                                        className="text-gray-400 hover:text-white"
                                       >
-                                        <Trash2 className="w-4 h-4" />
+                                        ✕
                                       </button>
-                                    </td>
-                                  </tr>
-                                );
-                              })
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
+                                    </div>
+                                    <div className="space-y-1">
+                                      {QUICK_FAULTS_LIST.map((fault) => (
+                                        <button
+                                          key={fault.id}
+                                          type="button"
+                                          onClick={() => {
+                                            handleToggleQuickFaultInRepairCenter(devIdx, fault.label);
+                                            setShowQuickFaultsDropdown(false);
+                                          }}
+                                          className="w-full text-right px-2.5 py-1.5 text-xs text-gray-200 hover:text-white hover:bg-indigo-600/30 rounded-lg transition flex items-center justify-between cursor-pointer"
+                                        >
+                                          <span>{fault.label}</span>
+                                          {fault.defaultSellingPrice > 0 && (
+                                            <span className="text-[10px] text-emerald-400 font-mono">+{fault.defaultSellingPrice} ج.م</span>
+                                          )}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
 
-                    {/* -----------------------------------------
-                        BOTTOM SUMMARY
-                       ----------------------------------------- */}
-                    <div className="bg-[#11131e] border border-indigo-500/30 p-6 rounded-2xl shadow-xl space-y-5">
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
-                        {/* Parts Total */}
-                        <div className="bg-[#181b2a] p-4 rounded-xl border border-rose-500/30">
-                          <span className="text-xs text-gray-400 font-bold block mb-1">Parts Total</span>
-                          <span className="text-2xl font-black font-mono text-rose-400">
-                            {partsTotalSelling.toLocaleString('ar-EG')}
-                          </span>
-                        </div>
-
-                        {/* Labor */}
-                        <div className="bg-[#181b2a] p-4 rounded-xl border border-cyan-500/30">
-                          <span className="text-xs text-gray-400 font-bold block mb-1">Labor</span>
-                          <div className="flex items-center justify-center gap-1">
-                            <input
-                              type="number"
-                              min="0"
-                              value={calculatedLabor}
+                            <textarea
+                              rows={4}
+                              placeholder="أدخل شكوى العميل بالتفصيل..."
+                              value={currentDevice.issue || ""}
                               onChange={(e) => {
-                                const newLabor = Number(e.target.value) || 0;
-                                const newGrand = partsTotalSelling + newLabor;
-                                handleManualDevicePriceChange(devIdx, newGrand);
+                                const val = e.target.value;
+                                const updatedDevices = [...selectedOrder.devices];
+                                if (updatedDevices[devIdx]) {
+                                  updatedDevices[devIdx].issue = val;
+                                  const updatedOrder = { ...selectedOrder, devices: updatedDevices };
+                                  setSelectedOrder(updatedOrder);
+                                  updateRepairOrder(updatedOrder);
+                                }
                               }}
-                              className="w-32 bg-gray-950 border border-cyan-500/50 rounded-lg px-2 py-1 text-center text-xl font-black font-mono text-cyan-300 focus:outline-none"
+                              className="w-full bg-[#181b2a] border border-[#2a2d42] rounded-xl p-3 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500 resize-none font-medium leading-relaxed"
                             />
-                            <span className="text-xs text-cyan-400 font-bold">ج.م</span>
+                          </div>
+
+                          {/* SECTION 3: TECHNICAL DIAGNOSIS */}
+                          <div className="bg-[#11131e] border border-[#2a2d42] p-4 rounded-xl space-y-2.5">
+                            <label className="text-xs font-extrabold text-white block">
+                              تشخيص الفني
+                            </label>
+                            <textarea
+                              rows={4}
+                              placeholder="أدخل نتيجة التشخيص الفني، الفحص، والإجراءات المتبعة..."
+                              value={currentDevice.technicalNotes || selectedOrder.notes || ""}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                const updatedDevices = [...selectedOrder.devices];
+                                if (updatedDevices[devIdx]) {
+                                  updatedDevices[devIdx].technicalNotes = val;
+                                }
+                                const updatedOrder = { ...selectedOrder, notes: val, devices: updatedDevices };
+                                setSelectedOrder(updatedOrder);
+                                updateRepairOrder(updatedOrder);
+                              }}
+                              className="w-full bg-[#181b2a] border border-[#2a2d42] rounded-xl p-3 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500 resize-none font-medium leading-relaxed"
+                            />
                           </div>
                         </div>
 
-                        {/* Grand Total */}
-                        <div className="bg-gradient-to-r from-emerald-950 via-[#12231c] to-emerald-950 p-4 rounded-xl border-2 border-emerald-500/50 shadow-md">
-                          <span className="text-xs text-emerald-300 font-bold block mb-1">Grand Total</span>
-                          <span className="text-3xl font-black font-mono text-emerald-400">
-                            {grandTotal.toLocaleString('ar-EG')}
-                          </span>
+                        {/* SECTION 4: SPARE PARTS & PARTS TABLE */}
+                        <div className="bg-[#11131e] border border-[#2a2d42] p-4 rounded-xl space-y-3">
+                          <div className="flex items-center justify-between">
+                            <label className="text-xs font-extrabold text-white">
+                              قطع الغيار
+                            </label>
+                            <span className="text-[11px] text-gray-400 font-semibold">
+                              قطع متوافقة مع {currentDevice.type} {currentDevice.model}
+                            </span>
+                          </div>
+
+                          {/* Persistent Search Field */}
+                          <div className="relative">
+                            <Search className="w-4 h-4 text-gray-400 absolute right-3.5 top-3.5" />
+                            <input
+                              type="text"
+                              placeholder="🔍 ابحث باسم القطعة أو SKU أو Barcode..."
+                              value={partSearch}
+                              onChange={(e) => setPartSearch(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && matchedSearchResults.length > 0) {
+                                  e.preventDefault();
+                                  const firstP = matchedSearchResults[0];
+                                  if (firstP && firstP.quantity > 0) {
+                                    handleAddPartToDevice(devIdx, firstP.id, 1);
+                                    setPartSearch('');
+                                  }
+                                }
+                              }}
+                              className="w-full bg-[#181b2a] border border-[#2a2d42] rounded-xl pr-10 pl-4 py-2.5 text-xs text-white placeholder-gray-400 focus:outline-none focus:border-indigo-500 font-medium"
+                            />
+                            {partSearch && (
+                              <button
+                                type="button"
+                                onClick={() => setPartSearch('')}
+                                className="absolute left-3 top-2.5 text-gray-400 hover:text-white bg-gray-800 rounded-full w-5 h-5 flex items-center justify-center text-[10px] cursor-pointer"
+                              >
+                                ✕
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Quick Add Compatible Items Grid */}
+                          <div className="bg-[#181b2a] border border-[#2a2d42] p-2.5 rounded-xl max-h-[180px] overflow-y-auto custom-scrollbar space-y-2">
+                            <div className="text-[10px] text-gray-400 font-bold px-1">
+                              {partSearch.trim() ? `نتائج البحث (${matchedSearchResults.length}):` : `القطع المتوافقة القابلة للإضافة السريعة:`}
+                            </div>
+                            {matchedSearchResults.length === 0 ? (
+                              <p className="text-xs text-gray-400 italic py-2 text-center">لا توجد قطع غيار مطابقة.</p>
+                            ) : (
+                              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                                {matchedSearchResults.slice(0, 12).map((p) => {
+                                  const price = Number(p.sellPrice || (p as any).price || p.purchasePrice || 0);
+                                  const isOutOfStock = p.quantity <= 0;
+                                  return (
+                                    <button
+                                      key={p.id}
+                                      type="button"
+                                      disabled={isOutOfStock}
+                                      onClick={() => {
+                                        handleAddPartToDevice(devIdx, p.id, 1);
+                                        setPartSearch('');
+                                      }}
+                                      className={`p-2 rounded-lg text-xs font-bold border text-right transition flex items-center justify-between gap-2 cursor-pointer ${
+                                        isOutOfStock
+                                          ? "bg-gray-900 text-gray-600 border-gray-800 cursor-not-allowed opacity-50"
+                                          : "bg-[#11131e] text-white border-[#2a2d42] hover:border-indigo-500 hover:bg-indigo-950/40"
+                                      }`}
+                                    >
+                                      <div className="truncate">
+                                        <p className="font-bold text-white truncate text-xs">{p.nameAr || p.name}</p>
+                                        <p className="text-[10px] text-gray-400 font-mono">المتاح: {p.quantity}</p>
+                                      </div>
+                                      <span className="font-mono font-extrabold text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded text-[11px] shrink-0 border border-emerald-500/30">
+                                        {price.toLocaleString('ar-EG')} ج.م
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Parts Table */}
+                          <div className="overflow-x-auto rounded-xl border border-[#2a2d42] bg-[#141624]">
+                            <table className="w-full text-xs text-right text-gray-200 border-collapse">
+                              <thead className="bg-[#181b2a] text-gray-400 font-bold border-b border-[#2a2d42]">
+                                <tr>
+                                  <th className="p-3">القطعة</th>
+                                  <th className="p-3 text-center">السعر</th>
+                                  <th className="p-3 text-center">الكمية</th>
+                                  <th className="p-3 text-left font-bold text-emerald-400">الإجمالي</th>
+                                  <th className="p-3 text-center">حذف</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-[#2a2d42]">
+                                {deviceLinkedUsages.length === 0 ? (
+                                  <tr>
+                                    <td colSpan={5} className="p-6 text-center text-gray-500 text-xs font-bold">
+                                      لم يتم إضافة قطع غيار لهذا الجهاز بعد. اضغط على أي قطعة من القائمة أعلاه لإضافتها فوراً.
+                                    </td>
+                                  </tr>
+                                ) : (
+                                  deviceLinkedUsages.map((pu) => {
+                                    const unitSellPrice = getUsageSellingUnitPrice(pu, products);
+                                    const lineTotal = pu.quantity * unitSellPrice;
+                                    const matchedProd = products.find(p => p.id === pu.inventoryItemId);
+                                    const stockAvail = matchedProd ? matchedProd.quantity : 0;
+
+                                    return (
+                                      <tr key={pu.id} className="hover:bg-[#181b2a] transition-colors">
+                                        <td className="p-3 font-bold text-white">
+                                          <span>{pu.partName}</span>
+                                        </td>
+
+                                        <td className="p-3 text-center font-mono font-bold text-gray-300">
+                                          {unitSellPrice.toLocaleString('ar-EG')} ج.م
+                                        </td>
+
+                                        <td className="p-3 text-center">
+                                          <div className="inline-flex items-center gap-2 bg-[#181b2a] px-2 py-1 rounded-lg border border-[#2a2d42]">
+                                            <button
+                                              type="button"
+                                              onClick={() => handleRemovePartUsage(pu.id, devIdx, 1)}
+                                              className="w-7 h-7 flex items-center justify-center bg-gray-800 hover:bg-gray-700 text-white rounded-md font-bold text-base transition cursor-pointer"
+                                              title="خصم قطعة (-)"
+                                            >
+                                              -
+                                            </button>
+
+                                            <span className="font-mono text-white text-sm font-extrabold px-1.5 min-w-[20px]">
+                                              {pu.quantity}
+                                            </span>
+
+                                            <button
+                                              type="button"
+                                              disabled={stockAvail <= 0}
+                                              onClick={() => handleAddPartToDevice(devIdx, pu.inventoryItemId, 1)}
+                                              className="w-7 h-7 flex items-center justify-center bg-indigo-600 hover:bg-indigo-500 text-white rounded-md font-bold text-base transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                                              title={stockAvail <= 0 ? "المخزون نفذ" : "إضافة قطعة (+)"}
+                                            >
+                                              +
+                                            </button>
+                                          </div>
+                                        </td>
+
+                                        <td className="p-3 text-left font-mono font-extrabold text-emerald-400 text-xs">
+                                          {lineTotal.toLocaleString('ar-EG')} ج.م
+                                        </td>
+
+                                        <td className="p-3 text-center">
+                                          <button
+                                            type="button"
+                                            onClick={() => handleRemovePartUsage(pu.id, devIdx, -1)}
+                                            className="p-1.5 bg-rose-500/10 hover:bg-rose-600 text-rose-400 hover:text-white rounded-lg transition cursor-pointer"
+                                            title="حذف القطعة"
+                                          >
+                                            <Trash2 className="w-4 h-4" />
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
                         </div>
                       </div>
 
-                      {/* -----------------------------------------
-                          BOTTOM ACTIONS
-                         ----------------------------------------- */}
-                      <div className="pt-3 border-t border-[#2a2d42] flex flex-wrap items-center justify-between gap-3">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            updateRepairOrder(selectedOrder);
-                            dialog.alert({ message: "تم حفظ بيانات طلب الصيانة بنجاح", variant: "success" });
-                          }}
-                          className="flex-1 min-w-[140px] bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-sm py-3 px-6 rounded-xl shadow-lg transition cursor-pointer flex items-center justify-center gap-2"
-                        >
-                          <Save className="w-4.5 h-4.5" />
-                          <span>Save</span>
-                        </button>
+                      {/* RIGHT SIDEBAR (Quick info, Summary, Actions) */}
+                      <div className="space-y-4">
+                        {/* DEVICE QUICK INFO CARD */}
+                        <div className="bg-[#11131e] border border-[#2a2d42] p-4 rounded-xl space-y-3">
+                          <div className="flex items-center gap-3 border-b border-[#2a2d42] pb-3">
+                            <div className="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center shrink-0">
+                              <Gamepad2 className="w-5 h-5 text-indigo-400" />
+                            </div>
+                            <div>
+                              <h4 className="text-sm font-extrabold text-white">
+                                {currentDevice.type} {currentDevice.model}
+                              </h4>
+                              <p className="text-[11px] text-gray-400 font-mono mt-0.5">
+                                S/N: {currentDevice.serialNumber || "غير مسجل"}
+                              </p>
+                            </div>
+                          </div>
 
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            await handleUpdateOrderStatus(RepairStatus.Ready);
-                            dialog.alert({ message: "تم تحديث حالة الجهاز إلى (جاهز للتسليم)", variant: "success" });
-                          }}
-                          className="flex-1 min-w-[140px] bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-sm py-3 px-6 rounded-xl shadow-lg transition cursor-pointer flex items-center justify-center gap-2"
-                        >
-                          <CheckCircle className="w-4.5 h-4.5" />
-                          <span>Ready</span>
-                        </button>
+                          <div className="text-xs space-y-2 text-gray-300">
+                            <div className="flex justify-between">
+                              <span className="text-gray-400">تاريخ الاستلام:</span>
+                              <span className="font-mono text-white">
+                                {new Date(selectedOrder.createdAt).toLocaleDateString('ar-EG')}
+                              </span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-gray-400">القائم بالفحص:</span>
+                              <span className="text-white font-bold">{selectedOrder.assignedTechnicianName || "فني الورشة"}</span>
+                            </div>
+                          </div>
+                        </div>
 
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            await handleUpdateOrderStatus(RepairStatus.Delivered);
-                            dialog.alert({ message: "تم تسليم الجهاز وإغلاق الطلب بنجاح", variant: "success" });
-                          }}
-                          className="flex-1 min-w-[140px] bg-cyan-600 hover:bg-cyan-500 text-white font-extrabold text-sm py-3 px-6 rounded-xl shadow-lg transition cursor-pointer flex items-center justify-center gap-2"
-                        >
-                          <Package className="w-4.5 h-4.5" />
-                          <span>Delivered</span>
-                        </button>
+                        {/* SUMMARY PANEL */}
+                        <div className="bg-[#11131e] border border-[#2a2d42] p-5 rounded-xl space-y-3">
+                          <div className="flex items-center justify-between text-xs text-gray-300">
+                            <span className="font-bold">قطع الغيار</span>
+                            <span className="font-mono font-extrabold text-white text-sm">
+                              {partsTotalSelling.toLocaleString('ar-EG')} ج.م
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between text-xs text-gray-300">
+                            <span className="font-bold">المصنعية</span>
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="number"
+                                min="0"
+                                value={calculatedLabor}
+                                onChange={(e) => {
+                                  const newLabor = Math.max(0, Number(e.target.value) || 0);
+                                  const newGrand = partsTotalSelling + newLabor;
+                                  handleManualDevicePriceChange(devIdx, newGrand);
+                                }}
+                                className="w-24 bg-[#181b2a] border border-[#2a2d42] rounded-lg px-2 py-1 text-center font-mono font-extrabold text-white text-xs focus:outline-none focus:border-indigo-500"
+                              />
+                              <span className="text-gray-400 font-bold text-[11px]">ج.م</span>
+                            </div>
+                          </div>
+
+                          <div className="border-t border-[#2a2d42] pt-3 flex items-center justify-between">
+                            <span className="text-sm font-extrabold text-white">الإجمالي</span>
+                            <span className="text-2xl font-black font-mono text-emerald-400">
+                              {grandTotal.toLocaleString('ar-EG')} <span className="text-sm font-sans">ج.م</span>
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* BOTTOM ACTIONS */}
+                        <div className="bg-[#11131e] border border-[#2a2d42] p-4 rounded-xl space-y-2.5">
+                          {/* 💾 حفظ */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              updateRepairOrder(selectedOrder);
+                              dialog.alert({ message: "تم حفظ بيانات طلب الصيانة بنجاح", variant: "success" });
+                            }}
+                            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs py-3 px-4 rounded-xl shadow transition cursor-pointer flex items-center justify-center gap-2"
+                          >
+                            <Save className="w-4 h-4" />
+                            <span>💾 حفظ</span>
+                          </button>
+
+                          {/* 🛠 جاهز */}
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await handleUpdateOrderStatus(RepairStatus.Ready);
+                              dialog.alert({ message: "تم تحديث حالة الجهاز إلى (جاهز للتسليم)", variant: "success" });
+                            }}
+                            className="w-full bg-emerald-700 hover:bg-emerald-600 text-white font-extrabold text-xs py-3 px-4 rounded-xl shadow transition cursor-pointer flex items-center justify-center gap-2"
+                          >
+                            <CheckCircle className="w-4 h-4" />
+                            <span>🛠 جاهز</span>
+                          </button>
+
+                          {/* 🚚 تم التسليم */}
+                          <button
+                            type="button"
+                            disabled={selectedOrder.status === RepairStatus.Delivered}
+                            onClick={async () => {
+                              await handleUpdateOrderStatus(RepairStatus.Delivered);
+                              dialog.alert({ message: "تم تسليم الجهاز وإغلاق الطلب بنجاح", variant: "success" });
+                            }}
+                            className="w-full bg-cyan-700 hover:bg-cyan-600 text-white font-extrabold text-xs py-3 px-4 rounded-xl shadow transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                          >
+                            <Truck className="w-4 h-4" />
+                            <span>🚚 تم التسليم</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
