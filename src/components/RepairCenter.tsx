@@ -243,6 +243,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
   const [partSearch, setPartSearch] = useState("");
   const [selectedPartIndex, setSelectedPartIndex] = useState<number | null>(null);
   const [showQuickFaultsDropdown, setShowQuickFaultsDropdown] = useState(false);
+  const [busyProductIds, setBusyProductIds] = useState<Set<string>>(new Set());
 
   // Receipt Modal trigger
   const [receiptOrder, setReceiptOrder] = useState<RepairOrder | undefined>(undefined);
@@ -649,7 +650,16 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
   // Add inventory part to device
   const handleAddPartToDevice = async (deviceIdx: number, productId: string, qtyToAdd: number = 1) => {
+    const t0 = performance.now();
+    console.log(`⏱️ [AddPart] Click received for productId=${productId} at ${t0.toFixed(2)}ms`);
+
     if (!selectedOrder) return;
+
+    if (busyProductIds.has(productId)) {
+      console.log(`[AddPart] Product ${productId} is busy. Ignoring click.`);
+      return;
+    }
+
     const product = products.find(p => p.id === productId);
     if (!product) return;
 
@@ -663,6 +673,8 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     const currentDevice = updatedDevices[deviceIdx];
     if (!currentDevice) return;
 
+    setBusyProductIds(prev => new Set(prev).add(productId));
+
     const unitSellingPrice = Number(product.sellPrice || product.price || product.purchasePrice) || 0;
     const unitPurchaseCost = Number(product.purchasePrice || product.costPrice) || 0;
     const totalCost = unitPurchaseCost * qty;
@@ -672,177 +684,237 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) owner = 'AHMED';
     else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) owner = 'ABDO';
 
-    try {
-      // 1. Deduct Stock in local state
-      const newQty = product.quantity - qty;
-      updateProduct({
-        ...product,
-        quantity: newQty
-      });
+    // 1. Synchronous Optimistic Update
+    const newQty = product.quantity - qty;
+    updateProduct({
+      ...product,
+      quantity: newQty
+    });
 
-      // Background update to Supabase
-      const productUuid = (await ensureProductUuidInSupabase(product)) || product.id;
-      const repairOrderUuid = (await ensureRepairOrderUuidInSupabase(selectedOrder)) || selectedOrder.id;
-      updateProductQuantityInSupabase(productUuid, newQty).catch(err => console.warn("Supabase qty update warn:", err));
+    const orderIdsToMatch = new Set<string>([
+      String(selectedOrder.id || ''),
+      String((selectedOrder as any).orderNumber || ''),
+      String((selectedOrder as any).uuid || '')
+    ].filter(Boolean));
 
-      // 2. Create Inventory OUT Movement
-      addInventoryMovementToSupabase({
-        productId: productUuid,
-        productNameSnapshot: product.nameAr || product.name,
-        movementType: 'REPAIR_USAGE',
-        quantityChange: -qty,
-        previousQuantity: product.quantity,
-        newQuantity: newQty,
-        costPriceSnapshot: unitPurchaseCost,
-        sellingPriceSnapshot: unitSellingPrice,
-        totalCost: totalCost,
-        referenceId: selectedOrder.id,
-        repairOrderId: selectedOrder.id,
-        owner: owner,
-        notes: `صرف قطعة غيار صيانة: ${product.nameAr || product.name} للجهاز (${getDeviceDisplayName(currentDevice)})`,
-        createdAt: new Date().toISOString()
-      }).catch(err => console.warn("Supabase movement warn:", err));
+    const allUsages = db.getRepairPartUsages();
+    const existingUsage = allUsages.find(
+      pu => (orderIdsToMatch.has(String(pu.repairOrderId)) || pu.repairOrderId === selectedOrder.id || String(pu.repairOrderId) === String(selectedOrder.id)) &&
+            (pu.inventoryItemId === product.id || ((product as any).uuid && pu.inventoryItemId === (product as any).uuid)) &&
+            pu.accountingStatus !== 'RETURNED' &&
+            pu.accountingStatus !== 'REVERSED' &&
+            ((pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) || selectedOrder.devices.length === 1)
+    );
 
-      // 3. Check if existing RepairPartUsage exists for this product and device
-      const orderIdsToMatch = new Set<string>([
-        String(selectedOrder.id || ''),
-        String((selectedOrder as any).orderNumber || ''),
-        String((selectedOrder as any).uuid || ''),
-        String(repairOrderUuid || '')
-      ].filter(Boolean));
+    let updatedUsageList = [...allUsages];
+    let usageRecordToSave: RepairPartUsage;
 
-      const allUsages = db.getRepairPartUsages();
-      const existingUsage = allUsages.find(
-        pu => (orderIdsToMatch.has(String(pu.repairOrderId)) || pu.repairOrderId === selectedOrder.id) &&
-              (pu.inventoryItemId === productUuid || pu.inventoryItemId === product.id) &&
-              pu.accountingStatus !== 'RETURNED' &&
-              pu.accountingStatus !== 'REVERSED' &&
-              ((pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) || selectedOrder.devices.length === 1)
-      );
-
-      let updatedUsageList = [...allUsages];
-
-      if (existingUsage) {
-        const newUsageQty = existingUsage.quantity + qty;
-        const newUsageTotalCost = newUsageQty * unitPurchaseCost;
-        const newUsageSellingTotal = newUsageQty * unitSellingPrice;
-        const updatedUsageRecord = {
-          ...existingUsage,
-          quantity: newUsageQty,
-          unitCost: unitPurchaseCost,
-          totalCost: newUsageTotalCost,
-          sellingPrice: unitSellingPrice,
-          sellingTotal: newUsageSellingTotal
-        };
-        updatedUsageList = allUsages.map(pu => pu.id === existingUsage.id ? updatedUsageRecord : pu);
-        db.saveRepairPartUsages(updatedUsageList);
-        updateRepairPartUsageInSupabase(existingUsage.id, {
-          quantity: newUsageQty,
-          unitCost: unitPurchaseCost,
-          totalCost: newUsageTotalCost,
-          sellingPrice: unitSellingPrice,
-          sellingTotal: newUsageSellingTotal
-        }).catch(err => console.warn("Supabase update usage warn:", err));
-      } else {
-        const addedUsage = await addRepairPartUsageToSupabase({
-          repairOrderId: selectedOrder.id,
-          inventoryItemId: productUuid,
-          partName: product.nameAr || product.name,
-          sku: product.sku || product.id,
-          quantity: qty,
-          unitCost: unitPurchaseCost,
-          totalCost: totalCost,
-          sellingPrice: unitSellingPrice,
-          sellingTotal: unitSellingPrice * qty,
-          ownershipType: ownership,
-          responsiblePartnerId: owner === 'AHMED' ? 'P-001' : owner === 'ABDO' ? 'P-002' : 'SHOP',
-          accountingStatus: 'CONSUMED',
-          notes: `deviceId:${currentDevice.id || deviceIdx}`
-        });
-        if (addedUsage) {
-          const usageWithOrderId = { ...addedUsage, repairOrderId: selectedOrder.id };
-          const existsLocally = updatedUsageList.some(u => u.id === addedUsage.id);
-          if (!existsLocally) {
-            updatedUsageList.push(usageWithOrderId);
-          } else {
-            updatedUsageList = updatedUsageList.map(u => u.id === addedUsage.id ? usageWithOrderId : u);
-          }
-          db.saveRepairPartUsages(updatedUsageList);
-        }
-      }
-
-      // 4. Recalculate device partsCost (using selling price)
-      const activeUsagesForDevice = updatedUsageList.filter(
-        pu => orderIdsToMatch.has(String(pu.repairOrderId)) &&
-              pu.accountingStatus !== 'RETURNED' &&
-              pu.accountingStatus !== 'REVERSED' &&
-              ((pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) || selectedOrder.devices.length === 1)
-      );
-
-      const newPartsCost = activeUsagesForDevice.reduce((sum, pu) => {
-        const sellP = getUsageSellingUnitPrice(pu, products);
-        return sum + (pu.quantity * sellP);
-      }, 0);
-
-      const tags = currentDevice.selectedQuickFaults || (currentDevice.issue ? currentDevice.issue.split(" - ").map(s => s.trim()) : []);
-      const faultsCost = currentDevice.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(tags);
-      const newAutoPrice = faultsCost + newPartsCost;
-
-      if (currentDevice.isPriceManuallyEdited) {
-        updatedDevices[deviceIdx] = {
-          ...currentDevice,
-          partsCost: newPartsCost,
-          priceOverrideAcknowledged: false
-        };
-      } else {
-        updatedDevices[deviceIdx] = {
-          ...currentDevice,
-          partsCost: newPartsCost,
-          finalRepairPrice: newAutoPrice,
-          estimatedCost: newAutoPrice
-        };
-      }
-
-      const totalFinal = updatedDevices.reduce((sum, d) => sum + (d.finalRepairPrice ?? d.estimatedCost ?? 0), 0);
-
-      let updatedOrder: RepairOrder = {
-        ...selectedOrder,
-        devices: updatedDevices,
-        totalEstimatedCost: totalFinal,
-        finalRepairPrice: totalFinal
+    if (existingUsage) {
+      const newUsageQty = existingUsage.quantity + qty;
+      const newUsageTotalCost = newUsageQty * unitPurchaseCost;
+      const newUsageSellingTotal = newUsageQty * unitSellingPrice;
+      usageRecordToSave = {
+        ...existingUsage,
+        quantity: newUsageQty,
+        unitCost: unitPurchaseCost,
+        totalCost: newUsageTotalCost,
+        sellingPrice: unitSellingPrice,
+        sellingTotal: newUsageSellingTotal
       };
-
-      updatedOrder = addAuditLogRecordHelper(
-        updatedOrder,
-        "ADD_PART",
-        `قطع غيار جهاز ${currentDevice.type}`,
-        null,
-        `${product.name} (سعر البيع: ${unitSellingPrice} ج.م | كمية: ${qty})`,
-        "صرف قطعة غيار من المخزون وتوثيق حركة السحب",
-        currentUserForAction,
-        currentDevice.id
-      );
-
-      updatedOrder = addTimelineEventHelper(
-        updatedOrder,
-        "PART_ADDED",
-        `صرف قطعة غيار من المخزون: ${product.name} (كمية ${qty} بسعر بيع ${unitSellingPrice} ج.م)`,
-        currentUserForAction,
-        currentDevice.id
-      );
-
-      setSelectedOrder(updatedOrder);
-      updateRepairOrder(updatedOrder);
-      updateRepairOrderInSupabase(updatedOrder).catch(err => console.warn("Supabase order update warn:", err));
-
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));
-        window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_inventory_movements' } }));
-        window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
-      }
-    } catch (err: any) {
-      console.error("❌ Exception adding part to repair order:", err);
+      updatedUsageList = allUsages.map(pu => pu.id === existingUsage.id ? usageRecordToSave : pu);
+    } else {
+      const tempId = `PU-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      usageRecordToSave = {
+        id: tempId,
+        repairOrderId: selectedOrder.id,
+        inventoryItemId: product.id,
+        partName: product.nameAr || product.name,
+        sku: product.sku || product.id,
+        quantity: qty,
+        unitCost: unitPurchaseCost,
+        totalCost: totalCost,
+        sellingPrice: unitSellingPrice,
+        sellingTotal: unitSellingPrice * qty,
+        ownershipType: ownership,
+        responsiblePartnerId: owner === 'AHMED' ? 'P-001' : owner === 'ABDO' ? 'P-002' : 'SHOP',
+        accountingStatus: 'CONSUMED',
+        notes: `deviceId:${currentDevice.id || deviceIdx}`,
+        createdAt: new Date().toISOString()
+      };
+      updatedUsageList.push(usageRecordToSave);
     }
+
+    db.saveRepairPartUsages(updatedUsageList);
+
+    // Recalculate device partsCost and grand total
+    const activeUsagesForDevice = updatedUsageList.filter(
+      pu => (orderIdsToMatch.has(String(pu.repairOrderId)) || pu.repairOrderId === selectedOrder.id || String(pu.repairOrderId) === String(selectedOrder.id)) &&
+            pu.accountingStatus !== 'RETURNED' &&
+            pu.accountingStatus !== 'REVERSED' &&
+            ((pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) || selectedOrder.devices.length === 1)
+    );
+
+    const newPartsCost = activeUsagesForDevice.reduce((sum, pu) => {
+      const sellP = getUsageSellingUnitPrice(pu, products);
+      return sum + (pu.quantity * sellP);
+    }, 0);
+
+    const tags = currentDevice.selectedQuickFaults || (currentDevice.issue ? currentDevice.issue.split(" - ").map(s => s.trim()) : []);
+    const faultsCost = currentDevice.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(tags);
+    const newAutoPrice = faultsCost + newPartsCost;
+
+    if (currentDevice.isPriceManuallyEdited) {
+      updatedDevices[deviceIdx] = {
+        ...currentDevice,
+        partsCost: newPartsCost,
+        priceOverrideAcknowledged: false
+      };
+    } else {
+      updatedDevices[deviceIdx] = {
+        ...currentDevice,
+        partsCost: newPartsCost,
+        finalRepairPrice: newAutoPrice,
+        estimatedCost: newAutoPrice
+      };
+    }
+
+    const totalFinal = updatedDevices.reduce((sum, d) => sum + (d.finalRepairPrice ?? d.estimatedCost ?? 0), 0);
+
+    let updatedOrder: RepairOrder = {
+      ...selectedOrder,
+      devices: updatedDevices,
+      totalEstimatedCost: totalFinal,
+      finalRepairPrice: totalFinal
+    };
+
+    updatedOrder = addAuditLogRecordHelper(
+      updatedOrder,
+      "ADD_PART",
+      `قطع غيار جهاز ${currentDevice.type}`,
+      null,
+      `${product.name} (سعر البيع: ${unitSellingPrice} ج.م | كمية: ${qty})`,
+      "صرف قطعة غيار من المخزون وتوثيق حركة السحب",
+      currentUserForAction,
+      currentDevice.id
+    );
+
+    updatedOrder = addTimelineEventHelper(
+      updatedOrder,
+      "PART_ADDED",
+      `صرف قطعة غيار من المخزون: ${product.name} (كمية ${qty} بسعر بيع ${unitSellingPrice} ج.م)`,
+      currentUserForAction,
+      currentDevice.id
+    );
+
+    setSelectedOrder(updatedOrder);
+    updateRepairOrder(updatedOrder);
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
+    }
+
+    const tLocal = performance.now();
+    console.log(`⏱️ [AddPart] Local state & UI updated in ${(tLocal - t0).toFixed(2)}ms`);
+
+    // 2. Background Persistence to Supabase (Non-blocking)
+    (async () => {
+      const tMutStart = performance.now();
+      console.log(`⏱️ [AddPart] Background Supabase mutation started at ${(tMutStart - t0).toFixed(2)}ms`);
+
+      try {
+        const productUuid = (await ensureProductUuidInSupabase(product)) || product.id;
+        const repairOrderUuid = (await ensureRepairOrderUuidInSupabase(selectedOrder)) || selectedOrder.id;
+
+        updateProductQuantityInSupabase(productUuid, newQty).catch(err => console.warn("Supabase qty update warn:", err));
+
+        addInventoryMovementToSupabase({
+          productId: productUuid,
+          productNameSnapshot: product.nameAr || product.name,
+          movementType: 'REPAIR_USAGE',
+          quantityChange: -qty,
+          previousQuantity: product.quantity,
+          newQuantity: newQty,
+          costPriceSnapshot: unitPurchaseCost,
+          sellingPriceSnapshot: unitSellingPrice,
+          totalCost: totalCost,
+          referenceId: selectedOrder.id,
+          repairOrderId: selectedOrder.id,
+          owner: owner,
+          notes: `صرف قطعة غيار صيانة: ${product.nameAr || product.name} للجهاز (${getDeviceDisplayName(currentDevice)})`,
+          createdAt: new Date().toISOString()
+        }).catch(err => console.warn("Supabase movement warn:", err));
+
+        if (existingUsage) {
+          updateRepairPartUsageInSupabase(existingUsage.id, {
+            quantity: usageRecordToSave.quantity,
+            unitCost: unitPurchaseCost,
+            totalCost: usageRecordToSave.totalCost,
+            sellingPrice: unitSellingPrice,
+            sellingTotal: usageRecordToSave.sellingTotal
+          }).catch(err => console.warn("Supabase usage update warn:", err));
+        } else {
+          const addedUsage = await addRepairPartUsageToSupabase({
+            repairOrderId: selectedOrder.id,
+            inventoryItemId: productUuid,
+            partName: product.nameAr || product.name,
+            sku: product.sku || product.id,
+            quantity: qty,
+            unitCost: unitPurchaseCost,
+            totalCost: totalCost,
+            sellingPrice: unitSellingPrice,
+            sellingTotal: unitSellingPrice * qty,
+            ownershipType: ownership,
+            responsiblePartnerId: owner === 'AHMED' ? 'P-001' : owner === 'ABDO' ? 'P-002' : 'SHOP',
+            accountingStatus: 'CONSUMED',
+            notes: `deviceId:${currentDevice.id || deviceIdx}`
+          });
+
+          if (addedUsage && addedUsage.id !== usageRecordToSave.id) {
+            const currentLatestUsages = db.getRepairPartUsages();
+            const reconciledList = currentLatestUsages.map(u =>
+              u.id === usageRecordToSave.id ? { ...addedUsage, repairOrderId: selectedOrder.id } : u
+            );
+            db.saveRepairPartUsages(reconciledList);
+          }
+        }
+
+        updateRepairOrderInSupabase(updatedOrder).catch(err => console.warn("Supabase order update warn:", err));
+
+        const tMutEnd = performance.now();
+        console.log(`⏱️ [AddPart] Background Supabase mutation completed in ${(tMutEnd - tMutStart).toFixed(2)}ms (Total since click: ${(tMutEnd - t0).toFixed(2)}ms)`);
+
+      } catch (mutationError: any) {
+        console.error("❌ [AddPart] Background mutation failed, rolling back:", mutationError);
+        // Rollback optimistic update
+        updateProduct({ ...product, quantity: product.quantity });
+        const currentUsages = db.getRepairPartUsages();
+        const rollbackUsages = currentUsages.filter(u => u.id !== usageRecordToSave.id);
+        if (existingUsage) {
+          db.saveRepairPartUsages(currentUsages.map(u => u.id === existingUsage.id ? existingUsage : u));
+        } else {
+          db.saveRepairPartUsages(rollbackUsages);
+        }
+        setSelectedOrder(selectedOrder);
+        updateRepairOrder(selectedOrder);
+
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));
+          window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
+        }
+
+        dialog.alert({
+          message: "حدث خطأ أثناء حفظ قطعة الغيار بالخادم، تم إلغاء العملية وتحديث المخزون.",
+          variant: "error"
+        });
+      } finally {
+        setBusyProductIds(prev => {
+          const next = new Set(prev);
+          next.delete(productId);
+          return next;
+        });
+      }
+    })();
   };
 
   const handleRemovePartUsage = (usageId: string, deviceIdx: number, removeQty: number = 1) => {
@@ -1839,25 +1911,29 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
                                 {matchedSearchResults.slice(0, 12).map((p) => {
                                   const price = Number(p.sellPrice || (p as any).price || p.purchasePrice || 0);
+                                  const isBusy = busyProductIds.has(p.id);
                                   const isOutOfStock = p.quantity <= 0;
                                   return (
                                     <button
                                       key={p.id}
                                       type="button"
-                                      disabled={isOutOfStock}
+                                      disabled={isOutOfStock || isBusy}
                                       onClick={() => {
                                         handleAddPartToDevice(devIdx, p.id, 1);
                                         setPartSearch('');
                                       }}
-                                      className={`p-2 rounded-lg text-xs font-bold border text-right transition flex items-center justify-between gap-2 cursor-pointer ${
-                                        isOutOfStock
-                                          ? "bg-gray-900 text-gray-600 border-gray-800 cursor-not-allowed opacity-50"
-                                          : "bg-[#11131e] text-white border-[#2a2d42] hover:border-indigo-500 hover:bg-indigo-950/40"
+                                      className={`p-2 rounded-lg text-xs font-bold border text-right transition flex items-center justify-between gap-2 ${
+                                        isOutOfStock || isBusy
+                                          ? "bg-gray-900 text-gray-500 border-gray-800 cursor-not-allowed opacity-60"
+                                          : "bg-[#11131e] text-white border-[#2a2d42] hover:border-indigo-500 hover:bg-indigo-950/40 cursor-pointer"
                                       }`}
                                     >
                                       <div className="truncate">
                                         <p className="font-bold text-white truncate text-xs">{p.nameAr || p.name}</p>
-                                        <p className="text-[10px] text-gray-400 font-mono">المتاح: {p.quantity}</p>
+                                        <p className="text-[10px] text-gray-400 font-mono flex items-center gap-1">
+                                          <span>المتاح: {p.quantity}</span>
+                                          {isBusy && <span className="text-amber-400 font-bold animate-pulse text-[9px]">(جاري الحفظ...)</span>}
+                                        </p>
                                       </div>
                                       <span className="font-mono font-extrabold text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded text-[11px] shrink-0 border border-emerald-500/30">
                                         {price.toLocaleString('ar-EG')} ج.م
