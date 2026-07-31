@@ -55,11 +55,13 @@ export default function Accounting({ openInvoiceModal = false }: AccountingProps
     username: "elbanna",
     name: "أحمد البنا",
     fullName: "أحمد البنا (الشريك الأول)",
-    role: "OWNER",
+    role: "OWNER" as any,
     roleId: "OWNER",
     email: "elbannafc@gmail.com",
     isActive: true,
-    createdAt: new Date().toISOString()
+    permissions: ["all"],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
   };
 
   // Tabs: Invoices vs Expenses

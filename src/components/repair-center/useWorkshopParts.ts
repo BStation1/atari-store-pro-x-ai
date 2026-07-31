@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useMemo, Dispatch, SetStateAction } from "react";
+import { useState, useRef, useCallback, useMemo, useEffect, Dispatch, SetStateAction } from "react";
 import {
   RepairOrder,
   RepairPartUsage,
@@ -43,6 +43,160 @@ export function calculateSuggestedPriceForFaults(faultLabels: string[]): number 
 }
 
 /**
+ * Helper to check if two order IDs represent the same logical order (e.g., local ID 'ATR-10001' vs Supabase UUID).
+ */
+export function isSameOrderIdentity(
+  orderIdA: string,
+  orderIdB: string,
+  ordersList: RepairOrder[] = []
+): boolean {
+  if (!orderIdA || !orderIdB) return false;
+  if (orderIdA === orderIdB) return true;
+
+  const setA = new Set<string>([orderIdA]);
+  const matchedA = ordersList.find(o => o.id === orderIdA || (o as any).orderNumber === orderIdA || (o as any).uuid === orderIdA);
+  if (matchedA) {
+    if (matchedA.id) setA.add(String(matchedA.id));
+    if ((matchedA as any).orderNumber) setA.add(String((matchedA as any).orderNumber));
+    if ((matchedA as any).uuid) setA.add(String((matchedA as any).uuid));
+  }
+
+  const setB = new Set<string>([orderIdB]);
+  const matchedB = ordersList.find(o => o.id === orderIdB || (o as any).orderNumber === orderIdB || (o as any).uuid === orderIdB);
+  if (matchedB) {
+    if (matchedB.id) setB.add(String(matchedB.id));
+    if ((matchedB as any).orderNumber) setB.add(String((matchedB as any).orderNumber));
+    if ((matchedB as any).uuid) setB.add(String((matchedB as any).uuid));
+  }
+
+  for (const id of setA) {
+    if (setB.has(id)) return true;
+  }
+  return false;
+}
+
+/**
+ * Helper to check if two product IDs represent the same logical product (e.g., local ID 'PROD-001' vs Supabase UUID vs SKU).
+ */
+export function isSameProductIdentity(
+  productIdA: string,
+  productIdB: string,
+  productsList: Product[] = []
+): boolean {
+  if (!productIdA || !productIdB) return false;
+  if (productIdA === productIdB) return true;
+
+  const setA = new Set<string>([productIdA]);
+  const prodA = productsList.find(p => p.id === productIdA || (p as any).uuid === productIdA || p.sku === productIdA);
+  if (prodA) {
+    if (prodA.id) setA.add(String(prodA.id));
+    if ((prodA as any).uuid) setA.add(String((prodA as any).uuid));
+    if (prodA.sku) setA.add(String(prodA.sku));
+  }
+
+  const setB = new Set<string>([productIdB]);
+  const prodB = productsList.find(p => p.id === productIdB || (p as any).uuid === productIdB || p.sku === productIdB);
+  if (prodB) {
+    if (prodB.id) setB.add(String(prodB.id));
+    if ((prodB as any).uuid) setB.add(String((prodB as any).uuid));
+    if (prodB.sku) setB.add(String(prodB.sku));
+  }
+
+  for (const id of setA) {
+    if (setB.has(id)) return true;
+  }
+  return false;
+}
+
+/**
+ * Helper to check if two note fields represent the same device index or device ID.
+ */
+export function isSameDeviceIdentity(notesA?: string, notesB?: string): boolean {
+  const getDevId = (notes?: string) => {
+    if (!notes) return '0';
+    const match = notes.match(/deviceId:([^\s,;]+)/);
+    return match ? match[1] : '0';
+  };
+  return getDevId(notesA) === getDevId(notesB);
+}
+
+/**
+ * Canonical check if a part usage belongs to a given repair order & device.
+ */
+export function isPartUsageForOrderAndDevice(
+  pu: RepairPartUsage,
+  order: RepairOrder,
+  deviceIdx: number = 0,
+  ordersList: RepairOrder[] = [],
+  productsList: Product[] = []
+): boolean {
+  if (!order || !pu) return false;
+
+  // Accounting status MUST be active (CONSUMED or PENDING, NOT RETURNED/REVERSED)
+  if (pu.accountingStatus === 'RETURNED' || pu.accountingStatus === 'REVERSED') {
+    return false;
+  }
+
+  // Check order identity across local ID, orderNumber, and Supabase UUID
+  const orderMatches = isSameOrderIdentity(String(pu.repairOrderId), String(order.id), ordersList) ||
+                       isSameOrderIdentity(String(pu.repairOrderId), String((order as any).orderNumber || ''), ordersList) ||
+                       isSameOrderIdentity(String(pu.repairOrderId), String((order as any).uuid || ''), ordersList);
+  if (!orderMatches) return false;
+
+  // Check device matching
+  const currentDevice = order.devices[deviceIdx];
+  if (order.devices.length === 1) return true;
+  if (!currentDevice) return true;
+
+  if (pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) {
+    return true;
+  }
+  if (!pu.notes || !pu.notes.includes('deviceId:')) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Merge remote part usages with pending optimistic usages while mutations are active.
+ * Guarantees zero-flicker reconciliation between temporary IDs and server records.
+ */
+export function mergePartUsages(
+  remoteUsages: RepairPartUsage[],
+  pendingUsages: RepairPartUsage[],
+  ordersList: RepairOrder[] = [],
+  productsList: Product[] = []
+): RepairPartUsage[] {
+  const result: RepairPartUsage[] = [...remoteUsages];
+  const remoteIdSet = new Set(remoteUsages.map(u => u.id));
+
+  for (const pending of pendingUsages) {
+    if (remoteIdSet.has(pending.id)) {
+      continue;
+    }
+
+    // Check if remote data already has an active persisted equivalent
+    const existsInRemote = remoteUsages.some(ru => {
+      const orderMatches = isSameOrderIdentity(String(ru.repairOrderId), String(pending.repairOrderId), ordersList);
+      const productMatches = isSameProductIdentity(String(ru.inventoryItemId), String(pending.inventoryItemId), productsList);
+      const deviceMatches = isSameDeviceIdentity(ru.notes, pending.notes);
+      const statusActive = ru.accountingStatus !== 'RETURNED' && ru.accountingStatus !== 'REVERSED';
+      return orderMatches && productMatches && deviceMatches && statusActive;
+    });
+
+    if (!existsInRemote) {
+      result.push(pending);
+    }
+  }
+
+  // Deduplicate by ID
+  const deduppedMap = new Map<string, RepairPartUsage>();
+  result.forEach(u => deduppedMap.set(u.id, u));
+  return Array.from(deduppedMap.values());
+}
+
+/**
  * Pure helper function to recalculate repair order device partsCost and totals
  * based on a specific set of active part usages and products list.
  */
@@ -50,23 +204,14 @@ export function recalculateOrderTotals(
   order: RepairOrder,
   usages: RepairPartUsage[],
   deviceIdx: number = 0,
-  productsList: Product[] = []
+  productsList: Product[] = [],
+  ordersList: RepairOrder[] = []
 ): RepairOrder {
-  const orderIdsToMatch = new Set<string>([
-    String(order.id || ''),
-    String((order as any).orderNumber || ''),
-    String((order as any).uuid || '')
-  ].filter(Boolean));
-
-  const updatedDevices = [...order.devices];
-  const currentDevice = updatedDevices[deviceIdx];
+  const currentDevice = order.devices[deviceIdx];
   if (!currentDevice) return order;
 
-  const activeUsagesForDevice = usages.filter(
-    pu => (orderIdsToMatch.has(String(pu.repairOrderId)) || pu.repairOrderId === order.id || String(pu.repairOrderId) === String(order.id)) &&
-          pu.accountingStatus !== 'RETURNED' &&
-          pu.accountingStatus !== 'REVERSED' &&
-          ((pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) || order.devices.length === 1)
+  const activeUsagesForDevice = usages.filter(pu =>
+    isPartUsageForOrderAndDevice(pu, order, deviceIdx, ordersList, productsList)
   );
 
   const newPartsCost = activeUsagesForDevice.reduce((sum, pu) => {
@@ -78,6 +223,7 @@ export function recalculateOrderTotals(
   const faultsCost = currentDevice.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(tags);
   const newAutoPrice = faultsCost + newPartsCost;
 
+  const updatedDevices = [...order.devices];
   if (currentDevice.isPriceManuallyEdited) {
     updatedDevices[deviceIdx] = {
       ...currentDevice,
@@ -176,26 +322,42 @@ export function useWorkshopParts({
     updatedAt: new Date().toISOString()
   };
 
+  // Pending optimistic usages map across active mutations
+  const pendingOptimisticUsagesRef = useRef<Map<string, RepairPartUsage>>(new Map());
+
+  // Merge remote usages from AppDataContext with pending optimistic usages
+  const mergedPartUsages = useMemo(() => {
+    return mergePartUsages(
+      partUsages,
+      Array.from(pendingOptimisticUsagesRef.current.values()),
+      [],
+      products
+    );
+  }, [partUsages, products]);
+
   // 1. Calculate visible part usages for the current selected order / device
   const visiblePartUsages = useMemo(() => {
     const order = selectedOrder;
     if (!order) return [];
 
-    const orderIdsToMatch = new Set<string>([
-      String(order.id || ''),
-      String((order as any).orderNumber || ''),
-      String((order as any).uuid || '')
-    ].filter(Boolean));
-
-    const currentDevice = order.devices[0];
-
-    return partUsages.filter(
-      pu => (orderIdsToMatch.has(String(pu.repairOrderId)) || pu.repairOrderId === order.id || String(pu.repairOrderId) === String(order.id)) &&
-            pu.accountingStatus !== 'RETURNED' &&
-            pu.accountingStatus !== 'REVERSED' &&
-            ((pu.notes && pu.notes.includes(`deviceId:${currentDevice?.id || 0}`)) || order.devices.length === 1)
+    return mergedPartUsages.filter(pu =>
+      isPartUsageForOrderAndDevice(pu, order, 0, [], products)
     );
-  }, [selectedOrder, partUsages]);
+  }, [selectedOrder, mergedPartUsages, products]);
+
+  // Structured logging on render (Section 1 requirement)
+  useEffect(() => {
+    const ts = new Date().toISOString().substring(11, 23);
+    const traceItems = visiblePartUsages.map(u => ({
+      id: u.id,
+      qty: u.quantity,
+      status: u.accountingStatus || 'CONSUMED',
+      repairOrderId: u.repairOrderId,
+      inventoryItemId: u.inventoryItemId,
+      notes: u.notes || ''
+    }));
+    console.log(`[WORKSHOP_PARTS_TRACE ${ts}] Rendered visiblePartUsages count=${visiblePartUsages.length}:`, JSON.stringify(traceItems));
+  }, [visiblePartUsages]);
 
   // 2. Calculate parts total selling price
   const partsTotal = useMemo(() => {
@@ -235,19 +397,10 @@ export function useWorkshopParts({
     if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) owner = 'AHMED';
     else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) owner = 'ABDO';
 
-    const orderIdsToMatch = new Set<string>([
-      String(order.id || ''),
-      String((order as any).orderNumber || ''),
-      String((order as any).uuid || '')
-    ].filter(Boolean));
-
-    const allUsages = partUsagesRef.current;
-    const existingUsage = allUsages.find(
-      pu => (orderIdsToMatch.has(String(pu.repairOrderId)) || pu.repairOrderId === order.id || String(pu.repairOrderId) === String(order.id)) &&
-            (pu.inventoryItemId === product.id || ((product as any).uuid && pu.inventoryItemId === (product as any).uuid)) &&
-            pu.accountingStatus !== 'RETURNED' &&
-            pu.accountingStatus !== 'REVERSED' &&
-            ((pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) || order.devices.length === 1)
+    const allUsages = mergePartUsages(partUsagesRef.current, Array.from(pendingOptimisticUsagesRef.current.values()), [], currentProducts);
+    const existingUsage = allUsages.find(pu =>
+      isPartUsageForOrderAndDevice(pu, order, deviceIdx, [], currentProducts) &&
+      isSameProductIdentity(pu.inventoryItemId, product.id, currentProducts)
     );
 
     const mutationId = `mut_add_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
@@ -305,6 +458,7 @@ export function useWorkshopParts({
         createdAt: new Date().toISOString()
       };
       updatedUsageList.push(usageRecordToSave);
+      pendingOptimisticUsagesRef.current.set(snapshot.tempUsageId!, usageRecordToSave);
     }
 
     persistLocalUsages(updatedUsageList);
@@ -342,6 +496,7 @@ export function useWorkshopParts({
 
     // Async task queued per repair order
     const task = async () => {
+      let createdPersistedUsage: RepairPartUsage | null = null;
       try {
         // Debug testing hook: Force failure simulation if requested
         if (
@@ -414,15 +569,23 @@ export function useWorkshopParts({
           updateRepairOrderInSupabase(latestOrderForDb)
         ]);
 
-        if (!existingUsage && persistedUsage?.id && snapshot.tempUsageId && persistedUsage.id !== snapshot.tempUsageId) {
-          replacePartUsageIdLocal(snapshot.tempUsageId, {
+        if (!existingUsage && persistedUsage?.id && snapshot.tempUsageId) {
+          createdPersistedUsage = persistedUsage;
+          const reconciledUsage: RepairPartUsage = {
             ...usageRecordToSave,
             ...persistedUsage,
             repairOrderId: order.id
-          });
+          };
+          pendingOptimisticUsagesRef.current.delete(snapshot.tempUsageId);
+          pendingOptimisticUsagesRef.current.set(reconciledUsage.id, reconciledUsage);
+          replacePartUsageIdLocal(snapshot.tempUsageId, reconciledUsage);
         }
       } catch (mutationError: any) {
         console.error(`❌ [useWorkshopParts:AddPart] Mutation ${mutationId} failed, performing granular rollback:`, mutationError);
+
+        if (snapshot.tempUsageId) {
+          pendingOptimisticUsagesRef.current.delete(snapshot.tempUsageId);
+        }
 
         // GRANULAR EXACT ROLLBACK:
         // 1. Revert product stock by -snapshot.qtyDelta
@@ -457,6 +620,9 @@ export function useWorkshopParts({
           variant: "error"
         });
       } finally {
+        if (snapshot.tempUsageId) pendingOptimisticUsagesRef.current.delete(snapshot.tempUsageId);
+        if (createdPersistedUsage?.id) pendingOptimisticUsagesRef.current.delete(createdPersistedUsage.id);
+
         const remaining = (pendingMutationsRef.current.get(product.id) || 1) - 1;
         pendingMutationsRef.current.set(product.id, remaining);
         if (remaining <= 0) {

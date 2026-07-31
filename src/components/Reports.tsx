@@ -9,7 +9,7 @@ export default function Reports() {
     <div className="space-y-6">
       <FinancialReportsDashboard
         currentUserId={user?.id || 'U-101'}
-        userRole={user?.role || 'OWNER'}
+        userRole={(user?.role || 'OWNER') as any}
       />
     </div>
   );

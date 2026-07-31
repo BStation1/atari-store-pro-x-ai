@@ -244,7 +244,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       const fresh = orders.find(order => order.id === prev.id);
       if (!fresh || fresh === prev) return prev;
       const sameVersion =
-        fresh.updatedAt === prev.updatedAt &&
+        (fresh as any).updatedAt === (prev as any).updatedAt &&
         fresh.status === prev.status &&
         fresh.finalRepairPrice === prev.finalRepairPrice &&
         fresh.devices.length === prev.devices.length;
@@ -281,11 +281,13 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     username: "elbanna",
     name: "أحمد البنا",
     fullName: "أحمد البنا (الشريك الأول)",
-    role: "OWNER",
+    role: "OWNER" as any,
     roleId: "OWNER",
     email: "elbannafc@gmail.com",
     isActive: true,
-    createdAt: new Date().toISOString()
+    permissions: ["all"],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
   };
 
   // Status mapping colors & texts
