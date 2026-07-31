@@ -1,6 +1,8 @@
 /**
- * @license
- * SPDX-License-Identifier: Apache-2.0
+ * Primary Application Entry Point (Phase 3 Bootstrap Architecture)
+ * Single-tier bootstrap initialization via AppDataProvider.
+ * Prevents unauthenticated fetches, premature page rendering, and fake zero KPI flashes.
+ * @license Apache-2.0
  */
 
 import React, { useState, useEffect } from "react";
@@ -13,31 +15,26 @@ import {
   TrendingUp,
   Settings,
   PlusCircle,
-  FileText,
   Search,
-  Bell,
-  CheckCircle2,
-  Menu,
-  X,
   User as UserIcon,
   Smartphone,
   Sparkles,
   PieChart,
-  LogOut,
   ShieldCheck,
-  ChevronDown,
-  KeyRound,
   AlertCircle,
-  RefreshCw
+  RefreshCw,
+  X,
+  LogOut
 } from "lucide-react";
 import { db } from "./lib/data";
 import { authStore } from "./lib/authStore";
 import { isSupabaseConfigured } from "./lib/supabaseClient";
-import { hasPermission, getViewRequiredPermission, ROLE_LABELS_AR } from "./lib/authPermissions";
+import { hasPermission, getViewRequiredPermission } from "./lib/authPermissions";
 import { useCurrentUser, useSettings, useProducts, useRepairOrders } from "./hooks/useData";
+import { AppDataProvider, useAppData } from "./context/AppDataContext";
+import { DialogProvider } from "./context/DialogContext";
 
 // Views & Modals
-import { DialogProvider } from "./context/DialogContext";
 import Dashboard from "./components/Dashboard";
 import Reception from "./components/Reception";
 import CustomersList from "./components/CustomersList";
@@ -60,7 +57,47 @@ import UserProfileModal from "./components/UserProfileModal";
 import AppShell from "./components/layout/AppShell";
 
 function MainApp() {
-  // Initialize Database once on boot & check URL parameters
+  const {
+    bootstrapState,
+    bootstrapError,
+    currentUser: currentLoggedUser,
+    hasOwner,
+    retryBootstrap,
+    handleLoginSuccess,
+    handleLogout
+  } = useAppData();
+
+  const { settings } = useSettings();
+  const { products } = useProducts();
+  const { orders } = useRepairOrders();
+
+  // Navigation and view state
+  const [currentView, setCurrentView] = useState<string>("dashboard");
+  const [navigationParams, setNavigationParams] = useState<any>(null);
+  const [postLoginRedirect, setPostLoginRedirect] = useState<string>("dashboard");
+
+  // Notifications Drawer state
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+
+  // User Dropdown and Profile Modal states
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+
+  // Quick Command Search Modal (Ctrl+K)
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [cmdSearchQuery, setCmdSearchQuery] = useState("");
+
+  // Notifications calculation
+  const [notificationsTick, setNotificationsTick] = useState(0);
+  const handleRefreshNotifications = () => setNotificationsTick(prev => prev + 1);
+
+  const notificationsList = React.useMemo(() => {
+    return db.getNotifications();
+  }, [notificationsTick, products, orders]);
+
+  const totalNotifications = notificationsList.filter(n => !n.isRead).length;
+
+  // Initialize Database & check URL parameters once on boot
   useEffect(() => {
     db.init();
 
@@ -82,40 +119,6 @@ function MainApp() {
       }
     }
   }, []);
-
-  const { user: currentLoggedUser } = useCurrentUser();
-  const { settings } = useSettings();
-  const { products } = useProducts();
-  const { orders } = useRepairOrders();
-
-  // Navigation and view state
-  const [currentView, setCurrentView] = useState<string>("dashboard");
-  const [navigationParams, setNavigationParams] = useState<any>(null);
-  const [postLoginRedirect, setPostLoginRedirect] = useState<string>("dashboard");
-
-  // Notifications Drawer state
-  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
-
-  // User Dropdown and Profile Modal states
-  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
-  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
-
-  // Responsive Sidebar state
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-
-  // Quick Command Search Modal (Ctrl+K)
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [cmdSearchQuery, setCmdSearchQuery] = useState("");
-
-  // Notifications calculation
-  const [notificationsTick, setNotificationsTick] = useState(0);
-  const handleRefreshNotifications = () => setNotificationsTick(prev => prev + 1);
-
-  const notificationsList = React.useMemo(() => {
-    return db.getNotifications();
-  }, [notificationsTick, products, orders]);
-
-  const totalNotifications = notificationsList.filter(n => !n.isRead).length;
 
   // Keyboard Shortcuts Listeners (Ctrl+N, Ctrl+S, Ctrl+K)
   useEffect(() => {
@@ -141,7 +144,6 @@ function MainApp() {
   }, []);
 
   const handleNavigate = (view: string, params: any = null) => {
-    // If navigating to internal page and not logged in, redirect to login
     const isPublic = view === "tracking" || view === "login" || view === "setup" || view === "unauthorized";
     if (!isPublic && !currentLoggedUser) {
       setPostLoginRedirect(view);
@@ -151,17 +153,9 @@ function MainApp() {
 
     setCurrentView(view);
     setNavigationParams(params);
-    setIsSidebarOpen(false);
     setIsSearchOpen(false);
     setIsUserMenuOpen(false);
     setCmdSearchQuery("");
-  };
-
-  const handleLogout = () => {
-    authStore.logout();
-    setIsUserMenuOpen(false);
-    setIsProfileModalOpen(false);
-    setCurrentView("login");
   };
 
   const handleLogoutAllDevices = () => {
@@ -188,129 +182,80 @@ function MainApp() {
     { id: "settings", label: "إعدادات النظام الفنية", icon: Settings }
   ];
 
-  // Filter menu items based on permissions (Requirement 17)
+  // Filter menu items based on permissions
   const allowedMenuItems = allMenuItems.filter(item => {
-    if (item.id === "tracking") return true; // Public tracking page
+    if (item.id === "tracking") return true;
     if (!currentLoggedUser) return false;
     const reqPerm = getViewRequiredPermission(item.id);
     if (!reqPerm) return true;
     return hasPermission(currentLoggedUser.roleId, currentLoggedUser.permissions, reqPerm);
   });
 
-  // Check if system has an owner & verify session from Supabase
-  const [hasOwner, setHasOwner] = useState<boolean>(true); // Default to true so setup screen NEVER flashes accidentally
-  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
-  const [authError, setAuthError] = useState<string | null>(null);
-
-  const checkAuthAndOwner = async () => {
-    setIsAuthChecking(true);
-    setAuthError(null);
-
-    try {
-      if (!isSupabaseConfigured) {
-        // If Supabase environment variables are missing, fallback to local operational mode without crash
-        setHasOwner(true);
-        setIsAuthChecking(false);
-        return;
-      }
-
-      // 1. Verify Supabase Auth session first
-      const sessionRes = await authStore.validateAndSyncSession();
-
-      if (sessionRes.error) {
-        const cleanErr = (sessionRes.error.includes('fetch') || sessionRes.error.includes('TypeError'))
-          ? "تعذر الاتصال بقاعدة البيانات Supabase. يرجى التحقق من إعدادات VITE_SUPABASE_URL و VITE_SUPABASE_PUBLISHABLE_KEY في Vercel ثم إعادة النشر (Redeploy)."
-          : sessionRes.error;
-        setAuthError(cleanErr);
-        setIsAuthChecking(false);
-        return;
-      }
-
-      // 2. If no user session exists, check if system has an owner in Supabase
-      if (!sessionRes.user) {
-        const ownerExists = await authStore.checkHasOwnerInSupabase();
-        setHasOwner(ownerExists);
-      } else {
-        setHasOwner(true);
-      }
-    } catch (err: any) {
-      console.warn("⚠️ Error verifying auth and owner in Supabase:", err);
-      const raw = String(err?.message || err || '');
-      if (raw.includes('fetch') || raw.includes('TypeError')) {
-        setAuthError("تعذر الاتصال بقاعدة البيانات Supabase (TypeError: Failed to fetch). يرجى التأكد من ضبط VITE_SUPABASE_URL و VITE_SUPABASE_PUBLISHABLE_KEY في إعدادات Vercel ثم إعادة النشر.");
-      } else {
-        setAuthError(err?.message || "حدث خطأ أثناء الاتصال بخادم المصادقة.");
-      }
-    } finally {
-      setIsAuthChecking(false);
-    }
-  };
-
-  useEffect(() => {
-    let isMounted = true;
-
-    checkAuthAndOwner();
-
-    const handleAuthChanged = () => {
-      if (isMounted) {
-        authStore.checkHasOwnerInSupabase().then(res => {
-          if (isMounted) setHasOwner(res);
-        });
-      }
-    };
-
-    window.addEventListener("atari_auth_changed", handleAuthChanged);
-    return () => {
-      isMounted = false;
-      window.removeEventListener("atari_auth_changed", handleAuthChanged);
-    };
-  }, []);
-
-  // If viewing public tracking page, render directly without login wrapper
+  // 1. If viewing public tracking page, render directly
   if (currentView === "tracking") {
     return <TrackingPage initialQuery={navigationParams?.initialQuery} />;
   }
 
-  // Loading state while verifying session & owner status
-  if (isAuthChecking) {
+  // 2. Loading state while bootstrapping auth or business data
+  if (bootstrapState === 'BOOTING' || bootstrapState === 'AUTH_LOADING' || bootstrapState === 'DATA_LOADING') {
+    const statusText = bootstrapState === 'DATA_LOADING'
+      ? "جاري تحميل وتزامن بيانات النظام الفنية..."
+      : "جاري التحقق من جلسة الدخول وصلاحيات النظام...";
+
     return (
       <div className="min-h-screen bg-[#070913] text-gray-100 flex items-center justify-center p-4 font-sans dir-rtl">
         <div className="text-center space-y-4">
-          <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="text-xs text-gray-400 font-bold">جاري التحقق من جلسة الدخول وصلاحيات النظام...</p>
+          <div className="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto shadow-lg shadow-indigo-500/20"></div>
+          <div className="space-y-1">
+            <h3 className="text-sm font-bold text-white">نظام إدارة صيانة أتاري</h3>
+            <p className="text-xs text-gray-400 font-bold">{statusText}</p>
+          </div>
         </div>
       </div>
     );
   }
 
-  // Error state during session verification
-  if (authError) {
+  // 3. Error state during bootstrap
+  if (bootstrapState === 'ERROR' || bootstrapError) {
     return (
       <div className="min-h-screen bg-[#070913] text-gray-100 flex items-center justify-center p-4 font-sans dir-rtl">
         <div className="bg-[#11131e] border border-red-500/30 p-6 max-w-md w-full rounded-3xl shadow-2xl text-center space-y-4">
           <div className="w-12 h-12 bg-red-500/10 border border-red-500/20 rounded-2xl flex items-center justify-center mx-auto text-red-400">
             <AlertCircle className="w-6 h-6 text-red-400" />
           </div>
-          <h2 className="text-base font-bold text-white">خطأ في التحقق من المصادقة</h2>
-          <p className="text-xs text-red-300 leading-relaxed">{authError}</p>
-          <button
-            onClick={() => checkAuthAndOwner()}
-            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-xl text-xs transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer"
-          >
-            <RefreshCw className="w-4 h-4" />
-            <span>إعادة المحاولة</span>
-          </button>
+          <div className="space-y-1">
+            <h2 className="text-base font-bold text-white">تعذر تحميل بيانات النظام</h2>
+            <p className="text-xs text-red-300 leading-relaxed">
+              {bootstrapError || "حدث خطأ أثناء الاتصال بقاعدة البيانات وقراءة البيانات الأولية."}
+            </p>
+          </div>
+          <div className="flex gap-3 pt-2">
+            <button
+              onClick={() => retryBootstrap()}
+              className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl text-xs transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <RefreshCw className="w-4 h-4" />
+              <span>إعادة المحاولة</span>
+            </button>
+            <button
+              onClick={() => handleLogout()}
+              className="bg-gray-800 hover:bg-gray-700 text-gray-300 font-bold py-3 px-4 rounded-xl text-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>تسجيل الخروج</span>
+            </button>
+          </div>
         </div>
       </div>
     );
   }
 
-  // If setup flow is requested or system has no owner in Supabase
+  // 4. If setup flow is requested or system has no owner
   if (currentView === "setup" || (!hasOwner && !currentLoggedUser && currentView !== "login")) {
     return (
       <InitialSetup
         onSuccess={() => {
-          setHasOwner(true);
+          retryBootstrap();
           setCurrentView("dashboard");
         }}
         onCancel={() => {
@@ -320,11 +265,13 @@ function MainApp() {
     );
   }
 
-  // If user is not logged in, render Login View
+  // 5. If user is not logged in, render Login View
   if (!currentLoggedUser || currentView === "login") {
     return (
       <Login
-        onSuccess={() => {
+        onSuccess={async () => {
+          const user = authStore.getCurrentUser();
+          if (user) await handleLoginSuccess(user);
           const target = postLoginRedirect || "dashboard";
           setCurrentView(target);
         }}
@@ -334,6 +281,7 @@ function MainApp() {
       />
     );
   }
+
 
   // Check view permissions
   const requiredPerm = getViewRequiredPermission(currentView);
@@ -411,7 +359,6 @@ function MainApp() {
         <ForcePasswordChangeModal
           userId={currentLoggedUser.id}
           onSuccess={() => {
-            // Trigger auth refresh
             window.dispatchEvent(new Event("atari_auth_changed"));
           }}
         />
@@ -513,7 +460,9 @@ function MainApp() {
 export default function App() {
   return (
     <DialogProvider>
-      <MainApp />
+      <AppDataProvider>
+        <MainApp />
+      </AppDataProvider>
     </DialogProvider>
   );
 }

@@ -195,3 +195,16 @@ export async function fetchOrMigratePartnerSettlements(): Promise<{
     return { success: false, error: err?.message, settlements: localSettlements };
   }
 }
+
+export function getLocalPartnerLedgerBackup(): PartnerLedgerEntry[] {
+  return db.getPartnerLedger();
+}
+
+export function getLocalPartnerSettlementsBackup(): PartnerSettlement[] {
+  return db.getPartnerSettlements();
+}
+
+export function getLocalPartnerTransactionsBackup(): PartnerTransaction[] {
+  return db.getPartnerTransactions();
+}
+

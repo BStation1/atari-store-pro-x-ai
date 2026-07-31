@@ -202,3 +202,12 @@ export async function updateRepairPartUsageInSupabase(id: string, updates: Parti
     }
   }
 }
+
+export function getLocalRepairPartUsagesBackup(): RepairPartUsage[] {
+  return db.getRepairPartUsages();
+}
+
+export function saveLocalRepairPartUsagesBackup(data: RepairPartUsage[]): void {
+  db.saveRepairPartUsages(data);
+}
+

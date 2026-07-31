@@ -1,65 +1,48 @@
 /**
- * @license
- * SPDX-License-Identifier: Apache-2.0
+ * Centralized Data Hooks (Phase 3 Bootstrap Refactor)
+ * Delegates shared datasets to AppDataContext.
+ * Eliminates duplicate initial queries, fetch storms, and unauthenticated state overwrites.
+ * @license Apache-2.0
  */
 
-import { useState, useEffect, useRef } from "react";
-import { supabase, isSupabaseConfigured } from "../lib/supabaseClient";
-import { fetchOrMigrateRepairPartUsages, addRepairPartUsageToSupabase } from "../lib/supabasePartUsages";
-import { fetchOrMigrateExpenses, addExpenseToSupabase } from "../lib/supabaseExpenses";
-import { fetchOrMigratePartnerTransactions, fetchOrMigratePartnerLedger, fetchOrMigratePartnerSettlements } from "../lib/supabasePartnerAccounting";
+import { useAppData } from "../context/AppDataContext";
 import {
   db,
-  fetchOrMigrateStoreSettings,
-  fetchOrMigrateCategories,
-  getCategoriesFromSupabase,
   addCategoryToSupabase,
   updateCategoryInSupabase,
   deleteCategoryFromSupabase,
-  getLocalCategoriesBackup,
-  fetchOrMigrateProducts,
+  getCategoriesFromSupabase,
   addProductToSupabase,
   updateProductInSupabase,
   deleteProductFromSupabase,
   withdrawProductForPartner,
   returnProductFromPartner,
-  getInventoryMovements,
-  getLocalProductsBackup,
-  fetchOrMigrateCustomers,
   addCustomerToSupabase,
   updateCustomerInSupabase,
   deleteCustomerFromSupabase,
-  getLocalCustomersBackup,
-  fetchDeviceTypesFromSupabase,
   addDeviceTypeToSupabase,
   updateDeviceTypeInSupabase,
   deleteDeviceTypeInSupabase,
-  getDeviceTypesSync,
-  fetchDeviceModelsFromSupabase,
+  fetchDeviceTypesFromSupabase,
   addDeviceModelToSupabase,
   updateDeviceModelInSupabase,
   deleteDeviceModelInSupabase,
-  getDeviceModelsSync,
-  fetchRepairTemplatesFromSupabase,
+  fetchDeviceModelsFromSupabase,
   addRepairTemplateToSupabase,
   updateRepairTemplateInSupabase,
   deleteRepairTemplateInSupabase,
-  getRepairTemplatesSync,
-  fetchOrMigrateSuppliers,
+  fetchRepairTemplatesFromSupabase,
   addSupplierToSupabase,
   updateSupplierInSupabase,
   deleteSupplierFromSupabase,
-  getLocalSuppliersBackup,
-  fetchOrMigrateInvoices,
   addInvoiceToSupabase,
   cancelInvoiceInSupabase,
-  getLocalInvoicesBackup,
-  fetchOrMigrateRepairOrders,
   addRepairOrderToSupabase,
   updateRepairOrderInSupabase,
-  deleteRepairOrderFromSupabase,
-  getLocalRepairOrdersBackup
+  deleteRepairOrderFromSupabase
 } from "../lib/data";
+import { addRepairPartUsageToSupabase } from "../lib/supabasePartUsages";
+import { addExpenseToSupabase } from "../lib/supabaseExpenses";
 import {
   Customer,
   RepairOrder,
@@ -83,127 +66,27 @@ import {
   Partner,
   PartnerLedgerEntry,
   PartnerSettlement,
-  PartnerSettlementPayment,
   PartnerTransaction,
   RepairPartUsage,
   SettlementAuditLog
 } from "../types";
 
-// Global Supabase Realtime channel subscription flag
-let realtimeSubscribed = false;
-
-// Global trigger listener
-function useDbTrigger(watchedKeys?: string[]) {
-  const [trigger, setTrigger] = useState(0);
-  const watchedKeysRef = useRef<string[] | undefined>(watchedKeys);
-  watchedKeysRef.current = watchedKeys;
-
-  useEffect(() => {
-    const normalizeKey = (value?: string) => {
-      if (!value) return '';
-      return value.startsWith('atari_') ? value : `atari_${value}`;
-    };
-
-    const handleDbChange = (event?: Event) => {
-      const detail = (event as CustomEvent | undefined)?.detail as any;
-      const changedKey = normalizeKey(detail?.key || detail?.table);
-      const keys = watchedKeysRef.current;
-
-      // Auth events and unscoped events intentionally refresh all consumers.
-      if (!keys || keys.length === 0 || !changedKey || keys.some(key => normalizeKey(key) === changedKey)) {
-        setTimeout(() => {
-          setTrigger(prev => prev + 1);
-        }, 0);
-      }
-    };
-
-    window.addEventListener("atari_db_changed", handleDbChange);
-    window.addEventListener("atari_auth_changed", handleDbChange);
-
-    // Setup Supabase Realtime Postgres Changes Listener (once)
-    if (!realtimeSubscribed && isSupabaseConfigured) {
-      try {
-        realtimeSubscribed = true;
-        supabase
-          .channel('public-realtime-db')
-          .on(
-            'postgres_changes',
-            { event: '*', schema: 'public' },
-            (payload) => {
-              console.log('⚡ Supabase Realtime change event received:', payload.table, payload.eventType);
-              window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: payload }));
-            }
-          )
-          .subscribe((status) => {
-            if (status === 'SUBSCRIBED') {
-              console.log('📡 Subscribed to Supabase Realtime DB changes');
-            }
-          });
-      } catch (err) {
-        console.warn("⚠️ Supabase Realtime connection warning:", err);
-      }
-    }
-
-    return () => {
-      window.removeEventListener("atari_db_changed", handleDbChange);
-      window.removeEventListener("atari_auth_changed", handleDbChange);
-    };
-  }, []);
-
-  return trigger;
-}
-
 export function useCustomers() {
-  const trigger = useDbTrigger();
-  const [customers, setCustomers] = useState<Customer[]>(getLocalCustomersBackup());
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let active = true;
-
-    fetchOrMigrateCustomers()
-      .then(res => {
-        if (active) {
-          setCustomers(res.customers);
-          setLoading(false);
-          if (!res.success && res.error) {
-            setError(res.error);
-          } else {
-            setError(null);
-          }
-        }
-      })
-      .catch(err => {
-        if (active) {
-          console.warn("⚠️ Error fetching customers from Supabase:", err);
-          setError(err?.message || "تعذر الاتصال بـ Supabase لقراءة العملاء");
-          setCustomers(getLocalCustomersBackup());
-          setLoading(false);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [trigger]);
+  const { customersState, setCustomersData } = useAppData();
 
   const addCustomer = async (
     customerData: Omit<Customer, "id" | "createdAt" | "balance"> & { balance?: number },
     currentUser?: User
   ) => {
     const newCust = await addCustomerToSupabase(customerData, currentUser);
-    setCustomers(prev => {
-      const filtered = prev.filter(c => c.id !== newCust.id && c.phone !== newCust.phone);
-      return [newCust, ...filtered];
-    });
+    setCustomersData(prev => [newCust, ...prev.filter(c => c.id !== newCust.id && c.phone !== newCust.phone)]);
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_customers' } }));
     return newCust;
   };
 
   const updateCustomer = async (customer: Customer, currentUser?: User) => {
     const updated = await updateCustomerInSupabase(customer, currentUser);
-    setCustomers(prev => prev.map(c => c.id === updated.id ? updated : c));
+    setCustomersData(prev => prev.map(c => c.id === updated.id ? updated : c));
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_customers' } }));
     return updated;
   };
@@ -211,82 +94,39 @@ export function useCustomers() {
   const deleteCustomer = async (id: string, currentUser?: User) => {
     const res = await deleteCustomerFromSupabase(id, currentUser);
     if (res.success) {
-      setCustomers(prev => prev.filter(c => c.id !== id));
+      setCustomersData(prev => prev.filter(c => c.id !== id));
       window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_customers' } }));
     }
     return res;
   };
 
-  return { customers, loading, error, addCustomer, updateCustomer, deleteCustomer };
+  return {
+    customers: customersState.data,
+    loading: customersState.isLoading || !customersState.isLoaded,
+    isLoaded: customersState.isLoaded,
+    error: customersState.error,
+    addCustomer,
+    updateCustomer,
+    deleteCustomer
+  };
 }
 
 export function useRepairOrders() {
-  const trigger = useDbTrigger(['atari_repair_orders']);
-  const [orders, setOrders] = useState<RepairOrder[]>(getLocalRepairOrdersBackup());
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let active = true;
-
-    fetchOrMigrateRepairOrders()
-      .then(res => {
-        if (active) {
-          setOrders(prev => {
-            const mergedMap = new Map<string, RepairOrder>();
-            // 1. Put freshly fetched remote/backup orders
-            (res.orders || []).forEach(o => mergedMap.set(o.id, o));
-            // 2. Preserve any order currently in local memory or localStorage
-            const backupLocal = getLocalRepairOrdersBackup();
-            backupLocal.forEach(o => {
-              if (!mergedMap.has(o.id)) {
-                mergedMap.set(o.id, o);
-              }
-            });
-            prev.forEach(o => {
-              if (!mergedMap.has(o.id)) {
-                mergedMap.set(o.id, o);
-              }
-            });
-            return Array.from(mergedMap.values()).sort((a, b) => {
-              return new Date(b.receivedDate || 0).getTime() - new Date(a.receivedDate || 0).getTime();
-            });
-          });
-          setLoading(false);
-          if (!res.success && res.error) {
-            setError(res.error);
-          } else {
-            setError(null);
-          }
-        }
-      })
-      .catch(err => {
-        if (active) {
-          console.warn("⚠️ Error fetching repair orders from Supabase:", err);
-          setError(err?.message || "تعذر الاتصال بـ Supabase لقراءة أوامر الصيانة");
-          setOrders(getLocalRepairOrdersBackup());
-          setLoading(false);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [trigger]);
+  const { repairOrdersState, setRepairOrdersData } = useAppData();
 
   const addRepairOrder = async (
     order: Omit<RepairOrder, "id" | "receivedDate" | "trackingToken">,
     currentUser?: User
   ) => {
     const created = await addRepairOrderToSupabase(order, currentUser);
-    setOrders(prev => [created, ...prev.filter(o => o.id !== created.id)]);
+    setRepairOrdersData(prev => [created, ...prev.filter(o => o.id !== created.id)]);
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_orders' } }));
     return created;
   };
 
   const updateRepairOrder = async (order: RepairOrder, currentUser?: User) => {
     const updated = await updateRepairOrderInSupabase(order, currentUser);
-    setOrders(prev => prev.map(o => o.id === updated.id ? updated : o));
+    setRepairOrdersData(prev => prev.map(o => o.id === updated.id ? updated : o));
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_orders' } }));
     return updated;
   };
@@ -294,7 +134,7 @@ export function useRepairOrders() {
   const deleteRepairOrder = async (id: string, currentUser?: User) => {
     const res = await deleteRepairOrderFromSupabase(id, currentUser);
     if (res.success) {
-      setOrders(prev => prev.filter(o => o.id !== id));
+      setRepairOrdersData(prev => prev.filter(o => o.id !== id));
       window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_orders' } }));
     }
     return res;
@@ -317,7 +157,7 @@ export function useRepairOrders() {
           console.warn("Could not sync delivery invoice to Supabase:", err);
         });
       }
-      setOrders(prev => prev.map(o => o.id === res.order!.id ? res.order! : o));
+      setRepairOrdersData(prev => prev.map(o => o.id === res.order!.id ? res.order! : o));
       window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_orders' } }));
       window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_invoices' } }));
       window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_customers' } }));
@@ -331,20 +171,21 @@ export function useRepairOrders() {
       await updateRepairOrderInSupabase(res.order, currentUser).catch(err => {
         console.warn("Could not sync reopen status to Supabase:", err);
       });
-      setOrders(prev => prev.map(o => o.id === res.order!.id ? res.order! : o));
+      setRepairOrdersData(prev => prev.map(o => o.id === res.order!.id ? res.order! : o));
       window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_orders' } }));
     }
     return res;
   };
 
   const setRepairOrderLocal = (order: RepairOrder) => {
-    setOrders(prev => prev.map(item => item.id === order.id ? order : item));
+    setRepairOrdersData(prev => prev.map(item => item.id === order.id ? order : item));
   };
 
   return {
-    orders,
-    loading,
-    error,
+    orders: repairOrdersState.data,
+    loading: repairOrdersState.isLoading || !repairOrdersState.isLoaded,
+    isLoaded: repairOrdersState.isLoaded,
+    error: repairOrdersState.error,
     setRepairOrderLocal,
     addRepairOrder,
     updateRepairOrder,
@@ -355,47 +196,18 @@ export function useRepairOrders() {
 }
 
 export function useProducts() {
-  const trigger = useDbTrigger(['atari_products']);
-  const [products, setProducts] = useState<Product[]>(getLocalProductsBackup());
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    setLoading(true);
-
-    fetchOrMigrateProducts()
-      .then(res => {
-        if (active) {
-          setProducts(res.products);
-          setError(null);
-          setLoading(false);
-        }
-      })
-      .catch(err => {
-        if (active) {
-          console.warn("⚠️ Error fetching products from Supabase:", err);
-          setError(err?.message || "تعذر الاتصال بـ Supabase للقراءة");
-          setProducts(getLocalProductsBackup());
-          setLoading(false);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [trigger]);
+  const { productsState, setProductsData } = useAppData();
 
   const addProduct = async (product: Omit<Product, "id">, userId?: string) => {
     const newProd = await addProductToSupabase(product, userId);
-    setProducts(prev => [newProd, ...prev.filter(p => p.id !== newProd.id)]);
+    setProductsData(prev => [newProd, ...prev.filter(p => p.id !== newProd.id)]);
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
     return newProd;
   };
 
   const updateProduct = async (product: Product, userId?: string, reason?: string) => {
     const updated = await updateProductInSupabase(product, userId, reason);
-    setProducts(prev => prev.map(p => p.id === updated.id ? updated : p));
+    setProductsData(prev => prev.map(p => p.id === updated.id ? updated : p));
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
     return updated;
   };
@@ -403,7 +215,7 @@ export function useProducts() {
   const deleteProduct = async (id: string, currentUser?: any) => {
     const res = await deleteProductFromSupabase(id, currentUser);
     if (res.success) {
-      setProducts(prev => prev.filter(p => p.id !== id));
+      setProductsData(prev => prev.filter(p => p.id !== id));
       window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
     }
     return res;
@@ -418,7 +230,7 @@ export function useProducts() {
   }) => {
     const res = await withdrawProductForPartner(params);
     if (res.success) {
-      setProducts(prev =>
+      setProductsData(prev =>
         prev.map(p => (p.id === params.productId ? { ...p, quantity: res.newQuantity } : p))
       );
     }
@@ -434,7 +246,7 @@ export function useProducts() {
   }) => {
     const res = await returnProductFromPartner(params);
     if (res.success) {
-      setProducts(prev =>
+      setProductsData(prev =>
         prev.map(p => (p.id === params.productId ? { ...p, quantity: res.newQuantity } : p))
       );
     }
@@ -442,89 +254,50 @@ export function useProducts() {
   };
 
   const setProductLocal = (product: Product) => {
-    setProducts(prev => prev.map(item => item.id === product.id ? product : item));
+    setProductsData(prev => prev.map(item => item.id === product.id ? product : item));
   };
 
-  return { products, loading, error, setProductLocal, addProduct, updateProduct, deleteProduct, withdrawProduct, returnProduct };
+  return {
+    products: productsState.data,
+    loading: productsState.isLoading || !productsState.isLoaded,
+    isLoaded: productsState.isLoaded,
+    error: productsState.error,
+    setProductLocal,
+    addProduct,
+    updateProduct,
+    deleteProduct,
+    withdrawProduct,
+    returnProduct
+  };
 }
 
 export function useInventoryMovements(productId?: string) {
-  const trigger = useDbTrigger();
-  const [movements, setMovements] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { inventoryMovementsState } = useAppData();
 
-  useEffect(() => {
-    let active = true;
-    setLoading(true);
+  const filteredMovements = productId
+    ? inventoryMovementsState.data.filter(m => m.productId === productId || m.product_id === productId)
+    : inventoryMovementsState.data;
 
-    getInventoryMovements(productId)
-      .then(movs => {
-        if (active) {
-          setMovements(movs);
-          setLoading(false);
-        }
-      })
-      .catch(err => {
-        if (active) {
-          console.warn("⚠️ Error fetching inventory movements:", err);
-          setMovements(db.getInventoryMovements ? db.getInventoryMovements() : []);
-          setLoading(false);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [trigger, productId]);
-
-  return { movements, loading };
+  return {
+    movements: filteredMovements,
+    loading: inventoryMovementsState.isLoading || !inventoryMovementsState.isLoaded,
+    isLoaded: inventoryMovementsState.isLoaded
+  };
 }
 
 export function useSuppliers() {
-  const trigger = useDbTrigger();
-  const [suppliers, setSuppliers] = useState<Supplier[]>(getLocalSuppliersBackup());
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let active = true;
-
-    fetchOrMigrateSuppliers()
-      .then(res => {
-        if (active) {
-          setSuppliers(res.suppliers);
-          setLoading(false);
-          if (!res.success && res.error) {
-            setError(res.error);
-          } else {
-            setError(null);
-          }
-        }
-      })
-      .catch(err => {
-        if (active) {
-          console.warn("⚠️ Error fetching suppliers from Supabase:", err);
-          setError(err?.message || "تعذر الاتصال بـ Supabase لقراءة الموردين");
-          setSuppliers(getLocalSuppliersBackup());
-          setLoading(false);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [trigger]);
+  const { suppliersState, setSuppliersData } = useAppData();
 
   const addSupplier = async (supplier: Omit<Supplier, "id">, currentUser?: User) => {
     const newSupplier = await addSupplierToSupabase(supplier, currentUser);
-    setSuppliers(prev => [newSupplier, ...prev.filter(s => s.id !== newSupplier.id)]);
+    setSuppliersData(prev => [newSupplier, ...prev.filter(s => s.id !== newSupplier.id)]);
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_suppliers' } }));
     return newSupplier;
   };
 
   const updateSupplier = async (supplier: Supplier, currentUser?: User) => {
     const updated = await updateSupplierInSupabase(supplier, currentUser);
-    setSuppliers(prev => prev.map(s => s.id === updated.id ? updated : s));
+    setSuppliersData(prev => prev.map(s => s.id === updated.id ? updated : s));
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_suppliers' } }));
     return updated;
   };
@@ -532,56 +305,32 @@ export function useSuppliers() {
   const deleteSupplier = async (id: string, currentUser?: User) => {
     const res = await deleteSupplierFromSupabase(id, currentUser);
     if (res.success) {
-      setSuppliers(prev => prev.filter(s => s.id !== id));
+      setSuppliersData(prev => prev.filter(s => s.id !== id));
       window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_suppliers' } }));
     }
     return res;
   };
 
-  return { suppliers, loading, error, addSupplier, updateSupplier, deleteSupplier };
+  return {
+    suppliers: suppliersState.data,
+    loading: suppliersState.isLoading || !suppliersState.isLoaded,
+    isLoaded: suppliersState.isLoaded,
+    error: suppliersState.error,
+    addSupplier,
+    updateSupplier,
+    deleteSupplier
+  };
 }
 
 export function useInvoices() {
-  const trigger = useDbTrigger();
-  const [invoices, setInvoices] = useState<Invoice[]>(getLocalInvoicesBackup());
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let active = true;
-
-    fetchOrMigrateInvoices()
-      .then(res => {
-        if (active) {
-          setInvoices(res.invoices);
-          setLoading(false);
-          if (!res.success && res.error) {
-            setError(res.error);
-          } else {
-            setError(null);
-          }
-        }
-      })
-      .catch(err => {
-        if (active) {
-          console.warn("⚠️ Error fetching invoices from Supabase:", err);
-          setError(err?.message || "تعذر الاتصال بـ Supabase لقراءة الفواتير");
-          setInvoices(getLocalInvoicesBackup());
-          setLoading(false);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [trigger]);
+  const { invoicesState, setInvoicesData } = useAppData();
 
   const addInvoice = async (
     invoiceData: Omit<Invoice, "id" | "date"> & { date?: string },
     currentUser?: User
   ) => {
     const newInv = await addInvoiceToSupabase(invoiceData, currentUser);
-    setInvoices(prev => [newInv, ...prev.filter(i => i.id !== newInv.id)]);
+    setInvoicesData(prev => [newInv, ...prev.filter(i => i.id !== newInv.id)]);
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_invoices' } }));
     return newInv;
   };
@@ -589,92 +338,72 @@ export function useInvoices() {
   const cancelInvoice = async (invoiceId: string, reason: string, currentUser?: User) => {
     const res = await cancelInvoiceInSupabase(invoiceId, reason, currentUser);
     if (res.success) {
-      setInvoices(prev => prev.map(i => i.id === invoiceId ? { ...i, status: 'cancelled', isPaid: false } : i));
+      setInvoicesData(prev => prev.map(i => i.id === invoiceId ? { ...i, status: 'cancelled', isPaid: false } : i));
       window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_invoices' } }));
     }
     return res;
   };
 
-  return { invoices, loading, error, addInvoice, cancelInvoice };
+  return {
+    invoices: invoicesState.data,
+    loading: invoicesState.isLoading || !invoicesState.isLoaded,
+    isLoaded: invoicesState.isLoaded,
+    error: invoicesState.error,
+    addInvoice,
+    cancelInvoice
+  };
 }
 
 export function useExpenses() {
-  const trigger = useDbTrigger();
-  const [expenses, setExpenses] = useState<Expense[]>([]);
-
-  useEffect(() => {
-    let active = true;
-    fetchOrMigrateExpenses().then(res => {
-      if (active) setExpenses(res.expenses);
-    }).catch(() => {
-      if (active) setExpenses(db.getExpenses());
-    });
-    return () => { active = false; };
-  }, [trigger]);
+  const { expensesState, setExpensesData } = useAppData();
 
   const addExpense = (expense: Omit<Expense, "id" | "date">) => {
     addExpenseToSupabase(expense);
     const created = db.addExpense(expense);
-    setExpenses(prev => [created, ...prev]);
+    setExpensesData(prev => [created, ...prev]);
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_expenses' } }));
     return created;
   };
 
-  return { expenses, addExpense };
+  return {
+    expenses: expensesState.data,
+    loading: expensesState.isLoading || !expensesState.isLoaded,
+    isLoaded: expensesState.isLoaded,
+    addExpense
+  };
 }
 
 export function useSettings() {
-  const trigger = useDbTrigger();
-  const [settings, setSettings] = useState<SystemSettings>(db.getSettings());
-
-  useEffect(() => {
-    let active = true;
-    setSettings(db.getSettings());
-
-    fetchOrMigrateStoreSettings().then(spSettings => {
-      if (active && spSettings) {
-        setSettings(spSettings);
-      }
-    });
-
-    return () => {
-      active = false;
-    };
-  }, [trigger]);
+  const { settingsState, setSettingsData } = useAppData();
 
   const updateSettings = (newSettings: SystemSettings) => {
     db.saveSettings(newSettings);
-    setSettings(newSettings);
+    setSettingsData(newSettings);
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_settings' } }));
   };
 
-  return { settings, updateSettings };
+  return {
+    settings: settingsState.data,
+    updateSettings
+  };
 }
 
 export function useCurrentUser() {
-  const trigger = useDbTrigger();
-  const [user, setUser] = useState<User>(db.getCurrentUser());
-
-  useEffect(() => {
-    setUser(db.getCurrentUser());
-  }, [trigger]);
+  const { currentUser } = useAppData();
 
   const changeCurrentUser = (newUser: User) => {
     db.setCurrentUser(newUser);
-    setUser(newUser);
     window.dispatchEvent(new CustomEvent('atari_auth_changed', { detail: { key: 'atari_auth' } }));
   };
 
-  return { user, changeCurrentUser };
+  return {
+    user: currentUser || db.getCurrentUser(),
+    changeCurrentUser
+  };
 }
 
 export function useUsers() {
-  const trigger = useDbTrigger();
-  const [users, setUsers] = useState<User[]>([]);
-
-  useEffect(() => {
-    setUsers(db.getUsers());
-  }, [trigger]);
+  const { usersState, setUsersData } = useAppData();
 
   const addUser = (user: Omit<User, "id">) => {
     const list = db.getUsers();
@@ -685,7 +414,7 @@ export function useUsers() {
     list.push(newUser);
     db.saveUsers(list);
     db.logActivity("U-101", "أحمد محمد", "إضافة مستخدم", `تم إضافة الموظف الجديد ${newUser.name}`);
-    setUsers(prev => [...prev, newUser]);
+    setUsersData(prev => [...prev, newUser]);
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_users' } }));
     return newUser;
   };
@@ -696,61 +425,30 @@ export function useUsers() {
     if (index !== -1) {
       list[index] = user;
       db.saveUsers(list);
-      setUsers(prev => prev.map(u => u.id === user.id ? user : u));
+      setUsersData(prev => prev.map(u => u.id === user.id ? user : u));
       window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_users' } }));
     }
   };
 
-  return { users, addUser, updateUser };
+  return {
+    users: usersState.data,
+    addUser,
+    updateUser
+  };
 }
 
 export function useActivityLogs() {
-  const trigger = useDbTrigger();
-  const [logs, setLogs] = useState<ActivityLog[]>([]);
-
-  useEffect(() => {
-    setLogs(db.getActivityLogs());
-  }, [trigger]);
-
-  return { logs };
+  const { activityLogsState } = useAppData();
+  return { logs: activityLogsState.data };
 }
 
 export function useCategories() {
-  const trigger = useDbTrigger();
-  const [categories, setCategories] = useState<ProductCategory[]>(getLocalCategoriesBackup());
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    setLoading(true);
-
-    fetchOrMigrateCategories()
-      .then(res => {
-        if (active) {
-          setCategories(res.categories);
-          setError(null);
-          setLoading(false);
-        }
-      })
-      .catch(err => {
-        if (active) {
-          console.warn("⚠️ Error fetching categories from Supabase:", err);
-          setError(err?.message || "تعذر الاتصال بـ Supabase للقراءة");
-          setCategories(getLocalCategoriesBackup());
-          setLoading(false);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [trigger]);
+  const { categoriesState, setCategoriesData } = useAppData();
 
   const addCategory = async (cat: Omit<ProductCategory, "id">) => {
     const newCat = await addCategoryToSupabase(cat);
     const refreshed = await getCategoriesFromSupabase();
-    setCategories(refreshed);
+    setCategoriesData(refreshed);
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_categories' } }));
     return newCat;
   };
@@ -758,369 +456,311 @@ export function useCategories() {
   const updateCategory = async (cat: ProductCategory) => {
     const updated = await updateCategoryInSupabase(cat);
     const refreshed = await getCategoriesFromSupabase();
-    setCategories(refreshed);
+    setCategoriesData(refreshed);
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_categories' } }));
     return updated;
   };
 
   const deleteCategory = async (id: string, name?: string) => {
-    const targetCat = categories.find(c => c.id === id || c.name === name);
+    const targetCat = categoriesState.data.find(c => c.id === id || c.name === name);
     const catName = name || targetCat?.name || '';
     const res = await deleteCategoryFromSupabase(id, catName);
     if (res.success) {
       const refreshed = await getCategoriesFromSupabase();
-      setCategories(refreshed);
+      setCategoriesData(refreshed);
       window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_categories' } }));
     }
     return res;
   };
 
-  return { categories, loading, error, addCategory, updateCategory, deleteCategory };
+  return {
+    categories: categoriesState.data,
+    loading: categoriesState.isLoading || !categoriesState.isLoaded,
+    isLoaded: categoriesState.isLoaded,
+    error: categoriesState.error,
+    addCategory,
+    updateCategory,
+    deleteCategory
+  };
 }
 
 export function useDeviceTypes() {
-  const trigger = useDbTrigger();
-  const [deviceTypes, setDeviceTypes] = useState<DBDeviceType[]>(getDeviceTypesSync());
-
-  useEffect(() => {
-    fetchDeviceTypesFromSupabase().then(data => {
-      setDeviceTypes(data);
-    });
-  }, [trigger]);
+  const { deviceTypesState } = useAppData();
 
   const addDeviceType = async (dt: Omit<DBDeviceType, "id">) => {
     const created = await addDeviceTypeToSupabase(dt);
-    const refreshed = await fetchDeviceTypesFromSupabase();
-    setDeviceTypes(refreshed);
+    await fetchDeviceTypesFromSupabase();
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_device_types' } }));
     return created;
   };
 
   const updateDeviceType = async (dt: DBDeviceType) => {
     await updateDeviceTypeInSupabase(dt);
-    const refreshed = await fetchDeviceTypesFromSupabase();
-    setDeviceTypes(refreshed);
+    await fetchDeviceTypesFromSupabase();
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_device_types' } }));
   };
 
   const deleteDeviceType = async (id: string) => {
     const res = await deleteDeviceTypeInSupabase(id);
-    const refreshed = await fetchDeviceTypesFromSupabase();
-    setDeviceTypes(refreshed);
+    await fetchDeviceTypesFromSupabase();
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_device_types' } }));
     return res;
   };
 
-  return { deviceTypes, addDeviceType, updateDeviceType, deleteDeviceType };
+  return {
+    deviceTypes: deviceTypesState.data,
+    addDeviceType,
+    updateDeviceType,
+    deleteDeviceType
+  };
 }
 
 export function useDeviceModels() {
-  const trigger = useDbTrigger();
-  const [deviceModels, setDeviceModels] = useState<DBDeviceModel[]>(getDeviceModelsSync());
-
-  useEffect(() => {
-    fetchDeviceModelsFromSupabase().then(data => {
-      setDeviceModels(data);
-    });
-  }, [trigger]);
+  const { deviceModelsState } = useAppData();
 
   const addDeviceModel = async (m: Omit<DBDeviceModel, "id">) => {
     const created = await addDeviceModelToSupabase(m);
-    const refreshed = await fetchDeviceModelsFromSupabase();
-    setDeviceModels(refreshed);
+    await fetchDeviceModelsFromSupabase();
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_device_models' } }));
     return created;
   };
 
   const updateDeviceModel = async (m: DBDeviceModel) => {
     await updateDeviceModelInSupabase(m);
-    const refreshed = await fetchDeviceModelsFromSupabase();
-    setDeviceModels(refreshed);
+    await fetchDeviceModelsFromSupabase();
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_device_models' } }));
   };
 
   const deleteDeviceModel = async (id: string) => {
     const res = await deleteDeviceModelInSupabase(id);
-    const refreshed = await fetchDeviceModelsFromSupabase();
-    setDeviceModels(refreshed);
+    await fetchDeviceModelsFromSupabase();
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_device_models' } }));
     return res;
   };
 
-  return { deviceModels, addDeviceModel, updateDeviceModel, deleteDeviceModel };
+  return {
+    deviceModels: deviceModelsState.data,
+    addDeviceModel,
+    updateDeviceModel,
+    deleteDeviceModel
+  };
 }
 
 export function useCommonFaults() {
-  const trigger = useDbTrigger();
-  const [commonFaults, setCommonFaults] = useState<CommonFault[]>([]);
-
-  useEffect(() => {
-    setCommonFaults(db.getCommonFaults());
-  }, [trigger]);
-
   const addCommonFault = (f: Omit<CommonFault, "id">) => {
     const created = db.addCommonFault(f);
-    setCommonFaults(db.getCommonFaults());
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_common_faults' } }));
     return created;
   };
 
   const updateCommonFault = (f: CommonFault) => {
     db.updateCommonFault(f);
-    setCommonFaults(db.getCommonFaults());
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_common_faults' } }));
   };
 
   const deleteCommonFault = (id: string) => {
     const res = db.deleteCommonFault(id);
-    setCommonFaults(db.getCommonFaults());
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_common_faults' } }));
     return res;
   };
 
-  return { commonFaults, addCommonFault, updateCommonFault, deleteCommonFault };
+  return {
+    commonFaults: db.getCommonFaults(),
+    addCommonFault,
+    updateCommonFault,
+    deleteCommonFault
+  };
 }
 
 export function useRepairServices() {
-  const trigger = useDbTrigger();
-  const [repairServices, setRepairServices] = useState<RepairService[]>([]);
-
-  useEffect(() => {
-    setRepairServices(db.getRepairServices());
-  }, [trigger]);
-
   const addRepairService = (s: Omit<RepairService, "id">) => {
     const created = db.addRepairService(s);
-    setRepairServices(db.getRepairServices());
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_services' } }));
     return created;
   };
 
   const updateRepairService = (s: RepairService) => {
     db.updateRepairService(s);
-    setRepairServices(db.getRepairServices());
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_services' } }));
   };
 
   const deleteRepairService = (id: string) => {
     const res = db.deleteRepairService(id);
-    setRepairServices(db.getRepairServices());
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_services' } }));
     return res;
   };
 
-  return { repairServices, addRepairService, updateRepairService, deleteRepairService };
+  return {
+    repairServices: db.getRepairServices(),
+    addRepairService,
+    updateRepairService,
+    deleteRepairService
+  };
 }
 
 export function useDefaultPrices() {
-  const trigger = useDbTrigger();
-  const [defaultPrices, setDefaultPrices] = useState<DefaultPrice[]>([]);
-
-  useEffect(() => {
-    setDefaultPrices(db.getDefaultPrices());
-  }, [trigger]);
-
   const addDefaultPrice = (p: Omit<DefaultPrice, "id">) => {
     const created = db.addDefaultPrice(p);
-    setDefaultPrices(db.getDefaultPrices());
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_default_prices' } }));
     return created;
   };
 
   const updateDefaultPrice = (p: DefaultPrice) => {
     db.updateDefaultPrice(p);
-    setDefaultPrices(db.getDefaultPrices());
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_default_prices' } }));
   };
 
   const deleteDefaultPrice = (id: string) => {
     const res = db.deleteDefaultPrice(id);
-    setDefaultPrices(db.getDefaultPrices());
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_default_prices' } }));
     return res;
   };
 
-  return { defaultPrices, addDefaultPrice, updateDefaultPrice, deleteDefaultPrice };
+  return {
+    defaultPrices: db.getDefaultPrices(),
+    addDefaultPrice,
+    updateDefaultPrice,
+    deleteDefaultPrice
+  };
 }
 
 export function useReceivedAccessories() {
-  const trigger = useDbTrigger();
-  const [receivedAccessories, setReceivedAccessories] = useState<ReceivedAccessory[]>([]);
-
-  useEffect(() => {
-    setReceivedAccessories(db.getReceivedAccessories());
-  }, [trigger]);
-
   const addReceivedAccessory = (acc: Omit<ReceivedAccessory, "id">) => {
     const created = db.addReceivedAccessory(acc);
-    setReceivedAccessories(db.getReceivedAccessories());
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_received_accessories' } }));
     return created;
   };
 
   const updateReceivedAccessory = (acc: ReceivedAccessory) => {
     db.updateReceivedAccessory(acc);
-    setReceivedAccessories(db.getReceivedAccessories());
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_received_accessories' } }));
   };
 
   const deleteReceivedAccessory = (id: string) => {
     const res = db.deleteReceivedAccessory(id);
-    setReceivedAccessories(db.getReceivedAccessories());
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_received_accessories' } }));
     return res;
   };
 
-  return { receivedAccessories, addReceivedAccessory, updateReceivedAccessory, deleteReceivedAccessory };
+  return {
+    receivedAccessories: db.getReceivedAccessories(),
+    addReceivedAccessory,
+    updateReceivedAccessory,
+    deleteReceivedAccessory
+  };
 }
 
 export function useDeviceConditions() {
-  const trigger = useDbTrigger();
-  const [deviceConditions, setDeviceConditions] = useState<DeviceCondition[]>([]);
-
-  useEffect(() => {
-    setDeviceConditions(db.getDeviceConditions());
-  }, [trigger]);
-
   const addDeviceCondition = (cond: Omit<DeviceCondition, "id">) => {
     const created = db.addDeviceCondition(cond);
-    setDeviceConditions(db.getDeviceConditions());
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_device_conditions' } }));
     return created;
   };
 
   const updateDeviceCondition = (cond: DeviceCondition) => {
     db.updateDeviceCondition(cond);
-    setDeviceConditions(db.getDeviceConditions());
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_device_conditions' } }));
   };
 
   const deleteDeviceCondition = (id: string) => {
     const res = db.deleteDeviceCondition(id);
-    setDeviceConditions(db.getDeviceConditions());
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_device_conditions' } }));
     return res;
   };
 
-  return { deviceConditions, addDeviceCondition, updateDeviceCondition, deleteDeviceCondition };
+  return {
+    deviceConditions: db.getDeviceConditions(),
+    addDeviceCondition,
+    updateDeviceCondition,
+    deleteDeviceCondition
+  };
 }
 
 export function useRepairTemplates() {
-  const trigger = useDbTrigger();
-  const [repairTemplates, setRepairTemplates] = useState<RepairTemplateItem[]>(getRepairTemplatesSync());
-
-  useEffect(() => {
-    fetchRepairTemplatesFromSupabase().then(data => {
-      setRepairTemplates(data);
-    });
-  }, [trigger]);
+  const { repairTemplatesState } = useAppData();
 
   const addRepairTemplateItem = async (item: Omit<RepairTemplateItem, "id">) => {
     const created = await addRepairTemplateToSupabase(item);
-    const refreshed = await fetchRepairTemplatesFromSupabase();
-    setRepairTemplates(refreshed);
+    await fetchRepairTemplatesFromSupabase();
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_templates' } }));
     return created;
   };
 
   const updateRepairTemplateItem = async (item: RepairTemplateItem) => {
     const updated = await updateRepairTemplateInSupabase(item);
-    const refreshed = await fetchRepairTemplatesFromSupabase();
-    setRepairTemplates(refreshed);
+    await fetchRepairTemplatesFromSupabase();
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_templates' } }));
     return updated;
   };
 
   const deleteRepairTemplateItem = async (id: string) => {
     const res = await deleteRepairTemplateInSupabase(id);
-    const refreshed = await fetchRepairTemplatesFromSupabase();
-    setRepairTemplates(refreshed);
+    await fetchRepairTemplatesFromSupabase();
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_templates' } }));
     return res;
   };
 
-  return { repairTemplates, addRepairTemplateItem, updateRepairTemplateItem, deleteRepairTemplateItem };
+  return {
+    repairTemplates: repairTemplatesState.data,
+    addRepairTemplateItem,
+    updateRepairTemplateItem,
+    deleteRepairTemplateItem
+  };
 }
 
 export function usePartners() {
-  const trigger = useDbTrigger();
-  const [partners, setPartners] = useState<Partner[]>([]);
-
-  useEffect(() => {
-    setPartners(db.getPartners());
-  }, [trigger]);
+  const { partnersState, setPartnersData } = useAppData();
 
   const updatePartner = (partner: Partner) => {
     db.updatePartner(partner);
-    setPartners(db.getPartners());
+    setPartnersData(prev => prev.map(p => p.id === partner.id ? partner : p));
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_partners' } }));
   };
 
-  return { partners, updatePartner };
+  return {
+    partners: partnersState.data,
+    updatePartner
+  };
 }
 
 export function usePartnerLedger() {
-  const trigger = useDbTrigger();
-  const [ledger, setLedger] = useState<PartnerLedgerEntry[]>([]);
-
-  useEffect(() => {
-    let active = true;
-    fetchOrMigratePartnerLedger().then(res => {
-      if (active) setLedger(res.ledger);
-    }).catch(() => {
-      if (active) setLedger(db.getPartnerLedger());
-    });
-    return () => { active = false; };
-  }, [trigger]);
+  const { partnerLedgerState } = useAppData();
 
   const addLedgerEntry = (entry: Omit<PartnerLedgerEntry, "id" | "createdAt" | "updatedAt">) => {
     const created = db.addPartnerLedgerEntry(entry);
-    setLedger(db.getPartnerLedger());
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_partner_ledger' } }));
     return created;
   };
 
-  return { ledger, addLedgerEntry };
+  return {
+    ledger: partnerLedgerState.data,
+    addLedgerEntry
+  };
 }
 
 export function usePartnerSettlements() {
-  const trigger = useDbTrigger();
-  const [settlements, setSettlements] = useState<PartnerSettlement[]>([]);
-
-  useEffect(() => {
-    let active = true;
-    fetchOrMigratePartnerSettlements().then(res => {
-      if (active) setSettlements(res.settlements);
-    }).catch(() => {
-      if (active) setSettlements(db.getPartnerSettlements());
-    });
-    return () => { active = false; };
-  }, [trigger]);
+  const { partnerSettlementsState } = useAppData();
 
   return {
-    settlements,
+    settlements: partnerSettlementsState.data,
     calculateSettlement: db.calculateSettlement,
     createDraftSettlement: (...args: Parameters<typeof db.createDraftSettlement>) => {
       const res = db.createDraftSettlement(...args);
-      setSettlements(db.getPartnerSettlements());
       window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_partner_settlements' } }));
       return res;
     },
     lockSettlement: (...args: Parameters<typeof db.lockSettlement>) => {
       const res = db.lockSettlement(...args);
-      setSettlements(db.getPartnerSettlements());
       window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_partner_settlements' } }));
       return res;
     },
     reverseSettlement: (...args: Parameters<typeof db.reverseSettlement>) => {
       const res = db.reverseSettlement(...args);
-      setSettlements(db.getPartnerSettlements());
       window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_partner_settlements' } }));
       return res;
     },
     recordSettlementPayment: (...args: Parameters<typeof db.recordSettlementPayment>) => {
       const res = db.recordSettlementPayment(...args);
-      setSettlements(db.getPartnerSettlements());
       window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_partner_settlements' } }));
       return res;
     }
@@ -1128,64 +768,44 @@ export function usePartnerSettlements() {
 }
 
 export function usePartnerTransactions() {
-  const trigger = useDbTrigger();
-  const [transactions, setTransactions] = useState<PartnerTransaction[]>([]);
-
-  useEffect(() => {
-    let active = true;
-    fetchOrMigratePartnerTransactions().then(res => {
-      if (active) setTransactions(res.transactions);
-    }).catch(() => {
-      if (active) setTransactions(db.getPartnerTransactions());
-    });
-    return () => { active = false; };
-  }, [trigger]);
+  const { partnerTransactionsState } = useAppData();
 
   const addTransaction = (tx: Omit<PartnerTransaction, "id" | "createdAt" | "status">) => {
     const created = db.addPartnerTransaction(tx);
-    setTransactions(db.getPartnerTransactions());
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_partner_transactions' } }));
     return created;
   };
 
   const reverseTransaction = (id: string, userId: string, reason: string) => {
     const res = db.reversePartnerTransaction(id, userId, reason);
-    setTransactions(db.getPartnerTransactions());
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_partner_transactions' } }));
     return res;
   };
 
   const deleteDraftTransaction = (id: string, userId: string) => {
     const res = db.deleteDraftPartnerTransaction(id, userId);
-    setTransactions(db.getPartnerTransactions());
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_partner_transactions' } }));
     return res;
   };
 
-  return { transactions, addTransaction, reverseTransaction, deleteDraftTransaction };
+  return {
+    transactions: partnerTransactionsState.data,
+    addTransaction,
+    reverseTransaction,
+    deleteDraftTransaction
+  };
 }
 
 export function useRepairPartUsages() {
-  const trigger = useDbTrigger(['atari_repair_part_usages']);
-  const [partUsages, setPartUsages] = useState<RepairPartUsage[]>(() => db.getRepairPartUsages());
-
-  useEffect(() => {
-    let active = true;
-    fetchOrMigrateRepairPartUsages().then(res => {
-      if (active) setPartUsages(res.partUsages);
-    }).catch(() => {
-      if (active) setPartUsages(db.getRepairPartUsages());
-    });
-    return () => { active = false; };
-  }, [trigger]);
+  const { repairPartUsagesState, setPartUsagesData } = useAppData();
 
   const persistLocalUsages = (next: RepairPartUsage[]) => {
-    setPartUsages(next);
+    setPartUsagesData(next);
     db.saveRepairPartUsages(next);
   };
 
   const upsertPartUsageLocal = (usage: RepairPartUsage) => {
-    setPartUsages(prev => {
+    setPartUsagesData(prev => {
       const exists = prev.some(item => item.id === usage.id);
       const next = exists
         ? prev.map(item => item.id === usage.id ? usage : item)
@@ -1196,7 +816,7 @@ export function useRepairPartUsages() {
   };
 
   const replacePartUsageIdLocal = (temporaryId: string, persisted: RepairPartUsage) => {
-    setPartUsages(prev => {
+    setPartUsagesData(prev => {
       const next = prev.map(item => item.id === temporaryId ? persisted : item);
       db.saveRepairPartUsages(next);
       return next;
@@ -1213,7 +833,7 @@ export function useRepairPartUsages() {
   };
 
   return {
-    partUsages,
+    partUsages: repairPartUsagesState.data,
     addPartUsage,
     persistLocalUsages,
     upsertPartUsageLocal,
@@ -1222,13 +842,5 @@ export function useRepairPartUsages() {
 }
 
 export function useSettlementAuditLogs() {
-  const trigger = useDbTrigger();
-  const [auditLogs, setAuditLogs] = useState<SettlementAuditLog[]>([]);
-
-  useEffect(() => {
-    setAuditLogs(db.getSettlementAuditLogs());
-  }, [trigger]);
-
-  return { auditLogs };
+  return { auditLogs: db.getSettlementAuditLogs() };
 }
-

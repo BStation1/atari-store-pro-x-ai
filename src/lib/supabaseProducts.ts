@@ -39,6 +39,9 @@ export function setLocalProductsBackup(products: Product[], dispatchEvent = true
   }
 }
 
+export const saveLocalProductsBackup = setLocalProductsBackup;
+
+
 /**
  * Maps a Supabase database row to a Product object.
  */
