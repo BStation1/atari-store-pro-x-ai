@@ -51,11 +51,15 @@ export default function CustomersList({
   useEffect(() => {
     if (activeCustomer) {
       const fresh = customers.find(c => c.id === activeCustomer.id);
-      if (fresh && JSON.stringify(fresh) !== JSON.stringify(activeCustomer)) {
-        setActiveCustomer(fresh);
+      if (fresh) {
+        setActiveCustomer(prev => {
+          if (!prev) return fresh;
+          if (JSON.stringify(fresh) === JSON.stringify(prev)) return prev;
+          return fresh;
+        });
       }
     }
-  }, [customers, activeCustomer]);
+  }, [customers]);
 
   // Add/Edit Modals state
   const [isModalOpen, setIsModalOpen] = useState(false);

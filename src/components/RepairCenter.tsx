@@ -109,11 +109,15 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
   useEffect(() => {
     if (selectedOrder) {
       const fresh = orders.find(o => o.id === selectedOrder.id);
-      if (fresh && JSON.stringify(fresh) !== JSON.stringify(selectedOrder)) {
-        setSelectedOrder(fresh);
+      if (fresh) {
+        setSelectedOrder(prev => {
+          if (!prev) return fresh;
+          if (JSON.stringify(fresh) === JSON.stringify(prev)) return prev;
+          return fresh;
+        });
       }
     }
-  }, [orders, selectedOrder]);
+  }, [orders]);
 
   // Sub-Navigation Tabs inside Order Workspace
   const [workspaceTab, setWorkspaceTab] = useState<"workshop" | "timeline" | "audit">("workshop");

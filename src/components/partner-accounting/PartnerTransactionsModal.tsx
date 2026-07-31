@@ -36,7 +36,7 @@ export default function PartnerTransactionsModal({
     if ((type === "INVENTORY_WITHDRAWAL" || type === "INVENTORY_WITHDRAWAL_RETURN") && !selectedProductId && products.length > 0) {
       const avail = products.find(p => p.quantity > 0) || products[0];
       if (avail) {
-        setSelectedProductId(avail.id);
+        setSelectedProductId(prev => prev || avail.id);
       }
     }
   }, [type, products, selectedProductId]);
@@ -49,11 +49,15 @@ export default function PartnerTransactionsModal({
         const uCost = Number(prod.purchasePrice || 0);
         const qty = Math.max(1, Number(quantity || 1));
         const computedAmount = qty * uCost;
-        setAmount(computedAmount);
+        setAmount(prev => (prev !== computedAmount ? computedAmount : prev));
         const prefix = type === "INVENTORY_WITHDRAWAL" ? "سحب بضاعة:" : "مرتجع بضاعة للمخزن:";
-        if (!reason || reason.startsWith("سحب بضاعة:") || reason.startsWith("مرتجع بضاعة للمخزن:")) {
-          setReason(`${prefix} ${prod.nameAr || prod.name} (عدد ${qty} قطعة)`);
-        }
+        const newReason = `${prefix} ${prod.nameAr || prod.name} (عدد ${qty} قطعة)`;
+        setReason(prev => {
+          if (!prev || prev.startsWith("سحب بضاعة:") || prev.startsWith("مرتجع بضاعة للمخزن:")) {
+            return prev !== newReason ? newReason : prev;
+          }
+          return prev;
+        });
       }
     }
   }, [type, selectedProductId, quantity, products]);
