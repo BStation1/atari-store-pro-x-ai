@@ -41,7 +41,7 @@ import {
   X,
   Truck
 } from "lucide-react";
-import { useRepairOrders, useCustomers, useProducts, useSettings, useInvoices, useCurrentUser, useRepairPartUsages } from "../hooks/useData";
+import { useRepairOrders, useCustomers, useProducts, useSettings, useInvoices, useCurrentUser, useRepairPartUsages, safeDispatchEvent } from "../hooks/useData";
 import { RepairOrder, RepairDevice, RepairStatus, DeviceType, PaymentMethod, WorkOwnershipType, User as UserType, QUICK_FAULTS_LIST, SelectedRepairItem, RepairPartUsage, Product } from "../types";
 import { getCustomerNameHelper, getCustomerPhoneHelper, getCustomerBadgeHelper, getDeviceDisplayName } from "../lib/customerDisplayHelper";
 import { PhoneDisplay } from "./PhoneDisplay";
@@ -1017,10 +1017,8 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       updateRepairOrder(updatedOrder);
     }
 
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));
-      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
-    }
+    safeDispatchEvent('atari_db_changed', { key: 'atari_repair_part_usages' });
+    safeDispatchEvent('atari_db_changed', { key: 'atari_products' });
 
     // 4. Background Persistence to Supabase (Non-blocking)
     (async () => {
