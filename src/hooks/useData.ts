@@ -268,6 +268,10 @@ export function useRepairOrders() {
     return created;
   };
 
+  const updateRepairOrderLocal = (order: RepairOrder) => {
+    setOrders(prev => prev.map(o => o.id === order.id ? order : o));
+  };
+
   const updateRepairOrder = async (order: RepairOrder, currentUser?: User) => {
     const updated = await updateRepairOrderInSupabase(order, currentUser);
     setOrders(prev => prev.map(o => o.id === updated.id ? updated : o));
@@ -327,6 +331,7 @@ export function useRepairOrders() {
     error,
     addRepairOrder,
     updateRepairOrder,
+    updateRepairOrderLocal,
     deleteRepairOrder,
     deliverRepairOrder,
     reopenRepairOrder
@@ -370,6 +375,10 @@ export function useProducts() {
     setProducts(prev => [newProd, ...prev.filter(p => p.id !== newProd.id)]);
     window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
     return newProd;
+  };
+
+  const updateProductLocal = (product: Product) => {
+    setProducts(prev => prev.map(p => p.id === product.id ? product : p));
   };
 
   const updateProduct = async (product: Product, userId?: string, reason?: string) => {
@@ -420,7 +429,7 @@ export function useProducts() {
     return res;
   };
 
-  return { products, loading, error, addProduct, updateProduct, deleteProduct, withdrawProduct, returnProduct };
+  return { products, loading, error, addProduct, updateProduct, updateProductLocal, deleteProduct, withdrawProduct, returnProduct };
 }
 
 export function useInventoryMovements(productId?: string) {
@@ -1142,7 +1151,7 @@ export function usePartnerTransactions() {
 
 export function useRepairPartUsages() {
   const trigger = useDbTrigger();
-  const [partUsages, setPartUsages] = useState<RepairPartUsage[]>([]);
+  const [partUsages, setPartUsages] = useState<RepairPartUsage[]>(() => db.getRepairPartUsages());
 
   useEffect(() => {
     let active = true;
@@ -1154,6 +1163,16 @@ export function useRepairPartUsages() {
     return () => { active = false; };
   }, [trigger]);
 
+  const replacePartUsagesLocal = (next: RepairPartUsage[] | ((prev: RepairPartUsage[]) => RepairPartUsage[])) => {
+    setPartUsages(prev => {
+      const resolved = typeof next === 'function'
+        ? (next as (prev: RepairPartUsage[]) => RepairPartUsage[])(prev)
+        : next;
+      db.saveRepairPartUsages(resolved);
+      return resolved;
+    });
+  };
+
   const addPartUsage = (part: Omit<RepairPartUsage, "id" | "createdAt">) => {
     addRepairPartUsageToSupabase(part);
     const created = db.addRepairPartUsage(part);
@@ -1162,7 +1181,7 @@ export function useRepairPartUsages() {
     return created;
   };
 
-  return { partUsages, addPartUsage };
+  return { partUsages, addPartUsage, replacePartUsagesLocal };
 }
 
 export function useSettlementAuditLogs() {
