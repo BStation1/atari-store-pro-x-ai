@@ -37,10 +37,11 @@ import {
   Package,
   Tag,
   Plus,
+  Gamepad2,
   X
 } from "lucide-react";
 import { useRepairOrders, useCustomers, useProducts, useSettings, useInvoices, useCurrentUser, useRepairPartUsages } from "../hooks/useData";
-import { RepairOrder, RepairDevice, RepairStatus, DeviceType, PaymentMethod, WorkOwnershipType, User as UserType, QUICK_FAULTS_LIST, SelectedRepairItem, RepairPartUsage } from "../types";
+import { RepairOrder, RepairDevice, RepairStatus, DeviceType, PaymentMethod, WorkOwnershipType, User as UserType, QUICK_FAULTS_LIST, SelectedRepairItem, RepairPartUsage, Product } from "../types";
 import { getCustomerNameHelper, getCustomerPhoneHelper, getCustomerBadgeHelper, getDeviceDisplayName } from "../lib/customerDisplayHelper";
 import { PhoneDisplay } from "./PhoneDisplay";
 import PrintReceiptModal from "./PrintReceiptModal";
@@ -63,8 +64,8 @@ import {
 export function getUsageSellingUnitPrice(pu: RepairPartUsage, productsList: Product[]): number {
   if (pu.sellingPrice && pu.sellingPrice > 0) return pu.sellingPrice;
   const prod = productsList.find(p => p.id === pu.inventoryItemId || (p.nameAr || p.name) === pu.partName);
-  if (prod && Number(prod.sellPrice || prod.price) > 0) {
-    return Number(prod.sellPrice || prod.price);
+  if (prod && Number(prod.sellPrice || (prod as any).price) > 0) {
+    return Number(prod.sellPrice || (prod as any).price);
   }
   return pu.unitCost || 0;
 }
@@ -1576,499 +1577,450 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                 </div>
               )}
 
-              {/* ==================== WORKSPACE TAB 1: WORKSHOP & REPAIR ==================== */}
-              {workspaceTab === "workshop" && (
-                <div className="space-y-6">
-                  {/* Work Ownership Card */}
-                  {(() => {
-                    const ownership = selectedOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
-                    const totalOrderPartsCost = selectedOrder.devices.reduce((sum, d) => sum + (Number(d.partsCost) || 0), 0);
-                    const totalOrderRevenue = selectedOrder.totalEstimatedCost || 0;
-                    const directCosts = selectedOrder.otherDirectCosts || 0;
-                    const netProfit = Math.max(0, totalOrderRevenue - totalOrderPartsCost - directCosts);
+              {/* ==================== WORKSPACE TAB 1: POS WORKSHOP & REPAIR ==================== */}
+              {workspaceTab === "workshop" && (() => {
+                const currentDevice = selectedOrder.devices[0] || { type: 'PlayStation', model: 'PS5', issue: '' };
+                const devIdx = 0;
 
-                    const deductionRate = typeof selectedOrder.partnerDeductionRate === "number" 
-                      ? selectedOrder.partnerDeductionRate 
-                      : (ownership === WorkOwnershipType.PARTNER_2_PRIVATE ? 25 : 0);
+                // Order matching set for RepairPartUsage
+                const orderIdsToMatch = new Set<string>([
+                  String(selectedOrder.id || ''),
+                  String((selectedOrder as any).orderNumber || ''),
+                  String((selectedOrder as any).uuid || '')
+                ].filter(Boolean));
 
-                    let ownerShare = 0;
-                    let partnerShare = 0;
+                // Linked part usages for current device
+                const deviceLinkedUsages = partUsages.filter(
+                  pu => orderIdsToMatch.has(String(pu.repairOrderId)) &&
+                        pu.accountingStatus !== 'RETURNED' &&
+                        pu.accountingStatus !== 'REVERSED' &&
+                        ((pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || devIdx}`)) || selectedOrder.devices.length === 1)
+                );
 
-                    if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) {
-                      ownerShare = netProfit;
-                      partnerShare = 0;
-                    } else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) {
-                      ownerShare = Math.round(netProfit * (deductionRate / 100));
-                      partnerShare = netProfit - ownerShare;
-                    } else {
-                      ownerShare = Math.round(netProfit * 0.5);
-                      partnerShare = Math.round(netProfit * 0.5);
-                    }
+                // Total selling price of all linked used parts
+                const partsTotalSelling = deviceLinkedUsages.reduce((sum, pu) => {
+                  const sellP = getUsageSellingUnitPrice(pu, products);
+                  return sum + (pu.quantity * sellP);
+                }, 0);
 
-                    return (
-                      <div className="bg-gradient-to-r from-slate-950 via-[#161928] to-slate-950 p-5 rounded-xl border border-cyan-500/30 space-y-4">
-                        <div className="flex flex-wrap items-center justify-between gap-4 pb-3 border-b border-[#2a2d42]">
+                // Reported faults / complaint
+                const reportedFaults = currentDevice.reportedFaults || (currentDevice.issue ? currentDevice.issue.split(" - ").map(s => s.trim()) : []);
+
+                // Labor Price calculation:
+                const faultsLaborCost = currentDevice.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(reportedFaults);
+                const grandTotal = (currentDevice.finalRepairPrice ?? currentDevice.estimatedCost) || (partsTotalSelling + faultsLaborCost);
+                const calculatedLabor = Math.max(0, grandTotal - partsTotalSelling);
+
+                // Instant Search filtering (compatible parts with search text matching name, nameAr, SKU, or barcode)
+                const query = partSearch.trim().toLowerCase();
+                const availableInventory = products.filter(p => !p.isArchived);
+                const compatibleInventory = availableInventory.filter(p => isProductCompatibleWithDevice(p, currentDevice.type, currentDevice.model));
+                const baseListToSearch = (compatibleInventory.length > 0 ? compatibleInventory : availableInventory);
+
+                const matchedSearchResults = baseListToSearch.filter(p => {
+                  if (!query) return true;
+                  const nameMatch = p.name.toLowerCase().includes(query) || (p.nameAr && p.nameAr.toLowerCase().includes(query));
+                  const skuMatch = p.sku ? p.sku.toLowerCase().includes(query) : false;
+                  const barcodeMatch = p.barcode ? p.barcode.toLowerCase().includes(query) : false;
+                  const catMatch = p.category ? p.category.toLowerCase().includes(query) : false;
+                  return nameMatch || skuMatch || barcodeMatch || catMatch;
+                });
+
+                return (
+                  <div className="space-y-5">
+                    {/* -----------------------------------------
+                        HEADER
+                       ----------------------------------------- */}
+                    <div className="bg-[#11131e] border border-[#2a2d42] p-4 rounded-2xl flex flex-wrap items-center justify-between gap-4 shadow-xl">
+                      <div className="flex items-center gap-3">
+                        <div className="px-3.5 py-2 bg-indigo-600/20 border border-indigo-500/40 rounded-xl text-indigo-400 font-black text-lg font-mono">
+                          #{selectedOrder.orderNumber || selectedOrder.id.slice(0, 8)}
+                        </div>
+                        <div>
                           <div className="flex items-center gap-2">
-                            <ShieldCheck className="w-5 h-5 text-cyan-400" />
-                            <div>
-                              <h4 className="text-xs font-bold text-cyan-300">طبيعة ملكية العمل وتوزيع المستحقات</h4>
-                              <p className="text-[10px] text-slate-400 mt-0.5">تحديد استحقاق الإيراد ونسبة الخصم وخصم تكلفة بضاعة قطع الغيار</p>
-                            </div>
-                          </div>
-
-                          <div className="flex flex-wrap items-center gap-3">
-                            {selectedOrder.isSettled ? (
-                              <span className="px-3 py-1 bg-amber-500/10 border border-amber-500/30 text-amber-400 rounded-xl text-xs font-bold flex items-center gap-1.5">
-                                <Lock className="w-3.5 h-3.5" />
-                                مدرج بتسوية مقفلة
+                            <h3 className="text-base font-black text-white flex items-center gap-1.5">
+                              <Gamepad2 className="w-5 h-5 text-indigo-400" />
+                              <span>{currentDevice.type || "جهاز بلايستيشن"}</span>
+                              {currentDevice.model && <span className="text-indigo-300 font-extrabold">- {currentDevice.model}</span>}
+                            </h3>
+                            {currentDevice.serialNumber && (
+                              <span className="text-[11px] font-mono text-gray-400 bg-gray-900/90 px-2 py-0.5 rounded border border-gray-800">
+                                S/N: {currentDevice.serialNumber}
                               </span>
-                            ) : (
-                              <>
-                                <div>
-                                  <label className="text-[10px] text-cyan-400 font-bold block mb-1">نوع الشغل</label>
-                                  <select
-                                    value={ownership}
-                                    onChange={e => handleUpdateOwnershipType(e.target.value as WorkOwnershipType)}
-                                    className="bg-gray-950 border border-cyan-500/40 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none font-bold text-cyan-300 cursor-pointer"
-                                  >
-                                    <option value={WorkOwnershipType.CUSTOMER_SHARED}>
-                                      شغل المحل
-                                    </option>
-                                    <option value={WorkOwnershipType.PARTNER_1_PRIVATE}>
-                                      شغل أحمد
-                                    </option>
-                                    <option value={WorkOwnershipType.PARTNER_2_PRIVATE}>
-                                      شغل عبده
-                                    </option>
-                                  </select>
-                                </div>
-
-                                <div>
-                                  <label className="text-[10px] text-amber-400 font-bold block mb-1">نسبة الخصم (%)</label>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    max="100"
-                                    value={deductionRate}
-                                    onChange={e => handleUpdateDeductionRate(Math.max(0, Math.min(100, Number(e.target.value))))}
-                                    className="w-20 bg-gray-950 border border-amber-500/40 rounded-xl px-2.5 py-1.5 text-xs text-amber-300 font-mono font-bold focus:outline-none"
-                                  />
-                                </div>
-                              </>
                             )}
                           </div>
-                        </div>
-
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center text-xs">
-                          <div className="bg-[#11131e] p-2.5 rounded-lg border border-[#2a2d42]">
-                            <span className="text-[10px] text-gray-400 block">إجمالي الإيراد</span>
-                            <span className="font-extrabold text-white text-sm mt-0.5 block">{totalOrderRevenue} ج.م</span>
-                          </div>
-                          <div className="bg-[#11131e] p-2.5 rounded-lg border border-[#2a2d42]">
-                            <span className="text-[10px] text-gray-400 block">تكلفة قطع الغيار المسحوبة</span>
-                            <span className="font-extrabold text-rose-400 text-sm mt-0.5 block">{totalOrderPartsCost} ج.م</span>
-                          </div>
-                          <div className="bg-[#11131e] p-2.5 rounded-lg border border-[#2a2d42]">
-                            <span className="text-[11px] text-gray-400 block">نصيب أحمد البنا</span>
-                            <span className="font-extrabold text-emerald-400 text-sm mt-0.5 block">{ownerShare} ج.م</span>
-                          </div>
-                          <div className="bg-[#11131e] p-2.5 rounded-lg border border-[#2a2d42]">
-                            <span className="text-[11px] text-gray-400 block">نصيب عبده</span>
-                            <span className="font-extrabold text-cyan-400 text-sm mt-0.5 block">{partnerShare} ج.م</span>
-                          </div>
+                          <p className="text-xs text-gray-400 mt-1 flex items-center gap-2">
+                            <span>العميل: <strong className="text-white font-bold">{getCustomerNameHelper(selectedOrder, customers)}</strong></span>
+                            <span className="text-gray-600">•</span>
+                            <span className="font-mono text-cyan-400 font-bold">{getCustomerPhoneHelper(selectedOrder, customers)}</span>
+                          </p>
                         </div>
                       </div>
-                    );
-                  })()}
 
-                  {/* Devices List with 3-Part Separation */}
-                  <div className="space-y-6">
-                    {selectedOrder.devices.map((device, devIdx) => {
-                      const reportedFaults = device.reportedFaults || (device.issue ? device.issue.split(" - ").map(s => s.trim()) : []);
-                      const proceduresList: SelectedRepairItem[] = device.technicalProcedures || device.selectedRepairItems || [];
+                      {/* Current Status Dropdown */}
+                      <div className="flex items-center gap-2 bg-[#181b2a] p-1.5 rounded-xl border border-indigo-500/30">
+                        <span className="text-xs text-gray-400 font-bold px-2">الحالة الحالية:</span>
+                        <select
+                          value={selectedOrder.status}
+                          onChange={(e) => handleUpdateOrderStatus(e.target.value as RepairStatus)}
+                          className="bg-indigo-950/80 border border-indigo-500/50 text-white font-extrabold text-xs rounded-lg px-3 py-1.5 focus:outline-none cursor-pointer"
+                        >
+                          <option value={RepairStatus.Received}>📥 تم الاستلام</option>
+                          <option value={RepairStatus.Diagnosing}>🔍 قيد التشخيص</option>
+                          <option value={RepairStatus.Repairing}>🔧 قيد الإصلاح</option>
+                          <option value={RepairStatus.WaitingParts}>⏳ بانتظار قطع الغيار</option>
+                          <option value={RepairStatus.Ready}>✅ جاهز للتسليم</option>
+                          <option value={RepairStatus.Delivered}>🎉 تم التسليم</option>
+                          <option value={RepairStatus.Cancelled}>❌ ملغى</option>
+                        </select>
+                      </div>
+                    </div>
 
-                      return (
-                        <div key={device.id} className="bg-gray-950/50 p-5 rounded-2xl border border-[#2a2d42] space-y-5">
-                          {/* Device Header */}
-                          <div className="flex justify-between items-center pb-3 border-b border-[#2a2d42]/60">
-                            <h4 className="text-sm font-bold text-indigo-400 flex items-center gap-2">
-                              <Layers className="w-4 h-4 text-indigo-500" />
-                              جهاز #{devIdx + 1}: {device.type} - {device.model}
-                            </h4>
-                            <span className="text-xs text-gray-400 font-mono">سيريال: {device.serialNumber || "غير متوفر"}</span>
+                    {/* -----------------------------------------
+                        PROBLEM & DIAGNOSIS
+                       ----------------------------------------- */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Customer Complaint */}
+                      <div className="bg-[#11131e] border border-[#2a2d42] p-4 rounded-2xl space-y-3">
+                        <h4 className="text-xs font-extrabold text-amber-400 flex items-center gap-1.5">
+                          <AlertTriangle className="w-4 h-4 text-amber-400" />
+                          <span>شكوى العميل والأعطال (Customer Complaint)</span>
+                        </h4>
+
+                        {/* Quick Fault Chips */}
+                        <div className="flex flex-wrap gap-1.5">
+                          {QUICK_FAULTS_LIST.map((fault) => {
+                            const isSelected = reportedFaults.includes(fault.label);
+                            return (
+                              <button
+                                key={fault.id}
+                                type="button"
+                                onClick={() => handleToggleQuickFaultInRepairCenter(devIdx, fault.label)}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition cursor-pointer flex items-center gap-1 ${
+                                  isSelected
+                                    ? "bg-amber-600 text-white border-amber-400 shadow-md shadow-amber-950/50"
+                                    : "bg-gray-900/90 text-gray-300 border-gray-800 hover:border-gray-700 hover:text-white"
+                                }`}
+                              >
+                                <span className="text-[10px]">{isSelected ? "✓" : "+"}</span>
+                                <span>{fault.label}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        <input
+                          type="text"
+                          placeholder="تفاصيل العطل أو ملاحظات الاستلام..."
+                          value={currentDevice.issue || ""}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const updatedDevices = [...selectedOrder.devices];
+                            if (updatedDevices[devIdx]) {
+                              updatedDevices[devIdx].issue = val;
+                              const updatedOrder = { ...selectedOrder, devices: updatedDevices };
+                              setSelectedOrder(updatedOrder);
+                              updateRepairOrder(updatedOrder);
+                            }
+                          }}
+                          className="w-full bg-[#181b2a] border border-[#2a2d42] rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-amber-500"
+                        />
+                      </div>
+
+                      {/* Diagnosis & Notes */}
+                      <div className="bg-[#11131e] border border-[#2a2d42] p-4 rounded-2xl space-y-3">
+                        <h4 className="text-xs font-extrabold text-cyan-400 flex items-center gap-1.5">
+                          <Wrench className="w-4 h-4 text-cyan-400" />
+                          <span>التشخيص الفني والملاحظات (Diagnosis)</span>
+                        </h4>
+
+                        <textarea
+                          rows={3}
+                          placeholder="أدخل نتائج الفحص، التشخيص الفني، الملاحظات..."
+                          value={currentDevice.technicalNotes || selectedOrder.notes || ""}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const updatedDevices = [...selectedOrder.devices];
+                            if (updatedDevices[devIdx]) {
+                              updatedDevices[devIdx].technicalNotes = val;
+                            }
+                            const updatedOrder = { ...selectedOrder, notes: val, devices: updatedDevices };
+                            setSelectedOrder(updatedOrder);
+                            updateRepairOrder(updatedOrder);
+                          }}
+                          className="w-full bg-[#181b2a] border border-[#2a2d42] rounded-xl p-3 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500 resize-none"
+                        />
+                      </div>
+                    </div>
+
+                    {/* -----------------------------------------
+                        USED PARTS (POS INSTANT SEARCH & TABLE)
+                       ----------------------------------------- */}
+                    <div className="bg-[#11131e] border border-rose-500/30 p-5 rounded-2xl space-y-4 shadow-xl">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-sm font-extrabold text-rose-300 flex items-center gap-2">
+                          <Package className="w-4.5 h-4.5 text-rose-400" />
+                          <span>قطع الغيار المستخدمة (Used Parts)</span>
+                        </h4>
+                        <span className="text-xs text-rose-300/80 font-semibold bg-rose-950/60 border border-rose-500/30 px-3 py-1 rounded-full">
+                          قطع متوافقة مع {currentDevice.type} {currentDevice.model}
+                        </span>
+                      </div>
+
+                      {/* Instant Search Input Box */}
+                      <div className="relative">
+                        <Search className="w-5 h-5 text-gray-400 absolute right-4 top-3.5" />
+                        <input
+                          type="text"
+                          placeholder="🔍 Search inventory... (اسم القطعة، SKU، الباركود)"
+                          value={partSearch}
+                          onChange={(e) => setPartSearch(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && matchedSearchResults.length > 0) {
+                              e.preventDefault();
+                              const firstP = matchedSearchResults[0];
+                              if (firstP && firstP.quantity > 0) {
+                                handleAddPartToDevice(devIdx, firstP.id, 1);
+                                setPartSearch('');
+                              }
+                            }
+                          }}
+                          className="w-full bg-[#181b2a] border-2 border-rose-500/40 rounded-2xl pr-11 pl-4 py-3 text-sm text-white placeholder-gray-400 focus:outline-none focus:border-rose-500 font-medium shadow-inner"
+                        />
+                        {partSearch && (
+                          <button
+                            type="button"
+                            onClick={() => setPartSearch('')}
+                            className="absolute left-3 top-3 text-gray-400 hover:text-white bg-gray-800 rounded-full w-6 h-6 flex items-center justify-center text-xs cursor-pointer"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Matching Results Chips when typing */}
+                      {partSearch.trim() !== '' && (
+                        <div className="bg-[#181b2a] border-2 border-rose-500/50 p-3 rounded-2xl max-h-[220px] overflow-y-auto custom-scrollbar space-y-2">
+                          <div className="flex justify-between items-center px-1">
+                            <span className="text-[11px] text-gray-300 font-bold">نتائج البحث الفوري ({matchedSearchResults.length}):</span>
+                            <span className="text-[10px] text-gray-400">اضغط Enter لإضافة النتيجة الأولى</span>
                           </div>
-
-                          {/* ================= PART 1: FAULT / CUSTOMER COMPLAINT ================= */}
-                          <div className="bg-amber-950/20 border border-amber-500/30 p-4 rounded-xl space-y-3">
-                            <div className="flex justify-between items-center">
-                              <h5 className="text-xs font-bold text-amber-400 flex items-center gap-1.5">
-                                <AlertTriangle className="w-4 h-4 text-amber-400" />
-                                <span>1. العطل أو شكوى العميل (Customer Complaint)</span>
-                              </h5>
-                              <span className="text-[10px] text-amber-300/80 font-mono">شكوى العميل الظاهرية عند الاستلام</span>
-                            </div>
-
-                            {/* Tags list */}
-                            <div className="flex flex-wrap gap-1.5 pt-1">
-                              {QUICK_FAULTS_LIST.map((fault) => {
-                                const isSelected = reportedFaults.includes(fault.label);
+                          {matchedSearchResults.length === 0 ? (
+                            <p className="text-xs text-rose-400 italic py-3 text-center">لا توجد قطع غيار مطابقة للبحث.</p>
+                          ) : (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                              {matchedSearchResults.map((p) => {
+                                const price = Number(p.sellPrice || (p as any).price || p.purchasePrice || 0);
+                                const isOutOfStock = p.quantity <= 0;
                                 return (
                                   <button
-                                    key={fault.id}
+                                    key={p.id}
                                     type="button"
-                                    onClick={() => handleToggleQuickFaultInRepairCenter(devIdx, fault.label)}
-                                    className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer flex items-center gap-1.5 ${
-                                      isSelected
-                                        ? "bg-amber-600 text-white border-amber-400 shadow-md shadow-amber-950/50"
-                                        : "bg-gray-950/80 text-gray-300 border-gray-800 hover:border-gray-700 hover:text-white"
+                                    disabled={isOutOfStock}
+                                    onClick={() => {
+                                      handleAddPartToDevice(devIdx, p.id, 1);
+                                      setPartSearch('');
+                                    }}
+                                    className={`p-2.5 rounded-xl text-xs font-bold border text-right transition flex items-center justify-between gap-2 cursor-pointer ${
+                                      isOutOfStock
+                                        ? "bg-gray-900 text-gray-600 border-gray-800 cursor-not-allowed opacity-50"
+                                        : "bg-[#11131e] text-white border-rose-500/30 hover:border-rose-500 hover:bg-rose-950/50"
                                     }`}
                                   >
-                                    <span className="text-[10px]">{isSelected ? "☑" : "□"}</span>
-                                    <span>{fault.label}</span>
-                                    {fault.defaultSellingPrice > 0 && (
-                                      <span className={`text-[10px] px-1 rounded font-mono font-bold ${
-                                        isSelected ? "bg-amber-800/80 text-white" : "bg-gray-900 text-gray-400"
-                                      }`}>
-                                        +{fault.defaultSellingPrice} ج.م
-                                      </span>
-                                    )}
+                                    <div className="truncate">
+                                      <p className="font-bold text-white truncate">{p.nameAr || p.name}</p>
+                                      <p className="text-[10px] text-gray-400 font-mono">المتاح: {p.quantity} قطعة</p>
+                                    </div>
+                                    <span className="font-mono font-extrabold text-emerald-400 bg-emerald-950/70 px-2.5 py-1 rounded-lg border border-emerald-500/30 shrink-0">
+                                      {price.toLocaleString('ar-EG')}
+                                    </span>
                                   </button>
                                 );
                               })}
                             </div>
-                          </div>
-
-                          {/* ================= PART 2: USED SPARE PARTS FROM INVENTORY ================= */}
-                          {(() => {
-                            const orderIdsToMatch = new Set<string>([
-                              String(selectedOrder.id || ''),
-                              String((selectedOrder as any).orderNumber || ''),
-                              String((selectedOrder as any).uuid || '')
-                            ].filter(Boolean));
-
-                            const deviceLinkedUsages = partUsages.filter(
-                              pu => orderIdsToMatch.has(String(pu.repairOrderId)) &&
-                                    pu.accountingStatus !== 'RETURNED' &&
-                                    pu.accountingStatus !== 'REVERSED' &&
-                                    ((pu.notes && pu.notes.includes(`deviceId:${device.id || devIdx}`)) || selectedOrder.devices.length === 1)
-                            );
-
-                            const devicePartsTotalSelling = deviceLinkedUsages.reduce((sum, pu) => {
-                              const sellP = getUsageSellingUnitPrice(pu, products);
-                              return sum + (pu.quantity * sellP);
-                            }, 0);
-
-                            // Filter products compatible with device
-                            const compatibleParts = products.filter(p => !p.isArchived && isProductCompatibleWithDevice(p, device.type, device.model));
-                            const hasCompatibilityFilter = compatibleParts.length > 0 && compatibleParts.length < products.filter(p => !p.isArchived).length;
-
-                            return (
-                              <div className="bg-rose-950/20 border border-rose-500/30 p-4 rounded-xl space-y-3">
-                                <div className="flex flex-wrap justify-between items-center gap-2">
-                                  <div className="flex items-center gap-2">
-                                    <h5 className="text-xs font-bold text-rose-300 flex items-center gap-1.5">
-                                      <Package className="w-4 h-4 text-rose-400" />
-                                      <span>2. قطع الغيار المستخدمة من المخزن</span>
-                                    </h5>
-                                    {(device.type || device.model) && (
-                                      <span className="text-[10px] bg-rose-900/60 text-rose-200 border border-rose-500/30 px-2 py-0.5 rounded-full font-semibold">
-                                        قطع متوافقة مع {device.type || ''} {device.model || ''}
-                                      </span>
-                                    )}
-                                  </div>
-
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setAddPartDevIdx(devIdx);
-                                      const avail = compatibleParts.find(p => p.quantity > 0) || compatibleParts[0] || products.find(p => !p.isArchived);
-                                      setAddPartProductId(avail ? avail.id : '');
-                                      setAddPartQty(1);
-                                      setAddPartModalOpen(true);
-                                    }}
-                                    className="bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs px-3 py-1.5 rounded-xl shadow-md flex items-center gap-1.5 transition cursor-pointer"
-                                  >
-                                    <Plus className="w-4 h-4" />
-                                    <span>إضافة قطعة من المخزن</span>
-                                  </button>
-                                </div>
-
-                                {/* Part Search Filter Input */}
-                                {products.filter(p => !p.isArchived).length > 3 && (
-                                  <div className="relative">
-                                    <Search className="w-3.5 h-3.5 text-gray-400 absolute right-3 top-2.5" />
-                                    <input
-                                      type="text"
-                                      placeholder="ابحث في قطع الغيار المتاحة..."
-                                      value={partSearch}
-                                      onChange={e => setPartSearch(e.target.value)}
-                                      className="w-full bg-[#11131e] border border-rose-500/30 rounded-xl pr-9 pl-3 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-rose-500"
-                                    />
-                                  </div>
-                                )}
-
-                                {/* Compatible Inventory Choice Chips */}
-                                {(() => {
-                                  const displayParts = (partSearch.trim() || !hasCompatibilityFilter ? products.filter(p => !p.isArchived) : compatibleParts).filter(p =>
-                                    !partSearch.trim() ||
-                                    p.name.toLowerCase().includes(partSearch.toLowerCase()) ||
-                                    (p.nameAr && p.nameAr.toLowerCase().includes(partSearch.toLowerCase())) ||
-                                    (p.category && p.category.toLowerCase().includes(partSearch.toLowerCase()))
-                                  );
-
-                                  if (displayParts.length === 0) {
-                                    return (
-                                      <p className="text-xs text-gray-400 italic py-2">
-                                        لا توجد قطع غيار مطابقة في المخزون لهذا الجهاز.
-                                      </p>
-                                    );
-                                  }
-
-                                  return (
-                                    <div className="flex flex-wrap gap-2 pt-1 max-h-[180px] overflow-y-auto p-1 custom-scrollbar">
-                                      {displayParts.map(p => {
-                                        const linkedUsages = deviceLinkedUsages.filter(pu => pu.inventoryItemId === p.id || pu.partName === (p.nameAr || p.name));
-                                        const isSelected = linkedUsages.length > 0;
-                                        const totalUsedQty = linkedUsages.reduce((sum, pu) => sum + (pu.quantity || 1), 0);
-                                        const isOutOfStock = p.quantity <= 0 && !isSelected;
-                                        const sellingPrice = Number(p.sellPrice || p.price || p.purchasePrice || 0);
-
-                                        return (
-                                          <div
-                                            key={p.id}
-                                            className={`rounded-xl text-xs font-bold border transition-all flex items-center p-1 gap-1.5 ${
-                                              isSelected
-                                                ? "bg-rose-950/90 text-white border-rose-500 shadow-md shadow-rose-950/50"
-                                                : isOutOfStock
-                                                ? "bg-gray-950/50 text-gray-600 border-gray-800/80 opacity-50 cursor-not-allowed"
-                                                : "bg-gray-950/80 text-gray-300 border-rose-500/20 hover:border-rose-500/60 hover:text-white"
-                                            }`}
-                                          >
-                                            <button
-                                              type="button"
-                                              disabled={isOutOfStock || (isSelected && p.quantity <= 0)}
-                                              onClick={() => {
-                                                handleAddPartToDevice(devIdx, p.id, 1);
-                                              }}
-                                              className="flex items-center gap-1.5 px-2 py-0.5 cursor-pointer disabled:cursor-not-allowed hover:opacity-90 transition"
-                                              title={isSelected ? "انقر لإضافة قطعة إضافية" : "انقر لإضافة القطعة للطلب"}
-                                            >
-                                              <span className="text-[10px] text-emerald-400">{isSelected ? "☑" : "□"}</span>
-                                              <span>{p.nameAr || p.name}</span>
-
-                                              <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-mono font-bold ${
-                                                isSelected ? "bg-rose-800 text-amber-200" : "bg-gray-900 text-emerald-400"
-                                              }`}>
-                                                {sellingPrice.toLocaleString('ar-EG')} ج.م
-                                              </span>
-                                            </button>
-
-                                            {/* Quantity Control buttons when selected */}
-                                            {isSelected ? (
-                                              <div className="flex items-center gap-1 bg-black/40 px-1.5 py-0.5 rounded-lg border border-rose-500/30 mr-1">
-                                                <button
-                                                  type="button"
-                                                  onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    const lastUsage = linkedUsages[linkedUsages.length - 1];
-                                                    if (lastUsage) {
-                                                      handleRemovePartUsage(lastUsage.id, devIdx, 1);
-                                                    }
-                                                  }}
-                                                  className="text-rose-400 hover:text-white hover:bg-rose-600/50 px-1.5 py-0.2 rounded font-bold transition cursor-pointer"
-                                                  title="إنقاص الكمية (-1)"
-                                                >
-                                                  -
-                                                </button>
-
-                                                <span className="text-[11px] font-mono font-extrabold text-amber-300 px-1">
-                                                  {totalUsedQty}
-                                                </span>
-
-                                                <button
-                                                  type="button"
-                                                  disabled={p.quantity <= 0}
-                                                  onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    handleAddPartToDevice(devIdx, p.id, 1);
-                                                  }}
-                                                  className="text-emerald-400 hover:text-white hover:bg-emerald-600/50 px-1.5 py-0.2 rounded font-bold transition disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
-                                                  title="زيادة الكمية (+1)"
-                                                >
-                                                  +
-                                                </button>
-                                              </div>
-                                            ) : (
-                                              <span className={`text-[9px] px-1.5 py-0.5 rounded ${
-                                                isOutOfStock
-                                                  ? "bg-red-950 text-red-400 font-bold"
-                                                  : "bg-cyan-950/80 text-cyan-300 font-mono"
-                                              }`}>
-                                                {isOutOfStock ? "نفذ" : `المتاح: ${p.quantity}`}
-                                              </span>
-                                            )}
-                                          </div>
-                                        );
-                                      })}
-                                    </div>
-                                  );
-                                })()}
-
-                                {/* Simplified Table (ONLY 5 Columns) */}
-                                {deviceLinkedUsages.length > 0 ? (
-                                  <div className="overflow-x-auto rounded-xl border border-rose-500/30 bg-gray-950/90 mt-3">
-                                    <table className="w-full text-xs text-right text-gray-300 border-collapse">
-                                      <thead className="bg-[#11131e] text-gray-400 font-semibold border-b border-[#2a2d42]">
-                                        <tr>
-                                          <th className="p-2.5">اسم القطعة</th>
-                                          <th className="p-2.5 text-center">سعر البيع</th>
-                                          <th className="p-2.5 text-center">الكمية</th>
-                                          <th className="p-2.5 text-left font-bold text-emerald-300">إجمالي الصنف</th>
-                                          <th className="p-2.5 text-center">إجراءات</th>
-                                        </tr>
-                                      </thead>
-                                      <tbody className="divide-y divide-[#1f2937]">
-                                        {deviceLinkedUsages.map((pu, puIdx) => {
-                                          const unitSellingP = getUsageSellingUnitPrice(pu, products);
-                                          const lineTotal = pu.quantity * unitSellingP;
-                                          const matchedProduct = products.find(p => p.id === pu.inventoryItemId);
-                                          const maxStock = matchedProduct ? matchedProduct.quantity : 0;
-
-                                          return (
-                                            <tr key={`${pu.id || 'pu'}-${puIdx}`} className="hover:bg-[#161927]">
-                                              <td className="p-2.5 font-bold text-white flex items-center gap-2">
-                                                <span className="w-2 h-2 rounded-full bg-rose-500 inline-block"></span>
-                                                <span>{pu.partName}</span>
-                                              </td>
-                                              <td className="p-2.5 text-center text-amber-300 font-mono font-bold">
-                                                {unitSellingP.toLocaleString('ar-EG')} ج.م
-                                              </td>
-                                              <td className="p-2.5 text-center font-bold">
-                                                <div className="inline-flex items-center gap-1.5 bg-[#181b2a] px-2 py-1 rounded-lg border border-gray-700">
-                                                  <button
-                                                    type="button"
-                                                    onClick={() => handleRemovePartUsage(pu.id, devIdx, 1)}
-                                                    className="w-5 h-5 flex items-center justify-center bg-rose-950 hover:bg-rose-800 text-rose-200 rounded font-bold cursor-pointer transition"
-                                                    title="إنقاص الكمية (-1)"
-                                                  >
-                                                    -
-                                                  </button>
-
-                                                  <span className="font-mono text-cyan-300 text-xs px-1 min-w-[20px]">
-                                                    {pu.quantity}
-                                                  </span>
-
-                                                  <button
-                                                    type="button"
-                                                    disabled={maxStock <= 0}
-                                                    onClick={() => handleAddPartToDevice(devIdx, pu.inventoryItemId, 1)}
-                                                    className="w-5 h-5 flex items-center justify-center bg-emerald-950 hover:bg-emerald-800 text-emerald-200 rounded font-bold cursor-pointer transition disabled:opacity-30 disabled:cursor-not-allowed"
-                                                    title={maxStock <= 0 ? "المخزون المتاح نفذ" : "زيادة الكمية (+1)"}
-                                                  >
-                                                    +
-                                                  </button>
-                                                </div>
-                                              </td>
-                                              <td className="p-2.5 text-left font-mono font-bold text-emerald-400">
-                                                {lineTotal.toLocaleString('ar-EG')} ج.م
-                                              </td>
-                                              <td className="p-2.5 text-center">
-                                                <button
-                                                  type="button"
-                                                  onClick={() => handleRemovePartUsage(pu.id, devIdx, -1)}
-                                                  className="p-1.5 bg-rose-500/20 hover:bg-rose-500/40 text-rose-300 rounded-lg transition cursor-pointer inline-flex items-center gap-1"
-                                                  title="حذف القطعة وإرجاع كافة الكمية للمخزن"
-                                                >
-                                                  <Trash2 className="w-3.5 h-3.5" />
-                                                  <span className="text-[10px]">إزالة</span>
-                                                </button>
-                                              </td>
-                                            </tr>
-                                          );
-                                        })}
-                                      </tbody>
-                                    </table>
-                                  </div>
-                                ) : (
-                                  <div className="p-3 bg-[#11131e]/50 border border-dashed border-rose-500/20 rounded-xl text-center text-xs text-gray-400">
-                                    لم يتم إضافة قطع غيار لهذا الجهاز بعد.
-                                  </div>
-                                )}
-
-                                {/* Bottom Summary Box */}
-                                <div className="pt-2 border-t border-rose-500/20 flex justify-between items-center text-xs">
-                                  <span className="text-gray-300 font-bold">إجمالي سعر بيع قطع الغيار:</span>
-                                  <span className="font-mono font-extrabold text-rose-400 text-sm bg-rose-950/60 px-3 py-1 rounded-lg border border-rose-500/30">
-                                    {devicePartsTotalSelling.toLocaleString('ar-EG')} ج.م
-                                  </span>
-                                </div>
-                              </div>
-                            );
-                          })()}
-
-                          {/* Device Price Summary & Manual Override */}
-                          {(() => {
-                            const faultsCost = device.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(reportedFaults);
-                            const partsCost = Number(device.partsCost) || 0;
-                            const calculatedTotal = faultsCost + partsCost;
-                            const currentFinalPrice = device.finalRepairPrice ?? device.estimatedCost ?? calculatedTotal;
-
-                            return (
-                              <div className="bg-gradient-to-r from-indigo-950/70 via-slate-900 to-indigo-950/70 p-4 rounded-2xl border border-indigo-500/40 space-y-3 shadow-lg">
-                                <div className="flex flex-wrap items-center justify-between gap-3">
-                                  <label className="text-xs text-emerald-400 font-extrabold flex items-center gap-1.5">
-                                    <DollarSign className="w-4 h-4 text-emerald-400" />
-                                    <span>💰 السعر النهائي للعميل لهذا الجهاز (ج.م) *</span>
-                                  </label>
-
-                                  <button
-                                    type="button"
-                                    onClick={() => handleRecalculateDevicePrice(devIdx)}
-                                    className="bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 hover:text-white border border-indigo-400/40 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
-                                  >
-                                    <RotateCcw className="w-3.5 h-3.5 text-indigo-300" />
-                                    <span>↻ إعادة الحساب</span>
-                                  </button>
-                                </div>
-
-                                <div className="relative">
-                                  <input
-                                    type="number"
-                                    required
-                                    min="0"
-                                    placeholder="0.00"
-                                    value={currentFinalPrice}
-                                    onChange={e => {
-                                      const val = e.target.value === "" ? 0 : Number(e.target.value);
-                                      handleManualDevicePriceChange(devIdx, val);
-                                    }}
-                                    className="w-full bg-gray-950 border border-emerald-500/60 rounded-xl px-4 py-3 text-lg text-emerald-400 font-extrabold font-mono focus:outline-none focus:border-emerald-400 shadow-inner"
-                                  />
-                                </div>
-
-                                <div className="bg-gray-950/90 p-3 rounded-xl border border-slate-800 text-xs space-y-1.5 text-gray-300">
-                                  <div className="flex justify-between items-center text-[11px]">
-                                    <span className="text-gray-400">سعر الأعطال المحددة:</span>
-                                    <span className="font-mono font-bold text-indigo-300">{faultsCost} ج.م</span>
-                                  </div>
-                                  <div className="flex justify-between items-center text-[11px]">
-                                    <span className="text-gray-400">قطع الغيار والإجراءات الفنية:</span>
-                                    <span className="font-mono font-bold text-rose-300">{partsCost} ج.م</span>
-                                  </div>
-                                  <div className="border-t border-gray-800 pt-1.5 flex justify-between items-center text-xs font-bold">
-                                    <span className="text-gray-200">السعر المحسوب تلقائياً:</span>
-                                    <span className="font-mono text-emerald-400">{calculatedTotal} ج.م</span>
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })()}
+                          )}
                         </div>
-                      );
-                    })}
+                      )}
+
+                      {/* Parts Table */}
+                      <div className="overflow-x-auto rounded-xl border border-rose-500/30 bg-gray-950">
+                        <table className="w-full text-xs text-right text-gray-200 border-collapse">
+                          <thead className="bg-[#181b2a] text-gray-400 font-bold border-b border-[#2a2d42]">
+                            <tr>
+                              <th className="p-3">Product</th>
+                              <th className="p-3 text-center">Price</th>
+                              <th className="p-3 text-center">Quantity</th>
+                              <th className="p-3 text-left font-bold text-emerald-400">Total</th>
+                              <th className="p-3 text-center">Delete</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-[#1f2937]">
+                            {deviceLinkedUsages.length === 0 ? (
+                              <tr>
+                                <td colSpan={5} className="p-8 text-center text-gray-500 text-xs font-bold">
+                                  لم يتم إضافة قطع غيار لهذا الجهاز بعد. ابحث في المربع أعلاه واضغط لإضافة القطعة مباشرة.
+                                </td>
+                              </tr>
+                            ) : (
+                              deviceLinkedUsages.map((pu) => {
+                                const unitSellPrice = getUsageSellingUnitPrice(pu, products);
+                                const lineTotal = pu.quantity * unitSellPrice;
+                                const matchedProd = products.find(p => p.id === pu.inventoryItemId);
+                                const stockAvail = matchedProd ? matchedProd.quantity : 0;
+
+                                return (
+                                  <tr key={pu.id} className="hover:bg-[#161927] transition-colors">
+                                    {/* Product Name */}
+                                    <td className="p-3 font-extrabold text-white">
+                                      <div className="flex items-center gap-2">
+                                        <span className="w-2 h-2 rounded-full bg-rose-500 inline-block"></span>
+                                        <span>{pu.partName}</span>
+                                      </div>
+                                    </td>
+
+                                    {/* Selling Price */}
+                                    <td className="p-3 text-center font-mono font-extrabold text-amber-300">
+                                      {unitSellPrice.toLocaleString('ar-EG')}
+                                    </td>
+
+                                    {/* Quantity Controls */}
+                                    <td className="p-3 text-center">
+                                      <div className="inline-flex items-center gap-2 bg-[#181b2a] px-2.5 py-1 rounded-xl border border-gray-700">
+                                        <button
+                                          type="button"
+                                          onClick={() => handleRemovePartUsage(pu.id, devIdx, 1)}
+                                          className="w-6 h-6 flex items-center justify-center bg-rose-950 hover:bg-rose-800 text-rose-200 rounded-lg font-extrabold text-sm transition cursor-pointer"
+                                          title="خصم قطعة واحدة (-)"
+                                        >
+                                          -
+                                        </button>
+
+                                        <span className="font-mono text-cyan-300 text-sm font-extrabold px-1.5 min-w-[24px]">
+                                          {pu.quantity}
+                                        </span>
+
+                                        <button
+                                          type="button"
+                                          disabled={stockAvail <= 0}
+                                          onClick={() => handleAddPartToDevice(devIdx, pu.inventoryItemId, 1)}
+                                          className="w-6 h-6 flex items-center justify-center bg-emerald-950 hover:bg-emerald-800 text-emerald-200 rounded-lg font-extrabold text-sm transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                                          title={stockAvail <= 0 ? "المخزون نفذ" : "إضافة قطعة أخرى (+)"}
+                                        >
+                                          +
+                                        </button>
+                                      </div>
+                                    </td>
+
+                                    {/* Line Total */}
+                                    <td className="p-3 text-left font-mono font-extrabold text-emerald-400 text-sm">
+                                      {lineTotal.toLocaleString('ar-EG')}
+                                    </td>
+
+                                    {/* Delete Button */}
+                                    <td className="p-3 text-center">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRemovePartUsage(pu.id, devIdx, -1)}
+                                        className="p-2 bg-rose-500/10 hover:bg-rose-600 text-rose-400 hover:text-white rounded-xl transition cursor-pointer"
+                                        title="حذف القطعة وإرجاع المخزون"
+                                      >
+                                        <Trash2 className="w-4 h-4" />
+                                      </button>
+                                    </td>
+                                  </tr>
+                                );
+                              })
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* -----------------------------------------
+                        BOTTOM SUMMARY
+                       ----------------------------------------- */}
+                    <div className="bg-[#11131e] border border-indigo-500/30 p-6 rounded-2xl shadow-xl space-y-5">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
+                        {/* Parts Total */}
+                        <div className="bg-[#181b2a] p-4 rounded-xl border border-rose-500/30">
+                          <span className="text-xs text-gray-400 font-bold block mb-1">Parts Total</span>
+                          <span className="text-2xl font-black font-mono text-rose-400">
+                            {partsTotalSelling.toLocaleString('ar-EG')}
+                          </span>
+                        </div>
+
+                        {/* Labor */}
+                        <div className="bg-[#181b2a] p-4 rounded-xl border border-cyan-500/30">
+                          <span className="text-xs text-gray-400 font-bold block mb-1">Labor</span>
+                          <div className="flex items-center justify-center gap-1">
+                            <input
+                              type="number"
+                              min="0"
+                              value={calculatedLabor}
+                              onChange={(e) => {
+                                const newLabor = Number(e.target.value) || 0;
+                                const newGrand = partsTotalSelling + newLabor;
+                                handleManualDevicePriceChange(devIdx, newGrand);
+                              }}
+                              className="w-32 bg-gray-950 border border-cyan-500/50 rounded-lg px-2 py-1 text-center text-xl font-black font-mono text-cyan-300 focus:outline-none"
+                            />
+                            <span className="text-xs text-cyan-400 font-bold">ج.م</span>
+                          </div>
+                        </div>
+
+                        {/* Grand Total */}
+                        <div className="bg-gradient-to-r from-emerald-950 via-[#12231c] to-emerald-950 p-4 rounded-xl border-2 border-emerald-500/50 shadow-md">
+                          <span className="text-xs text-emerald-300 font-bold block mb-1">Grand Total</span>
+                          <span className="text-3xl font-black font-mono text-emerald-400">
+                            {grandTotal.toLocaleString('ar-EG')}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* -----------------------------------------
+                          BOTTOM ACTIONS
+                         ----------------------------------------- */}
+                      <div className="pt-3 border-t border-[#2a2d42] flex flex-wrap items-center justify-between gap-3">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            updateRepairOrder(selectedOrder);
+                            dialog.alert({ message: "تم حفظ بيانات طلب الصيانة بنجاح", variant: "success" });
+                          }}
+                          className="flex-1 min-w-[140px] bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-sm py-3 px-6 rounded-xl shadow-lg transition cursor-pointer flex items-center justify-center gap-2"
+                        >
+                          <Save className="w-4.5 h-4.5" />
+                          <span>Save</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await handleUpdateOrderStatus(RepairStatus.Ready);
+                            dialog.alert({ message: "تم تحديث حالة الجهاز إلى (جاهز للتسليم)", variant: "success" });
+                          }}
+                          className="flex-1 min-w-[140px] bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-sm py-3 px-6 rounded-xl shadow-lg transition cursor-pointer flex items-center justify-center gap-2"
+                        >
+                          <CheckCircle className="w-4.5 h-4.5" />
+                          <span>Ready</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await handleUpdateOrderStatus(RepairStatus.Delivered);
+                            dialog.alert({ message: "تم تسليم الجهاز وإغلاق الطلب بنجاح", variant: "success" });
+                          }}
+                          className="flex-1 min-w-[140px] bg-cyan-600 hover:bg-cyan-500 text-white font-extrabold text-sm py-3 px-6 rounded-xl shadow-lg transition cursor-pointer flex items-center justify-center gap-2"
+                        >
+                          <Package className="w-4.5 h-4.5" />
+                          <span>Delivered</span>
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* ==================== WORKSPACE TAB 2: TIMELINE LOG ==================== */}
               {workspaceTab === "timeline" && (
@@ -2442,7 +2394,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                 {products.filter(p => !p.isArchived).map((p) => {
                   const currentDevice = selectedOrder?.devices?.[addPartDevIdx];
                   const isComp = currentDevice ? isProductCompatibleWithDevice(p, currentDevice.type, currentDevice.model) : true;
-                  const price = Number(p.sellPrice || p.price || p.purchasePrice || 0);
+                  const price = Number(p.sellPrice || (p as any).price || p.purchasePrice || 0);
                   return (
                     <option key={p.id} value={p.id} disabled={p.quantity <= 0}>
                       {p.nameAr || p.name} {isComp ? '✓' : '(غير محدد)'} - (المتاح: {p.quantity} | سعر البيع: {price} ج.م)
@@ -2454,7 +2406,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
             {(() => {
               const selectedProd = products.find(p => p.id === addPartProductId);
-              const unitSellingPrice = selectedProd ? Number(selectedProd.sellPrice || selectedProd.price || selectedProd.purchasePrice || 0) : 0;
+              const unitSellingPrice = selectedProd ? Number(selectedProd.sellPrice || (selectedProd as any).price || selectedProd.purchasePrice || 0) : 0;
               const maxQty = selectedProd ? selectedProd.quantity : 1;
               const lineTotalSelling = addPartQty * unitSellingPrice;
 
