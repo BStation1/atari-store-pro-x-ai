@@ -113,12 +113,24 @@ export default function ProfitsSummary({
     return true;
   };
 
+  const isAbdoOwnership = (ownership?: string) => {
+    if (!ownership) return false;
+    const s = String(ownership).toUpperCase();
+    return s === WorkOwnershipType.PARTNER_2_PRIVATE || s === 'ABDO' || s === 'ABDO_WORK' || s === 'P-002' || s === 'PARTNER_2';
+  };
+
+  const isAhmedOwnership = (ownership?: string) => {
+    if (!ownership) return false;
+    const s = String(ownership).toUpperCase();
+    return s === WorkOwnershipType.PARTNER_1_PRIVATE || s === 'AHMED' || s === 'AHMED_WORK' || s === 'P-001' || s === 'PARTNER_1';
+  };
+
   // Helper Party Ownership Match
-  const matchesPartyFilter = (ownership: WorkOwnershipType): boolean => {
+  const matchesPartyFilter = (ownership: any): boolean => {
     if (partyFilter === 'ALL') return true;
-    if (partyFilter === 'SHOP') return ownership === WorkOwnershipType.CUSTOMER_SHARED;
-    if (partyFilter === 'AHMED') return ownership === WorkOwnershipType.PARTNER_1_PRIVATE;
-    if (partyFilter === 'ABDO') return ownership === WorkOwnershipType.PARTNER_2_PRIVATE;
+    if (partyFilter === 'SHOP') return !isAhmedOwnership(ownership) && !isAbdoOwnership(ownership);
+    if (partyFilter === 'AHMED') return isAhmedOwnership(ownership);
+    if (partyFilter === 'ABDO') return isAbdoOwnership(ownership);
     return true;
   };
 
@@ -180,12 +192,12 @@ export default function ProfitsSummary({
     let abdoShare = 0;
     let workLabel = 'شغل المحل';
 
-    if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) {
+    if (isAhmedOwnership(ownership)) {
       // شغل أحمد: أحمد 100%، عبده 0%
       ahmedShare = roundMoney(netProfit * 1.0);
       abdoShare = 0;
       workLabel = 'شغل أحمد';
-    } else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) {
+    } else if (isAbdoOwnership(ownership)) {
       // شغل عبده: عبده 75%، أحمد 25%
       abdoShare = roundMoney(netProfit * 0.75);
       ahmedShare = roundMoney(netProfit * 0.25);
@@ -420,11 +432,11 @@ export default function ProfitsSummary({
   const abdoWorkRows = orders.filter((o) => {
     if (!isDateInFilterRange(o.receivedDate)) return false;
     const ownership = o.jobType || o.workOwnershipType;
-    return ownership === WorkOwnershipType.PARTNER_2_PRIVATE;
+    return isAbdoOwnership(ownership);
   }).map((o) => {
     const totalInvoice = Math.max(0, (Number(o.finalRepairPrice ?? o.totalEstimatedCost) || 0) - (Number(o.discount) || 0));
     const orderParts = partUsages.filter(
-      (pu) => pu.repairOrderId === o.id && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
+      (pu) => isPartBelongsToOrder(pu.repairOrderId, o) && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
     );
     let partsCost = 0;
     if (orderParts.length > 0) {
