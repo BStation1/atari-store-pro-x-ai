@@ -3,9 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { supabase, isSupabaseConfigured } from "../lib/supabaseClient";
-import { setLocalProductsBackup } from "../lib/supabaseProducts";
 import { fetchOrMigrateRepairPartUsages, addRepairPartUsageToSupabase } from "../lib/supabasePartUsages";
 import { fetchOrMigrateExpenses, addExpenseToSupabase } from "../lib/supabaseExpenses";
 import { fetchOrMigratePartnerTransactions, fetchOrMigratePartnerLedger, fetchOrMigratePartnerSettlements } from "../lib/supabasePartnerAccounting";
@@ -94,12 +93,26 @@ import {
 let realtimeSubscribed = false;
 
 // Global trigger listener
-function useDbTrigger() {
+function useDbTrigger(watchedKeys?: string[]) {
   const [trigger, setTrigger] = useState(0);
+  const watchedKeysRef = useRef<string[] | undefined>(watchedKeys);
+  watchedKeysRef.current = watchedKeys;
 
   useEffect(() => {
-    const handleDbChange = () => {
-      setTrigger(prev => prev + 1);
+    const normalizeKey = (value?: string) => {
+      if (!value) return '';
+      return value.startsWith('atari_') ? value : `atari_${value}`;
+    };
+
+    const handleDbChange = (event?: Event) => {
+      const detail = (event as CustomEvent | undefined)?.detail as any;
+      const changedKey = normalizeKey(detail?.key || detail?.table);
+      const keys = watchedKeysRef.current;
+
+      // Auth events and unscoped events intentionally refresh all consumers.
+      if (!keys || keys.length === 0 || !changedKey || keys.some(key => normalizeKey(key) === changedKey)) {
+        setTrigger(prev => prev + 1);
+      }
     };
 
     window.addEventListener("atari_db_changed", handleDbChange);
@@ -206,7 +219,7 @@ export function useCustomers() {
 }
 
 export function useRepairOrders() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_repair_orders']);
   const [orders, setOrders] = useState<RepairOrder[]>(getLocalRepairOrdersBackup());
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -322,10 +335,15 @@ export function useRepairOrders() {
     return res;
   };
 
+  const setRepairOrderLocal = (order: RepairOrder) => {
+    setOrders(prev => prev.map(item => item.id === order.id ? order : item));
+  };
+
   return {
     orders,
     loading,
     error,
+    setRepairOrderLocal,
     addRepairOrder,
     updateRepairOrder,
     deleteRepairOrder,
@@ -335,7 +353,7 @@ export function useRepairOrders() {
 }
 
 export function useProducts() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_products']);
   const [products, setProducts] = useState<Product[]>(getLocalProductsBackup());
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -373,26 +391,11 @@ export function useProducts() {
     return newProd;
   };
 
-  const updateProductLocal = (product: Product) => {
-    setProducts(prev => {
-      const next = prev.map(p => p.id === product.id ? product : p);
-      setLocalProductsBackup(next, false);
-      return next;
-    });
-  };
-
   const updateProduct = async (product: Product, userId?: string, reason?: string) => {
-    const previous = products.find(p => p.id === product.id);
-    updateProductLocal(product);
-    try {
-      const updated = await updateProductInSupabase(product, userId, reason);
-      updateProductLocal(updated);
-      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
-      return updated;
-    } catch (error) {
-      if (previous) updateProductLocal(previous);
-      throw error;
-    }
+    const updated = await updateProductInSupabase(product, userId, reason);
+    setProducts(prev => prev.map(p => p.id === updated.id ? updated : p));
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
+    return updated;
   };
 
   const deleteProduct = async (id: string, currentUser?: any) => {
@@ -436,7 +439,11 @@ export function useProducts() {
     return res;
   };
 
-  return { products, loading, error, addProduct, updateProduct, updateProductLocal, deleteProduct, withdrawProduct, returnProduct };
+  const setProductLocal = (product: Product) => {
+    setProducts(prev => prev.map(item => item.id === product.id ? product : item));
+  };
+
+  return { products, loading, error, setProductLocal, addProduct, updateProduct, deleteProduct, withdrawProduct, returnProduct };
 }
 
 export function useInventoryMovements(productId?: string) {
@@ -1157,7 +1164,7 @@ export function usePartnerTransactions() {
 }
 
 export function useRepairPartUsages() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_repair_part_usages']);
   const [partUsages, setPartUsages] = useState<RepairPartUsage[]>(() => db.getRepairPartUsages());
 
   useEffect(() => {
@@ -1170,21 +1177,46 @@ export function useRepairPartUsages() {
     return () => { active = false; };
   }, [trigger]);
 
-  const replacePartUsagesLocal = (next: RepairPartUsage[]) => {
-    db.saveRepairPartUsages(next);
+  const persistLocalUsages = (next: RepairPartUsage[]) => {
     setPartUsages(next);
+    db.saveRepairPartUsages(next);
+  };
+
+  const upsertPartUsageLocal = (usage: RepairPartUsage) => {
+    setPartUsages(prev => {
+      const exists = prev.some(item => item.id === usage.id);
+      const next = exists
+        ? prev.map(item => item.id === usage.id ? usage : item)
+        : [...prev, usage];
+      db.saveRepairPartUsages(next);
+      return next;
+    });
+  };
+
+  const replacePartUsageIdLocal = (temporaryId: string, persisted: RepairPartUsage) => {
+    setPartUsages(prev => {
+      const next = prev.map(item => item.id === temporaryId ? persisted : item);
+      db.saveRepairPartUsages(next);
+      return next;
+    });
   };
 
   const addPartUsage = (part: Omit<RepairPartUsage, "id" | "createdAt">) => {
     const created = db.addRepairPartUsage(part);
-    setPartUsages(db.getRepairPartUsages());
-    void addRepairPartUsageToSupabase(part).catch(error => {
-      console.error("Failed to persist repair part usage:", error);
+    upsertPartUsageLocal(created);
+    void addRepairPartUsageToSupabase(part).catch(err => {
+      console.warn('Could not sync repair part usage:', err);
     });
     return created;
   };
 
-  return { partUsages, addPartUsage, replacePartUsagesLocal };
+  return {
+    partUsages,
+    addPartUsage,
+    persistLocalUsages,
+    upsertPartUsageLocal,
+    replacePartUsageIdLocal
+  };
 }
 
 export function useSettlementAuditLogs() {
