@@ -144,6 +144,53 @@ export default function ProfitsSummary({
     return target === oId || target === oNum || target === oUuid;
   };
 
+
+  // Canonical physical stock cost helpers.
+  // IMPORTANT: RepairDevice.partsCost is the customer-facing SELLING total in the
+  // workshop flow, so it must never be used as purchase COGS in partner accounting.
+  const isPhysicalOutMovement = (movement: any): boolean => {
+    const movementType = String(movement?.movementType || movement?.movement_type || '').toUpperCase();
+    const quantityChange = Number(movement?.quantityChange ?? movement?.quantity_change ?? 0);
+    return quantityChange < 0 || movementType === 'REPAIR_USAGE' || movementType === 'PARTNER_WITHDRAWAL' || movementType === 'OUT';
+  };
+
+  const movementBelongsToOrder = (movement: any, order: RepairOrder): boolean => {
+    const reference = movement?.referenceId || movement?.reference_id || movement?.repairOrderId || movement?.repair_order_id;
+    return isPartBelongsToOrder(reference, order);
+  };
+
+  const movementPurchaseTotal = (movement: any): number => {
+    const quantity = Math.abs(Number(movement?.quantityChange ?? movement?.quantity_change ?? 0));
+    const unitCost = Number(movement?.costPriceSnapshot ?? movement?.cost_price_snapshot ?? 0);
+    const explicitTotal = Number(movement?.totalCost ?? movement?.total_cost ?? 0);
+    if (explicitTotal > 0) return roundMoney(explicitTotal);
+    return roundMoney(quantity * unitCost);
+  };
+
+  const getOrderPurchaseCost = (order: RepairOrder): number => {
+    const orderMovements = (rawMovements || []).filter(
+      (movement: any) => isPhysicalOutMovement(movement) && movementBelongsToOrder(movement, order)
+    );
+
+    if (orderMovements.length > 0) {
+      return roundMoney(orderMovements.reduce((sum: number, movement: any) => sum + movementPurchaseTotal(movement), 0));
+    }
+
+    // Legacy fallback only: use purchase-cost snapshots from part usages when an
+    // older order has no inventory movement. Never fall back to device.partsCost.
+    const legacyUsages = partUsages.filter(
+      (usage) => isPartBelongsToOrder(usage.repairOrderId, order) &&
+        usage.accountingStatus !== 'RETURNED' && usage.accountingStatus !== 'REVERSED'
+    );
+
+    return roundMoney(legacyUsages.reduce((sum, usage) => {
+      const quantity = Math.max(0, Number(usage.quantity) || 0);
+      const unitCost = Math.max(0, Number(usage.unitCost) || 0);
+      const totalCost = Math.max(0, Number(usage.totalCost) || 0);
+      return sum + (totalCost > 0 ? totalCost : quantity * unitCost);
+    }, 0));
+  };
+
   // 1. Filter Orders by Date & Party
   const filteredOrders = orders.filter((o) => {
     if (!isDateInFilterRange(o.receivedDate)) return false;
@@ -158,32 +205,24 @@ export default function ProfitsSummary({
     const date = formatDateISO(o.receivedDate);
     const totalInvoice = Math.max(0, (Number(o.finalRepairPrice ?? o.totalEstimatedCost) || 0) - (Number(o.discount) || 0));
 
-    // Get parts for this order using flexible matching
+    // Purchase COGS comes from physical inventory OUT movements. This avoids
+    // treating the workshop selling total (device.partsCost) as purchase cost.
     const orderParts = partUsages.filter(
       (pu) => isPartBelongsToOrder(pu.repairOrderId, o) && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
     );
 
-    let partsList: { partName: string; quantity: number; unitCost: number; totalCost: number }[] = [];
-    let partsCost = 0;
-
-    if (orderParts.length > 0) {
-      partsList = orderParts.map((p) => {
-        const qty = Number(p.quantity) || 1;
-        const uCost = Number(p.unitCost) || 0;
-        const tCost = Number(p.totalCost) || qty * uCost;
-        return {
-          partName: p.partName || 'قطع غيار صيانة',
-          quantity: qty,
-          unitCost: uCost,
-          totalCost: tCost
-        };
-      });
-      partsCost = partsList.reduce((sum, item) => sum + item.totalCost, 0);
-    } else {
-      const devicePartsCost = o.devices?.reduce((sum, d) => sum + (Number(d.partsCost) || 0), 0) || 0;
-      partsCost = devicePartsCost;
-      partsList = [];
-    }
+    const partsList: { partName: string; quantity: number; unitCost: number; totalCost: number }[] = orderParts.map((p) => {
+      const qty = Math.max(0, Number(p.quantity) || 0);
+      const uCost = Math.max(0, Number(p.unitCost) || 0);
+      const tCost = Math.max(0, Number(p.totalCost) || qty * uCost);
+      return {
+        partName: p.partName || 'قطع غيار صيانة',
+        quantity: qty,
+        unitCost: uCost,
+        totalCost: tCost
+      };
+    });
+    const partsCost = getOrderPurchaseCost(o);
 
     const netProfit = Math.max(0, totalInvoice - partsCost);
     const ownership = o.jobType || o.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
@@ -257,65 +296,12 @@ export default function ProfitsSummary({
   // 2. Extract ALL Raw Withdrawn Inventory Items across repair orders and direct sales invoices
   const allWithdrawalTransactions: WithdrawnItemDetail[] = [];
 
-  // A. From Repair Part Usages (linked to repair orders or partner inventory withdrawals)
-  partUsages.forEach((pu, puIdx) => {
-    if (pu.accountingStatus === 'RETURNED' || pu.accountingStatus === 'REVERSED') return;
+  // Physical withdrawals are sourced exclusively from inventory_movements.
+  // repair_part_usages enriches order linkage/cost fallback only; it is not appended
+  // here because doing so counts the same physical deduction twice.
 
-    const parentOrder = orders.find((o) => isPartBelongsToOrder(pu.repairOrderId, o));
-    const dateStr = pu.createdAt || parentOrder?.receivedDate || (pu as any).date || new Date().toISOString();
-    if (!isDateInFilterRange(dateStr)) return;
-
-    // Real Item Name from Supabase (partName, or product name lookup)
-    const matchedProduct = products.find((prod) => prod.id === pu.inventoryItemId || prod.sku === pu.sku);
-    const realPartName = (
-      pu.partName ||
-      matchedProduct?.name ||
-      matchedProduct?.nameAr ||
-      pu.sku ||
-      ''
-    ).trim();
-
-    if (!realPartName) return; // Skip records with no real name
-
-    // Determine responsible party label & ownership
-    let partyLabel = normalizePartyLabel(pu.responsiblePartnerId, pu.ownershipType as string, pu.notes);
-    if (partyLabel === 'SHOP' && parentOrder) {
-      const pOrderAny = parentOrder as any;
-      const parentOwnership = parentOrder.jobType || parentOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
-      partyLabel = normalizePartyLabel(pOrderAny.responsiblePartnerId, parentOwnership as string, pOrderAny.notes || pOrderAny.reportedIssue);
-    }
-
-    const ownership = partyLabel === 'AHMED' ? WorkOwnershipType.PARTNER_1_PRIVATE : partyLabel === 'ABDO' ? WorkOwnershipType.PARTNER_2_PRIVATE : WorkOwnershipType.CUSTOMER_SHARED;
-
-    const qty = Number(pu.quantity) || 1;
-    const uCost = Number(pu.unitCost) || 0;
-    const tCost = Number(pu.totalCost) || qty * uCost;
-
-    const isPartnerWithdrawal = pu.repairOrderId === 'PARTNER_WITHDRAWAL';
-    const orderNum = isPartnerWithdrawal
-      ? 'سحب شريك'
-      : (parentOrder as any)?.orderNumber || pu.repairOrderId || 'صيانة';
-    const customerName = isPartnerWithdrawal
-      ? (partyLabel === 'ABDO' ? 'مسحوبات الشريك عبده' : partyLabel === 'AHMED' ? 'مسحوبات الشريك أحمد' : 'مسحوبات المحل')
-      : parentOrder?.customerNameSnapshot || parentOrder?.guestCustomerName || 'عميل صيانة';
-
-    allWithdrawalTransactions.push({
-      id: pu.id || `pu-${pu.repairOrderId}-${realPartName}-${puIdx}`,
-      partName: realPartName,
-      quantity: qty,
-      unitCost: uCost,
-      totalCost: tCost,
-      refNum: isPartnerWithdrawal ? 'مسحوبات بضاعة لشريك' : `أمر صيانة #${orderNum}`,
-      customerName,
-      date: formatDateISO(dateStr),
-      ownership,
-      partyLabel,
-      partyNameArabic: partyLabel === 'AHMED' ? 'أحمد' : partyLabel === 'ABDO' ? 'عبده' : 'المحل',
-      sourceType: 'REPAIR_ORDER'
-    });
-  });
-
-  // A3. From Direct Inventory Movements (Partner Withdrawals & Stock OUT movements)
+  // A3. From Direct Inventory Movements (canonical physical source)
+  const seenMovementIds = new Set<string>();
   try {
     (rawMovements || []).forEach((m: any, mIdx: number) => {
       const movType = (m.movementType || m.movement_type || '').toUpperCase();
@@ -345,27 +331,24 @@ export default function ProfitsSummary({
         const uCost = Number(m.costPriceSnapshot || m.cost_price_snapshot) || Number(matchedProd?.purchasePrice) || 0;
         const tCost = qty * uCost;
 
-        const exists = allWithdrawalTransactions.some(
-          tx => (tx.id === m.id || (m.id && tx.id === m.id)) ||
-                (tx.partName === partName && tx.quantity === qty && tx.date === formatDateISO(dateStr) && tx.partyLabel === partyLabel)
-        );
+        const movementId = String(m.id || `mov-with-${mIdx}`);
+        if (seenMovementIds.has(movementId)) return;
+        seenMovementIds.add(movementId);
 
-        if (!exists) {
-          allWithdrawalTransactions.push({
-            id: m.id || `mov-with-${mIdx}`,
-            partName,
-            quantity: qty,
-            unitCost: uCost,
-            totalCost: tCost,
-            refNum: movType === 'PARTNER_WITHDRAWAL' ? 'مسحوبات بضاعة لشريك' : parentOrder ? `أمر صيانة #${(parentOrder as any).orderNumber || parentOrder.id}` : 'سحب مخزن',
-            customerName: parentOrder ? (parentOrder.customerNameSnapshot || parentOrder.guestCustomerName || 'عميل صيانة') : (partyLabel === 'ABDO' ? 'مسحوبات الشريك عبده' : partyLabel === 'AHMED' ? 'مسحوبات الشريك أحمد' : 'مسحوبات المحل'),
-            date: formatDateISO(dateStr),
-            ownership: partyLabel === 'ABDO' ? WorkOwnershipType.PARTNER_2_PRIVATE : partyLabel === 'AHMED' ? WorkOwnershipType.PARTNER_1_PRIVATE : WorkOwnershipType.CUSTOMER_SHARED,
-            partyLabel,
-            partyNameArabic: partyLabel === 'AHMED' ? 'أحمد' : partyLabel === 'ABDO' ? 'عبده' : 'المحل',
-            sourceType: 'REPAIR_ORDER'
-          });
-        }
+        allWithdrawalTransactions.push({
+          id: movementId,
+          partName,
+          quantity: qty,
+          unitCost: uCost,
+          totalCost: tCost,
+          refNum: movType === 'PARTNER_WITHDRAWAL' ? 'مسحوبات بضاعة لشريك' : parentOrder ? `أمر صيانة #${(parentOrder as any).orderNumber || parentOrder.id}` : 'سحب مخزن',
+          customerName: parentOrder ? (parentOrder.customerNameSnapshot || parentOrder.guestCustomerName || 'عميل صيانة') : (partyLabel === 'ABDO' ? 'مسحوبات الشريك عبده' : partyLabel === 'AHMED' ? 'مسحوبات الشريك أحمد' : 'مسحوبات المحل'),
+          date: formatDateISO(dateStr),
+          ownership: partyLabel === 'ABDO' ? WorkOwnershipType.PARTNER_2_PRIVATE : partyLabel === 'AHMED' ? WorkOwnershipType.PARTNER_1_PRIVATE : WorkOwnershipType.CUSTOMER_SHARED,
+          partyLabel,
+          partyNameArabic: partyLabel === 'AHMED' ? 'أحمد' : partyLabel === 'ABDO' ? 'عبده' : 'المحل',
+          sourceType: 'REPAIR_ORDER'
+        });
       }
     });
   } catch (err) {
@@ -435,15 +418,7 @@ export default function ProfitsSummary({
     return isAbdoOwnership(ownership);
   }).map((o) => {
     const totalInvoice = Math.max(0, (Number(o.finalRepairPrice ?? o.totalEstimatedCost) || 0) - (Number(o.discount) || 0));
-    const orderParts = partUsages.filter(
-      (pu) => isPartBelongsToOrder(pu.repairOrderId, o) && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
-    );
-    let partsCost = 0;
-    if (orderParts.length > 0) {
-      partsCost = orderParts.reduce((sum, p) => sum + (Number(p.totalCost) || (Number(p.quantity) * Number(p.unitCost))), 0);
-    } else {
-      partsCost = o.devices?.reduce((sum, d) => sum + (Number(d.partsCost) || 0), 0) || 0;
-    }
+    const partsCost = getOrderPurchaseCost(o);
     const netProfit = Math.max(0, totalInvoice - partsCost);
     return {
       totalInvoice,
