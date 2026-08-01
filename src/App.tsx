@@ -32,9 +32,15 @@ import {
 } from "lucide-react";
 import { db } from "./lib/data";
 import { authStore } from "./lib/authStore";
-import { isSupabaseConfigured } from "./lib/supabaseClient";
+import { isSupabaseConfigured, supabase } from "./lib/supabaseClient";
 import { hasPermission, getViewRequiredPermission, ROLE_LABELS_AR } from "./lib/authPermissions";
 import { useCurrentUser, useSettings, useProducts, useRepairOrders } from "./hooks/useData";
+import { fetchOrMigrateRepairOrders } from "./lib/supabaseRepairOrders";
+import { fetchOrMigrateCustomers } from "./lib/supabaseCustomers";
+import { fetchOrMigrateProducts } from "./lib/supabaseProducts";
+import { fetchOrMigrateRepairPartUsages } from "./lib/supabasePartUsages";
+import { fetchOrMigrateInvoices } from "./lib/supabaseInvoices";
+import { fetchOrMigrateStoreSettings } from "./lib/supabaseSettings";
 
 // Views & Modals
 import { DialogProvider } from "./context/DialogContext";
@@ -266,6 +272,71 @@ function MainApp() {
     };
   }, []);
 
+  // Initial Business Data Loading Gate
+  const [isInitialLoading, setIsInitialLoading] = useState<boolean>(false);
+  const [initialDataError, setInitialDataError] = useState<string | null>(null);
+  const loadedUserIdRef = React.useRef<string | null>(null);
+  const isInitialLoadInProgressRef = React.useRef<boolean>(false);
+
+  const performInitialLoad = async (userId: string) => {
+    if (isInitialLoadInProgressRef.current || loadedUserIdRef.current === userId) return;
+    isInitialLoadInProgressRef.current = true;
+    setIsInitialLoading(true);
+    setInitialDataError(null);
+
+    try {
+      // 1. AUTH READY GATE: Resolve current session once before loading protected data
+      if (isSupabaseConfigured) {
+        await supabase.auth.getSession();
+      }
+
+      // 2. Fetch essential datasets concurrently
+      const [ordersRes, custRes, prodRes, usagesRes, invRes] = await Promise.all([
+        fetchOrMigrateRepairOrders(),
+        fetchOrMigrateCustomers(),
+        fetchOrMigrateProducts(),
+        fetchOrMigrateRepairPartUsages(),
+        fetchOrMigrateInvoices(),
+        fetchOrMigrateStoreSettings()
+      ]);
+
+      const hasFatalError = (ordersRes && !ordersRes.success && ordersRes.error) ||
+                            (custRes && !custRes.success && custRes.error) ||
+                            (invRes && !invRes.success && invRes.error);
+
+      if (hasFatalError && isSupabaseConfigured) {
+        console.warn("⚠️ Initial data fetch encountered an error:", ordersRes?.error || custRes?.error || invRes?.error);
+        setInitialDataError("تعذر تحميل بيانات النظام");
+        setIsInitialLoading(false);
+        isInitialLoadInProgressRef.current = false;
+        return;
+      }
+
+      loadedUserIdRef.current = userId;
+      window.dispatchEvent(new CustomEvent("atari_db_changed"));
+      setIsInitialLoading(false);
+    } catch (err: any) {
+      console.error("❌ Exception during initial data load:", err);
+      setInitialDataError("تعذر تحميل بيانات النظام");
+      setIsInitialLoading(false);
+    } finally {
+      isInitialLoadInProgressRef.current = false;
+    }
+  };
+
+  useEffect(() => {
+    if (currentLoggedUser?.id) {
+      if (loadedUserIdRef.current !== currentLoggedUser.id) {
+        performInitialLoad(currentLoggedUser.id);
+      }
+    } else {
+      loadedUserIdRef.current = null;
+      isInitialLoadInProgressRef.current = false;
+      setIsInitialLoading(false);
+      setInitialDataError(null);
+    }
+  }, [currentLoggedUser?.id]);
+
   // If viewing public tracking page, render directly without login wrapper
   if (currentView === "tracking") {
     return <TrackingPage initialQuery={navigationParams?.initialQuery} />;
@@ -332,6 +403,54 @@ function MainApp() {
           setCurrentView("setup");
         }}
       />
+    );
+  }
+
+  // Initial Data Loading Screen
+  if (isInitialLoading) {
+    return (
+      <div className="min-h-screen bg-[#070913] text-gray-100 flex items-center justify-center p-4 font-sans dir-rtl">
+        <div className="text-center space-y-4">
+          <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <p className="text-xs text-gray-400 font-bold">جاري تحميل بيانات النظام واستزراع القواعد...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Initial Data Error Screen
+  if (initialDataError) {
+    return (
+      <div className="min-h-screen bg-[#070913] text-gray-100 flex items-center justify-center p-4 font-sans dir-rtl">
+        <div className="bg-[#11131e] border border-red-500/30 p-6 max-w-md w-full rounded-3xl shadow-2xl text-center space-y-4">
+          <div className="w-12 h-12 bg-red-500/10 border border-red-500/20 rounded-2xl flex items-center justify-center mx-auto text-red-400">
+            <AlertCircle className="w-6 h-6 text-red-400" />
+          </div>
+          <h2 className="text-base font-bold text-white font-sans">تعذر تحميل بيانات النظام</h2>
+          <p className="text-xs text-red-300 leading-relaxed">{initialDataError}</p>
+          <div className="flex gap-3 pt-2">
+            <button
+              onClick={() => {
+                loadedUserIdRef.current = null;
+                if (currentLoggedUser) {
+                  performInitialLoad(currentLoggedUser.id);
+                }
+              }}
+              className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl text-xs transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <RefreshCw className="w-4 h-4" />
+              <span>إعادة المحاولة</span>
+            </button>
+            <button
+              onClick={handleLogout}
+              className="flex-1 bg-red-600/20 hover:bg-red-600/30 text-red-300 font-bold py-3 px-4 rounded-xl text-xs transition-all border border-red-500/30 flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>تسجيل الخروج</span>
+            </button>
+          </div>
+        </div>
+      </div>
     );
   }
 
