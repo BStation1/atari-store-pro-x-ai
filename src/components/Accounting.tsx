@@ -24,7 +24,7 @@ import {
   ShieldAlert
 } from "lucide-react";
 import { useDialog } from "../context/DialogContext";
-import { useInvoices, useExpenses, useCustomers, useProducts, useSettings, useCurrentUser, useRepairOrders } from "../hooks/useData";
+import { useInvoices, useExpenses, useCustomers, useProducts, useSettings, useCurrentUser, useRepairOrders, useInventoryMovements, useRepairPartUsages } from "../hooks/useData";
 import { Invoice, Expense, PaymentMethod, User } from "../types";
 import PrintReceiptModal from "./PrintReceiptModal";
 import DeleteSaleModal from "./DeleteSaleModal";
@@ -32,6 +32,7 @@ import ProfitsSummary from "./partner-accounting/ProfitsSummary";
 import { canDeleteSale, canDeleteAccountingTransaction } from "../lib/authPermissions";
 import { getInvoiceCustomerName, getInvoiceCustomerBadge } from "../lib/customerDisplayHelper";
 import { db } from "../lib/data";
+import { calculateOrderAccountingV2 } from "../lib/accountingEngineV2";
 
 interface AccountingProps {
   openInvoiceModal?: boolean;
@@ -89,23 +90,79 @@ export default function Accounting({ openInvoiceModal = false }: AccountingProps
   const [saleDiscount, setSaleDiscount] = useState(0);
 
   const { addCustomer } = useCustomers();
+  const { movements } = useInventoryMovements();
+  const { partUsages } = useRepairPartUsages();
 
-  // Calculate General Accounting totals
-  const totalInvoicesAmount = invoices.reduce((sum, inv) => sum + (inv.paidAmount || 0), 0);
+  // Accounting Engine V2 processing for all repair orders
+  const engineRows = orders.map((order) =>
+    calculateOrderAccountingV2(order, invoices, movements || [], partUsages || [])
+  );
+
+  // Complete vs Incomplete order categorization
+  const completeRows = engineRows.filter((r) => !r.isAccountingIncomplete);
+  const incompleteRows = engineRows.filter((r) => r.isAccountingIncomplete);
+
+  // Direct sales invoices (non-repair sales)
+  const repairOrderIds = new Set(engineRows.map((r) => r.orderId));
+  const directSaleInvoices = invoices.filter(
+    (inv) => !inv.isCancelled && inv.type !== "repair" && !repairOrderIds.has(inv.repairOrderId || "")
+  );
+
+  const directSalesRevenue = directSaleInvoices.reduce((sum, inv) => sum + (inv.paidAmount || 0), 0);
+  const directSalesCogs = directSaleInvoices.reduce((sum, inv) => {
+    const itemCogs = (inv.items || []).reduce(
+      (iSum, item) => iSum + (Number(item.costPrice) || 0) * (Number(item.quantity) || 1),
+      0
+    );
+    return sum + itemCogs;
+  }, 0);
+
+  // Revenue totals
+  const completeRepairRevenue = completeRows.reduce((sum, r) => sum + r.revenue, 0);
+  const incompleteRevenue = incompleteRows.reduce((sum, r) => sum + r.revenue, 0);
+  const totalInvoicesAmount = invoices
+    .filter((inv) => !inv.isCancelled)
+    .reduce((sum, inv) => sum + (inv.paidAmount || 0), 0);
+
+  // COGS / Purchase Cost strictly from AccountingEngineV2 + Direct Sales
+  const completeRepairCogs = completeRows.reduce((sum, r) => sum + r.purchaseCost, 0);
+  const totalCogs = completeRepairCogs + directSalesCogs;
+
+  // Finalized Profit & Expenses
+  const completeRevenue = completeRepairRevenue + directSalesRevenue;
+  const grossProfit = completeRevenue - totalCogs;
   const totalExpensesAmount = expenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
-  
-  // COGS calculation from repair orders and invoice items
-  const totalCogs = orders.reduce((sum, o) => {
+  const netProfit = grossProfit - totalExpensesAmount;
+
+  // Total in Vault Cashbox & Customer Debts
+  const totalCashbox = totalInvoicesAmount - totalExpensesAmount;
+  const totalCustomerDebts = customers.reduce((sum, c) => sum + (c.balance > 0 ? c.balance : 0), 0);
+
+  // Temporary comparison log (Requirement 8)
+  const oldCogs = orders.reduce((sum, o) => {
     const devicePartsCost = o.devices?.reduce((pSum, d) => pSum + (Number(d.partsCost) || 0), 0) || 0;
     return sum + devicePartsCost;
   }, 0);
+  const oldNetProfit = totalInvoicesAmount - totalExpensesAmount - oldCogs;
 
-  // Debts / Receivables from customers
-  const totalCustomerDebts = customers.reduce((sum, c) => sum + (c.balance > 0 ? c.balance : 0), 0);
-
-  // Total in Vault Cashbox & Overall Net Profit
-  const totalCashbox = totalInvoicesAmount - totalExpensesAmount;
-  const netProfit = totalInvoicesAmount - totalExpensesAmount - totalCogs;
+  React.useEffect(() => {
+    console.log("OLD_ACCOUNTING_PAGE_TOTALS", {
+      revenue: totalInvoicesAmount,
+      cogs: oldCogs,
+      expenses: totalExpensesAmount,
+      netProfit: oldNetProfit
+    });
+    console.log("NEW_ACCOUNTING_V2_TOTALS", {
+      totalInvoicesRevenue: totalInvoicesAmount,
+      completeRevenue,
+      incompleteRevenue,
+      cogs: totalCogs,
+      grossProfit,
+      expenses: totalExpensesAmount,
+      netProfit,
+      incompleteOrdersCount: incompleteRows.length
+    });
+  }, [totalInvoicesAmount, oldCogs, totalCogs, totalExpensesAmount, netProfit, completeRevenue, incompleteRevenue, grossProfit, incompleteRows.length]);
 
   const handleSaveExpense = (e: React.FormEvent) => {
     e.preventDefault();
@@ -306,7 +363,27 @@ export default function Accounting({ openInvoiceModal = false }: AccountingProps
         </div>
       </div>
 
-      {/* Financial KPIs row (المحاسبة العامة: الخزنة، الإيرادات، تكلفة البضاعة، المصروفات، صافي الربح، المديونيات) */}
+      {/* ACCOUNTING_INCOMPLETE Warning Banner */}
+      {incompleteRows.length > 0 && (
+        <div className="bg-amber-950/40 border border-amber-500/40 rounded-xl p-3.5 flex items-center justify-between text-xs text-amber-300 shadow-md">
+          <div className="flex items-center gap-2.5">
+            <ShieldAlert className="w-5 h-5 text-amber-400 shrink-0" />
+            <div>
+              <p className="font-bold">
+                تنبيه محاسبي: يوجد {incompleteRows.length} طلب صيانة بإجمالي إيرادات {incompleteRevenue.toLocaleString()} ج.م غير مكتمل محاسبيًا (تكلفتها غير مسجلة).
+              </p>
+              <p className="text-[10px] text-amber-300/80 mt-0.5">
+                تم استبعاد إيرادها مؤقتًا من الربح النهائي المكتمل لمنع تضخيم الأرباح، مع بقاء الإيراد محصلًا بالخزنة.
+              </p>
+            </div>
+          </div>
+          <span className="text-[10px] bg-amber-500/20 text-amber-300 px-2.5 py-1 rounded-lg border border-amber-500/30 font-bold shrink-0">
+            إيرادات معلقة محاسبيًا: {incompleteRevenue.toLocaleString()} ج.م
+          </span>
+        </div>
+      )}
+
+      {/* Financial KPIs row (المحاسبة العامة Engine V2: الخزنة، الإيرادات، تكلفة البضاعة، المصروفات، صافي الربح المكتمل، المديونيات) */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         <div className="bg-[#11131e] border border-[#2a2d42] p-4 rounded-xl">
           <span className="text-[11px] text-gray-400 block font-bold">1. الخزنة (رصيد الصندوق)</span>
@@ -315,15 +392,17 @@ export default function Accounting({ openInvoiceModal = false }: AccountingProps
         </div>
 
         <div className="bg-[#11131e] border border-[#2a2d42] p-4 rounded-xl">
-          <span className="text-[11px] text-gray-400 block font-bold">2. إجمالي الإيرادات</span>
+          <span className="text-[11px] text-gray-400 block font-bold">2. إجمالي الإيرادات المسجلة</span>
           <h3 className="text-xl font-bold text-white mt-1">{totalInvoicesAmount.toLocaleString()} ج.م</h3>
-          <span className="text-[9px] text-green-400 block mt-1 font-medium">{invoices.length} فاتورة مسجلة</span>
+          <span className="text-[9px] text-green-400 block mt-1 font-medium">
+            مكتمل: {completeRevenue.toLocaleString()} ج.م {incompleteRevenue > 0 ? `| معلق: ${incompleteRevenue.toLocaleString()} ج.م` : ''}
+          </span>
         </div>
 
         <div className="bg-[#11131e] border border-rose-500/30 p-4 rounded-xl">
           <span className="text-[11px] text-rose-300 block font-bold">3. تكلفة البضاعة (COGS)</span>
           <h3 className="text-xl font-bold text-rose-400 mt-1">{totalCogs.toLocaleString()} ج.م</h3>
-          <span className="text-[9px] text-rose-300/80 block mt-1">قطع غيار ومستلزمات</span>
+          <span className="text-[9px] text-rose-300/80 block mt-1">محسوبة بـ AccountingEngineV2</span>
         </div>
 
         <div className="bg-[#11131e] border border-[#2a2d42] p-4 rounded-xl">
@@ -333,9 +412,9 @@ export default function Accounting({ openInvoiceModal = false }: AccountingProps
         </div>
 
         <div className="bg-[#11131e] border border-cyan-500/40 p-4 rounded-xl bg-cyan-950/10">
-          <span className="text-[11px] text-cyan-300 block font-bold">5. صافي الربح العام</span>
+          <span className="text-[11px] text-cyan-300 block font-bold">5. صافي الربح المكتمل</span>
           <h3 className="text-xl font-bold text-cyan-300 mt-1">{netProfit.toLocaleString()} ج.م</h3>
-          <span className="text-[9px] text-cyan-200/80 block mt-1 font-bold">الإيراد - التكلفة - المصروفات</span>
+          <span className="text-[9px] text-cyan-200/80 block mt-1 font-bold">الإيراد المكتمل - COGS - المصروفات</span>
         </div>
 
         <div className="bg-[#11131e] border border-amber-500/30 p-4 rounded-xl">
