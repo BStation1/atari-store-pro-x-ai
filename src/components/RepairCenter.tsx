@@ -71,19 +71,6 @@ export function getUsageSellingUnitPrice(pu: RepairPartUsage, productsList: Prod
   return pu.unitCost || 0;
 }
 
-function findProductForUsage(productsList: Product[], usageOrProductId: string, sku?: string, partName?: string): Product | undefined {
-  const target = String(usageOrProductId || "");
-  return productsList.find((p) => {
-    const pAny = p as any;
-    return (
-      String(p.id || "") === target ||
-      String(pAny.uuid || "") === target ||
-      (!!sku && String(p.sku || "") === String(sku)) ||
-      (!!partName && (p.nameAr || p.name) === partName)
-    );
-  });
-}
-
 export function isProductCompatibleWithDevice(product: Product, deviceType?: string, deviceModel?: string): boolean {
   if (!product) return false;
   const compTypes = product.compatibleDeviceTypes || [];
@@ -122,7 +109,7 @@ interface RepairCenterProps {
 
 export default function RepairCenter({ initialStatusFilter, initialOrderId }: RepairCenterProps) {
   const { user: currentLoggedUser } = useCurrentUser();
-  const { orders, updateRepairOrder, deleteRepairOrder, deliverRepairOrder, reopenRepairOrder } = useRepairOrders();
+  const { orders, updateRepairOrder, updateRepairOrderLocal, deleteRepairOrder, deliverRepairOrder, reopenRepairOrder } = useRepairOrders();
   const { customers, updateCustomer } = useCustomers();
   const { products, updateProduct, updateProductLocal } = useProducts();
   const { settings } = useSettings();
@@ -673,7 +660,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       return;
     }
 
-    const product = findProductForUsage(products, productId);
+    const product = products.find(p => p.id === productId);
     if (!product) return;
 
     const qty = Math.max(1, Math.floor(qtyToAdd));
@@ -820,7 +807,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     );
 
     setSelectedOrder(updatedOrder);
-    updateRepairOrder(updatedOrder);
+    updateRepairOrderLocal(updatedOrder);
 
     const tLocal = performance.now();
     console.log(`⏱️ [AddPart] Local state & UI updated in ${(tLocal - t0).toFixed(2)}ms`);
@@ -834,9 +821,9 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
         const productUuid = (await ensureProductUuidInSupabase(product)) || product.id;
         const repairOrderUuid = (await ensureRepairOrderUuidInSupabase(selectedOrder)) || selectedOrder.id;
 
-        await updateProductQuantityInSupabase(productUuid, newQty);
+        updateProductQuantityInSupabase(productUuid, newQty).catch(err => console.warn("Supabase qty update warn:", err));
 
-        await addInventoryMovementToSupabase({
+        addInventoryMovementToSupabase({
           productId: productUuid,
           productNameSnapshot: product.nameAr || product.name,
           movementType: 'REPAIR_USAGE',
@@ -851,16 +838,16 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
           owner: owner,
           notes: `صرف قطعة غيار صيانة: ${product.nameAr || product.name} للجهاز (${getDeviceDisplayName(currentDevice)})`,
           createdAt: new Date().toISOString()
-        });
+        }).catch(err => console.warn("Supabase movement warn:", err));
 
         if (existingUsage) {
-          await updateRepairPartUsageInSupabase(existingUsage.id, {
+          updateRepairPartUsageInSupabase(existingUsage.id, {
             quantity: usageRecordToSave.quantity,
             unitCost: unitPurchaseCost,
             totalCost: usageRecordToSave.totalCost,
             sellingPrice: unitSellingPrice,
             sellingTotal: usageRecordToSave.sellingTotal
-          });
+          }).catch(err => console.warn("Supabase usage update warn:", err));
         } else {
           const addedUsage = await addRepairPartUsageToSupabase({
             repairOrderId: selectedOrder.id,
@@ -881,23 +868,13 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
           if (addedUsage && addedUsage.id !== usageRecordToSave.id) {
             const currentLatestUsages = db.getRepairPartUsages();
             const reconciledList = currentLatestUsages.map(u =>
-              u.id === usageRecordToSave.id
-                ? {
-                    ...addedUsage,
-                    repairOrderId: selectedOrder.id,
-                    inventoryItemId: product.id,
-                    sku: product.sku || product.id
-                  }
-                : u
+              u.id === usageRecordToSave.id ? { ...addedUsage, repairOrderId: selectedOrder.id } : u
             );
-            db.saveRepairPartUsages(reconciledList);
+            replacePartUsagesLocal(reconciledList);
           }
         }
 
-        await updateRepairOrderInSupabase(updatedOrder);
-
-        window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));
-        window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
+        updateRepairOrderInSupabase(updatedOrder).catch(err => console.warn("Supabase order update warn:", err));
 
         const tMutEnd = performance.now();
         console.log(`⏱️ [AddPart] Background Supabase mutation completed in ${(tMutEnd - tMutStart).toFixed(2)}ms (Total since click: ${(tMutEnd - t0).toFixed(2)}ms)`);
@@ -914,12 +891,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
           replacePartUsagesLocal(rollbackUsages);
         }
         setSelectedOrder(selectedOrder);
-        updateRepairOrder(selectedOrder);
-
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));
-          window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
-        }
+        updateRepairOrderLocal(selectedOrder);
 
         dialog.alert({
           message: "حدث خطأ أثناء حفظ قطعة الغيار بالخادم، تم إلغاء العملية وتحديث المخزون.",
@@ -944,7 +916,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     if (busyProductIds.has(usage.inventoryItemId)) return;
     setBusyProductIds(prev => new Set(prev).add(usage.inventoryItemId));
 
-    const product = findProductForUsage(products, usage.inventoryItemId, usage.sku, usage.partName);
+    const product = products.find(p => p.id === usage.inventoryItemId);
 
     const qtyToReturn = Math.min(usage.quantity, Math.max(1, removeQty));
     const isFullRemove = (usage.quantity <= qtyToReturn) || removeQty === -1; // -1 means remove all
@@ -1054,8 +1026,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     (async () => {
       try {
         if (product) {
-          const productUuid = (await ensureProductUuidInSupabase(product)) || product.id;
-          await updateProductQuantityInSupabase(productUuid, product.quantity + actualReturnedQty);
+          updateProductQuantityInSupabase(product.id, product.quantity + actualReturnedQty).catch(err => console.warn("Supabase qty restore warn:", err));
         }
 
         const ownership = selectedOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
@@ -2013,9 +1984,9 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                   deviceLinkedUsages.map((pu) => {
                                     const unitSellPrice = getUsageSellingUnitPrice(pu, products);
                                     const lineTotal = pu.quantity * unitSellPrice;
-                                    const matchedProd = findProductForUsage(products, pu.inventoryItemId, pu.sku, pu.partName);
+                                    const matchedProd = products.find(p => p.id === pu.inventoryItemId);
                                     const stockAvail = matchedProd ? matchedProd.quantity : 0;
-                                    const isBusy = busyProductIds.has(matchedProd?.id || pu.inventoryItemId);
+                                    const isBusy = busyProductIds.has(pu.inventoryItemId);
 
                                     return (
                                       <tr key={pu.id} className="hover:bg-[#181b2a] transition-colors">
@@ -2053,7 +2024,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                             <button
                                               type="button"
                                               disabled={stockAvail <= 0 || isBusy}
-                                              onClick={() => matchedProd && handleAddPartToDevice(devIdx, matchedProd.id, 1)}
+                                              onClick={() => handleAddPartToDevice(devIdx, pu.inventoryItemId, 1)}
                                               className="w-7 h-7 flex items-center justify-center bg-indigo-600 hover:bg-indigo-500 text-white rounded-md font-bold text-base transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                                               title={stockAvail <= 0 ? "المخزون نفذ" : "إضافة قطعة (+)"}
                                             >
