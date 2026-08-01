@@ -71,6 +71,19 @@ export function getUsageSellingUnitPrice(pu: RepairPartUsage, productsList: Prod
   return pu.unitCost || 0;
 }
 
+function findProductForUsage(productsList: Product[], usageOrProductId: string, sku?: string, partName?: string): Product | undefined {
+  const target = String(usageOrProductId || "");
+  return productsList.find((p) => {
+    const pAny = p as any;
+    return (
+      String(p.id || "") === target ||
+      String(pAny.uuid || "") === target ||
+      (!!sku && String(p.sku || "") === String(sku)) ||
+      (!!partName && (p.nameAr || p.name) === partName)
+    );
+  });
+}
+
 export function isProductCompatibleWithDevice(product: Product, deviceType?: string, deviceModel?: string): boolean {
   if (!product) return false;
   const compTypes = product.compatibleDeviceTypes || [];
@@ -660,7 +673,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       return;
     }
 
-    const product = products.find(p => p.id === productId);
+    const product = findProductForUsage(products, productId);
     if (!product) return;
 
     const qty = Math.max(1, Math.floor(qtyToAdd));
@@ -868,7 +881,14 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
           if (addedUsage && addedUsage.id !== usageRecordToSave.id) {
             const currentLatestUsages = db.getRepairPartUsages();
             const reconciledList = currentLatestUsages.map(u =>
-              u.id === usageRecordToSave.id ? { ...addedUsage, repairOrderId: selectedOrder.id } : u
+              u.id === usageRecordToSave.id
+                ? {
+                    ...addedUsage,
+                    repairOrderId: selectedOrder.id,
+                    inventoryItemId: product.id,
+                    sku: product.sku || product.id
+                  }
+                : u
             );
             db.saveRepairPartUsages(reconciledList);
           }
@@ -924,7 +944,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     if (busyProductIds.has(usage.inventoryItemId)) return;
     setBusyProductIds(prev => new Set(prev).add(usage.inventoryItemId));
 
-    const product = products.find(p => p.id === usage.inventoryItemId);
+    const product = findProductForUsage(products, usage.inventoryItemId, usage.sku, usage.partName);
 
     const qtyToReturn = Math.min(usage.quantity, Math.max(1, removeQty));
     const isFullRemove = (usage.quantity <= qtyToReturn) || removeQty === -1; // -1 means remove all
@@ -1034,7 +1054,8 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     (async () => {
       try {
         if (product) {
-          updateProductQuantityInSupabase(product.id, product.quantity + actualReturnedQty).catch(err => console.warn("Supabase qty restore warn:", err));
+          const productUuid = (await ensureProductUuidInSupabase(product)) || product.id;
+          await updateProductQuantityInSupabase(productUuid, product.quantity + actualReturnedQty);
         }
 
         const ownership = selectedOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
@@ -1992,9 +2013,9 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                   deviceLinkedUsages.map((pu) => {
                                     const unitSellPrice = getUsageSellingUnitPrice(pu, products);
                                     const lineTotal = pu.quantity * unitSellPrice;
-                                    const matchedProd = products.find(p => p.id === pu.inventoryItemId);
+                                    const matchedProd = findProductForUsage(products, pu.inventoryItemId, pu.sku, pu.partName);
                                     const stockAvail = matchedProd ? matchedProd.quantity : 0;
-                                    const isBusy = busyProductIds.has(pu.inventoryItemId);
+                                    const isBusy = busyProductIds.has(matchedProd?.id || pu.inventoryItemId);
 
                                     return (
                                       <tr key={pu.id} className="hover:bg-[#181b2a] transition-colors">
@@ -2032,7 +2053,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                             <button
                                               type="button"
                                               disabled={stockAvail <= 0 || isBusy}
-                                              onClick={() => handleAddPartToDevice(devIdx, pu.inventoryItemId, 1)}
+                                              onClick={() => matchedProd && handleAddPartToDevice(devIdx, matchedProd.id, 1)}
                                               className="w-7 h-7 flex items-center justify-center bg-indigo-600 hover:bg-indigo-500 text-white rounded-md font-bold text-base transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                                               title={stockAvail <= 0 ? "المخزون نفذ" : "إضافة قطعة (+)"}
                                             >
