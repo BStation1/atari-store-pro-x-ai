@@ -106,7 +106,6 @@ export function recalculateOrderTotals(
   if (!currentDevice) return order;
 
   const activeUsagesForDevice = usages.filter(pu =>
-    !pu.pendingRemoval &&
     isPartUsageForOrderAndDevice(pu, order, deviceIdx, ordersList, productsList)
   );
 
@@ -553,7 +552,13 @@ export function useWorkshopParts({
           const reconciledUsage: RepairPartUsage = {
             ...usageRecordToSave,
             ...persistedUsage,
-            repairOrderId: order.id
+            // Keep the local product/order identities used by the workshop UI.
+            // Supabase UUIDs may differ from the local catalog IDs; allowing the
+            // remote payload to overwrite inventoryItemId makes stock lookup fail
+            // and leaves the + control disabled.
+            repairOrderId: order.id,
+            inventoryItemId: product.id,
+            sku: usageRecordToSave.sku || product.sku || product.id
           };
           setWorkshopUsages(current => {
             const next = current.map(row => row.id === snapshot.tempUsageId
@@ -715,7 +720,9 @@ export function useWorkshopParts({
     const newSellingTotal = newQty * usageSellPrice;
 
     if (isFullRemove) {
-      updatedUsages = allUsages.map(pu => pu.id === usageId ? { ...pu, pendingRemoval: true } : pu);
+      updatedUsages = allUsages.map(pu => pu.id === usageId ? { ...pu, accountingStatus: 'RETURNED' as const } : pu);
+      console.log("🔥 [INVOCATION] Calling markPartUsageReturnedLocal from removePartInternal...");
+      markPartUsageReturnedLocal(usageId);
     } else {
       updatedUsages = allUsages.map(pu => pu.id === usageId ? {
         ...pu,
@@ -760,14 +767,6 @@ export function useWorkshopParts({
           if (isFullRemove) {
             console.log("🔥 [INVOCATION] Calling updateRepairPartUsageInSupabase (RETURNED) from removePartInternal task...");
             await updateRepairPartUsageInSupabase(usageId, { accountingStatus: 'RETURNED' });
-            usageUpdatedOnServer = true;
-
-            markPartUsageReturnedLocal(usageId);
-            setWorkshopUsages(prev => {
-              const next = prev.filter(pu => pu.id !== usageId);
-              workshopUsagesRef.current = next;
-              return next;
-            });
           } else {
             console.log("🔥 [INVOCATION] Calling updateRepairPartUsageInSupabase (UPDATE QTY) from removePartInternal task...");
             await updateRepairPartUsageInSupabase(usageId, {
@@ -776,8 +775,8 @@ export function useWorkshopParts({
               sellingPrice: usageSellPrice,
               sellingTotal: newSellingTotal
             });
-            usageUpdatedOnServer = true;
           }
+          usageUpdatedOnServer = true;
 
           if (product) {
             persistedProductId = (await ensureProductUuidInSupabase(product)) || product.id;
@@ -854,12 +853,11 @@ export function useWorkshopParts({
           setProductLocal({ ...currentLatestProduct, quantity: restoredProductQty });
         }
 
-        const restoredUsage = { ...snapshot.usageBefore, pendingRemoval: false };
-        upsertPartUsageLocal(restoredUsage);
+        upsertPartUsageLocal(snapshot.usageBefore);
         const currentUsages = workshopUsagesRef.current;
         const revertedUsages = currentUsages.some(u => u.id === usageId)
-          ? currentUsages.map(u => u.id === usageId ? restoredUsage : u)
-          : [...currentUsages, restoredUsage];
+          ? currentUsages.map(u => u.id === usageId ? snapshot.usageBefore : u)
+          : [...currentUsages, snapshot.usageBefore];
         setWorkshopUsages(revertedUsages);
         workshopUsagesRef.current = revertedUsages;
 
