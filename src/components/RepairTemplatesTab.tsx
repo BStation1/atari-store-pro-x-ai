@@ -322,7 +322,7 @@ export default function RepairTemplatesTab() {
           >
             <option value="">جميع الموديلات</option>
             {deviceModels
-              .filter(m => !m.isArchived && (!selectedDeviceType || m.deviceTypeId === selectedDeviceType || (m as any).categoryId === selectedDeviceType))
+              .filter(m => !m.isArchived && (!selectedDeviceType || m.deviceTypeId === selectedDeviceType || m.categoryId === selectedDeviceType))
               .map(m => (
                 <option key={m.id} value={m.id}>{m.nameAr} {m.modelCode ? `(${m.modelCode})` : ''}</option>
               ))}
@@ -381,7 +381,7 @@ export default function RepairTemplatesTab() {
               >
                 <option value="">عام (جميع موديلات هذا القسم)</option>
                 {deviceModels
-                  .filter(m => !m.isArchived && (!(formDeviceType || selectedDeviceType) || m.deviceTypeId === (formDeviceType || selectedDeviceType) || (m as any).categoryId === (formDeviceType || selectedDeviceType)))
+                  .filter(m => !m.isArchived && (!(formDeviceType || selectedDeviceType) || m.deviceTypeId === (formDeviceType || selectedDeviceType) || m.categoryId === (formDeviceType || selectedDeviceType)))
                   .map((m) => (
                     <option key={m.id} value={m.id}>{m.nameAr} {m.modelCode ? `(${m.modelCode})` : ''}</option>
                   ))}

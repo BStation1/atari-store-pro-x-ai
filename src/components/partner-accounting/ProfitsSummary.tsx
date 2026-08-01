@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   Calendar,
   Building2,
@@ -73,17 +73,6 @@ export default function ProfitsSummary({
   const [dateFilterType, setDateFilterType] = useState<'MONTH' | 'TODAY' | 'WEEK' | 'CUSTOM'>('MONTH');
   const [customFromDate, setCustomFromDate] = useState<string>(`${currentMonthStr}-01`);
   const [customToDate, setCustomToDate] = useState<string>(todayISO);
-
-  // Trace date filter & party filter state transitions
-  useEffect(() => {
-    const ts = new Date().toISOString().substring(11, 23);
-    console.log(`[STATE_TRACE ${ts}] [selected date filter] -> ${dateFilterType}:${selectedMonthYear} (${customFromDate} to ${customToDate})`);
-  }, [dateFilterType, selectedMonthYear, customFromDate, customToDate]);
-
-  useEffect(() => {
-    const ts = new Date().toISOString().substring(11, 23);
-    console.log(`[STATE_TRACE ${ts}] [active party filter] -> ${partyFilter}`);
-  }, [partyFilter]);
 
   // UI Modals & Expanders
   const [isWithdrawnModalOpen, setIsWithdrawnModalOpen] = useState(false);

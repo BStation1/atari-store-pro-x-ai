@@ -76,11 +76,6 @@ export function isUuid(id?: string): boolean {
 export async function addRepairPartUsageToSupabase(
   partUsage: Omit<RepairPartUsage, "id" | "createdAt"> & { id?: string; createdAt?: string }
 ): Promise<RepairPartUsage> {
-  console.log("🔥 [INVOCATION] addRepairPartUsageToSupabase called:", {
-    timestamp: new Date().toISOString(),
-    partUsage,
-    stack: new Error().stack
-  });
   if (!isSupabaseConfigured) {
     return db.addRepairPartUsage(partUsage);
   }
@@ -180,56 +175,30 @@ export async function addRepairPartUsageToSupabase(
 }
 
 export async function updateRepairPartUsageInSupabase(id: string, updates: Partial<RepairPartUsage>): Promise<void> {
-  console.log("🔥 [INVOCATION] updateRepairPartUsageInSupabase called:", {
-    timestamp: new Date().toISOString(),
-    id,
-    updates,
-    stack: new Error().stack
-  });
-  if (isSupabaseConfigured && !isUuid(id)) {
-    throw new Error(`Cannot update repair_part_usages with non-persisted id: ${id}`);
-  }
-
-  if (isSupabaseConfigured) {
-    const rowUpdates: any = {};
-    if (updates.accountingStatus) rowUpdates.accounting_status = updates.accountingStatus;
-    if (updates.notes !== undefined) rowUpdates.notes = updates.notes;
-    if (updates.quantity !== undefined) rowUpdates.quantity = updates.quantity;
-    if (updates.unitCost !== undefined) rowUpdates.unit_cost = updates.unitCost;
-    if (updates.totalCost !== undefined) rowUpdates.total_cost = updates.totalCost;
-    if (updates.sellingPrice !== undefined) rowUpdates.selling_price_snapshot = updates.sellingPrice;
-    if (updates.sellingTotal !== undefined) rowUpdates.selling_total = updates.sellingTotal;
-
-    const { data, error } = await supabase
-      .from('repair_part_usages')
-      .update(rowUpdates)
-      .eq('id', id)
-      .select('id');
-
-    if (error) {
-      throw new Error(`Failed to update repair_part_usages ${id}: ${error.message}`);
-    }
-    if (!data || data.length === 0) {
-      throw new Error(`No persisted repair_part_usages row matched id ${id}`);
-    }
-  }
-
   const all = db.getRepairPartUsages();
   const index = all.findIndex(pu => pu.id === id);
   if (index !== -1) {
     all[index] = { ...all[index], ...updates };
     db.saveRepairPartUsages(all);
   }
-}
 
-export function getLocalRepairPartUsagesBackup(): RepairPartUsage[] {
-  return db.getRepairPartUsages();
-}
+  if (isSupabaseConfigured) {
+    try {
+      const rowUpdates: any = {};
+      if (updates.accountingStatus) rowUpdates.accounting_status = updates.accountingStatus;
+      if (updates.notes !== undefined) rowUpdates.notes = updates.notes;
+      if (updates.quantity !== undefined) rowUpdates.quantity = updates.quantity;
+      if (updates.unitCost !== undefined) rowUpdates.unit_cost = updates.unitCost;
+      if (updates.totalCost !== undefined) rowUpdates.total_cost = updates.totalCost;
+      if (updates.sellingPrice !== undefined) rowUpdates.selling_price_snapshot = updates.sellingPrice;
+      if (updates.sellingTotal !== undefined) rowUpdates.selling_total = updates.sellingTotal;
 
-export function saveLocalRepairPartUsagesBackup(data: RepairPartUsage[], dispatchEvent = true): void {
-  db.saveRepairPartUsages(data);
-  if (dispatchEvent && typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));
+      const { error } = await supabase.from('repair_part_usages').update(rowUpdates).eq('id', id);
+      if (error) {
+        console.warn("⚠️ Notice updating repair_part_usages in Supabase:", error.message);
+      }
+    } catch (err) {
+      console.warn("⚠️ Exception updating repair_part_usages in Supabase:", err);
+    }
   }
 }
-

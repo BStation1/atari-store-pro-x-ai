@@ -970,7 +970,7 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
 
                 // Filter models strictly by category ID (and not archived)
                 const filteredModelsList = selectedCategoryId
-                  ? deviceModels.filter(m => (m.deviceTypeId === selectedCategoryId || (m as any).categoryId === selectedCategoryId) && !m.isArchived)
+                  ? deviceModels.filter(m => (m.deviceTypeId === selectedCategoryId || m.categoryId === selectedCategoryId) && !m.isArchived)
                   : [];
 
                 // Find selected model object

@@ -88,10 +88,6 @@ function setLocalSettings(settings: SystemSettings, dispatchEvent = true) {
   }
 }
 
-export function getLocalStoreSettingsBackup(): SystemSettings {
-  return getLocalSettings();
-}
-
 /**
  * Step 1-4: Fetch store_settings from Supabase.
  * - If settings exist in Supabase, use them and sync to local storage.

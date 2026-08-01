@@ -90,12 +90,3 @@ export async function addExpenseToSupabase(expense: Omit<Expense, "id" | "date">
 
   return created;
 }
-
-export function getLocalExpensesBackup(): Expense[] {
-  return db.getExpenses();
-}
-
-export function saveLocalExpensesBackup(data: Expense[]): void {
-  db.saveExpenses(data);
-}
-

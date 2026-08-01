@@ -65,14 +65,14 @@ export default function FinancialReportsDashboard({
   const isPartnerTabAllowed = userRole === 'OWNER' || userRole === 'ADMIN' || userRole === 'ACCOUNTANT';
 
   // Construct mock or real replacement fund entries
-  const fundEntries: any[] = [
+  const fundEntries = [
     ...ledger
-      .filter((e: any) => e.workType === 'CUSTOMER_WORK' && !e.reversedAt)
-      .map((e: any) => ({
+      .filter((e) => e.workType === 'CUSTOMER_WORK' && !e.reversedAt)
+      .map((e) => ({
         id: `fnd-${e.id}`,
         transactionType: 'DEPOSIT_CUSTOMER_WORK',
-        amount: Number(e.replacementFundAmount || 600),
-        signedAmount: Number(e.replacementFundAmount || 600),
+        amount: Number((e as any).replacementFundAmount || 600),
+        signedAmount: Number((e as any).replacementFundAmount || 600),
         referenceId: e.invoiceNumber || e.invoiceId || '-',
         description: 'إيداع تعويض صيانة عملاء',
         createdByUserId: 'النظام',
@@ -154,7 +154,7 @@ export default function FinancialReportsDashboard({
             invoices={invoices}
             expenses={expenses}
             fundEntries={fundEntries}
-            settlements={settlements as any}
+            settlements={settlements}
           />
         )}
 
@@ -183,18 +183,18 @@ export default function FinancialReportsDashboard({
 
         {activeTab === 'ahmed' && isPartnerTabAllowed && (
           <AhmedDashboardView
-            partnerLedger={ledger as any}
+            partnerLedger={ledger}
             expenses={expenses}
-            settlements={settlements as any}
+            settlements={settlements}
             orders={orders}
           />
         )}
 
         {activeTab === 'abdo' && isPartnerTabAllowed && (
           <AbdoDashboardView
-            partnerLedger={ledger as any}
+            partnerLedger={ledger}
             expenses={expenses}
-            settlements={settlements as any}
+            settlements={settlements}
             orders={orders}
           />
         )}
@@ -214,7 +214,7 @@ export default function FinancialReportsDashboard({
 
         {activeTab === 'settlements' && isPartnerTabAllowed && (
           <MonthlySettlementsReportView
-            settlements={settlements as any}
+            settlements={settlements}
             userRole={userRole}
             currentUserId={currentUserId}
           />
@@ -222,7 +222,7 @@ export default function FinancialReportsDashboard({
 
         {activeTab === 'statements' && isPartnerTabAllowed && (
           <AccountStatementView
-            partnerLedger={ledger as any}
+            partnerLedger={ledger}
             fundEntries={fundEntries}
             expenses={expenses}
             customers={customers}
