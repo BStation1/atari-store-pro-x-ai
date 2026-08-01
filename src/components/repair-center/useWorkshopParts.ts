@@ -755,28 +755,45 @@ export function useWorkshopParts({
 
     const task = async () => {
       try {
-        if (!isUuid(usageId)) {
-          throw new Error(`قطعة الغيار لم يكتمل حفظها بعد. أعد المحاولة بعد لحظة. usageId=${usageId}`);
-        }
+        // Resolve target ID in case usageId was temporary and got replaced by addPart task
+        const currentUsage = workshopUsagesRef.current.find(pu =>
+          pu.id === usageId ||
+          (pu as any).tempId === usageId ||
+          isSameProductIdentity(pu.inventoryItemId, usage.inventoryItemId, productsRef.current)
+        ) || usage;
+        const targetUsageId = currentUsage.id;
 
         let usageUpdatedOnServer = false;
         let stockUpdatedOnServer = false;
         let persistedProductId = product?.id || usage.inventoryItemId;
 
         try {
-          if (isFullRemove) {
-            console.log("🔥 [INVOCATION] Calling updateRepairPartUsageInSupabase (RETURNED) from removePartInternal task...");
-            await updateRepairPartUsageInSupabase(usageId, { accountingStatus: 'RETURNED' });
+          if (isUuid(targetUsageId)) {
+            if (isFullRemove) {
+              console.log("🔥 [INVOCATION] Calling updateRepairPartUsageInSupabase (RETURNED) from removePartInternal task...");
+              await updateRepairPartUsageInSupabase(targetUsageId, { accountingStatus: 'RETURNED' });
+            } else {
+              console.log("🔥 [INVOCATION] Calling updateRepairPartUsageInSupabase (UPDATE QTY) from removePartInternal task...");
+              await updateRepairPartUsageInSupabase(targetUsageId, {
+                quantity: newQty,
+                totalCost: newTotalCost,
+                sellingPrice: usageSellPrice,
+                sellingTotal: newSellingTotal
+              });
+            }
+            usageUpdatedOnServer = true;
           } else {
-            console.log("🔥 [INVOCATION] Calling updateRepairPartUsageInSupabase (UPDATE QTY) from removePartInternal task...");
-            await updateRepairPartUsageInSupabase(usageId, {
-              quantity: newQty,
-              totalCost: newTotalCost,
-              sellingPrice: usageSellPrice,
-              sellingTotal: newSellingTotal
-            });
+            if (isFullRemove) {
+              markPartUsageReturnedLocal(targetUsageId);
+            } else {
+              patchPartUsageLocal(targetUsageId, {
+                quantity: newQty,
+                totalCost: newTotalCost,
+                sellingPrice: usageSellPrice,
+                sellingTotal: newSellingTotal
+              });
+            }
           }
-          usageUpdatedOnServer = true;
 
           if (product) {
             persistedProductId = (await ensureProductUuidInSupabase(product)) || product.id;
