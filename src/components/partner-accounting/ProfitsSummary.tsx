@@ -178,6 +178,7 @@ export default function ProfitsSummary({
       abdoShare: row.abdoShare,
       amountDueFromAbdo: row.amountDueFromAbdo,
       costSource: row.costSource,
+      purchaseCostStatus: row.purchaseCostStatus,
       party: row.party
     }));
 
@@ -714,7 +715,14 @@ export default function ProfitsSummary({
                           {r.totalInvoice.toLocaleString('ar-EG')} {currencySymbol}
                         </td>
                         <td className="p-3 text-rose-400 font-semibold">
-                          {r.partsCost.toLocaleString('ar-EG')} {currencySymbol}
+                          {r.purchaseCostStatus === 'UNKNOWN_LEGACY_COST' ? (
+                            <span className="text-amber-400 font-normal text-xs inline-flex items-center gap-1" title="تكلفة الشراء غير مسجلة للأوردر القديم">
+                              <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                              <span>0 {currencySymbol} (تكلفة الشراء غير مسجلة للأوردر القديم)</span>
+                            </span>
+                          ) : (
+                            `${r.partsCost.toLocaleString('ar-EG')} ${currencySymbol}`
+                          )}
                         </td>
                         <td className="p-3 font-extrabold text-cyan-300">
                           {r.netProfit.toLocaleString('ar-EG')} {currencySymbol}
@@ -787,8 +795,13 @@ export default function ProfitsSummary({
                                   </tbody>
                                 </table>
                               ) : (
-                                <p className="text-xs text-gray-500 py-2 text-center">
-                                  لم يتم تسجيل قطع غيار مخصصة لهذا الأوردر (تكلفة البضاعة 0 ج.م)
+                                <p className="text-xs py-2 text-center text-amber-400/90 flex items-center justify-center gap-1.5 font-medium">
+                                  <AlertCircle className="w-3.5 h-3.5" />
+                                  <span>
+                                    {r.purchaseCostStatus === 'UNKNOWN_LEGACY_COST'
+                                      ? 'تكلفة الشراء غير مسجلة للأوردر القديم'
+                                      : 'لم يتم تسجيل قطع غيار مخصصة لهذا الأوردر (تكلفة البضاعة 0 ج.م)'}
+                                  </span>
                                 </p>
                               )}
                             </div>

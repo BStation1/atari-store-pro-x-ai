@@ -32,7 +32,10 @@ export interface OrderAccountingV2 {
   amountDueFromAbdo: number;
   partsQuantity: number;
   parts: AccountingPartDetail[];
-  costSource: 'INVENTORY_MOVEMENTS' | 'REPAIR_PART_USAGES' | 'LEGACY_DEVICE' | 'NONE';
+  costSource: 'INVENTORY_MOVEMENTS' | 'REPAIR_PART_USAGES' | 'LEGACY_DEVICE' | 'UNKNOWN_LEGACY_COST' | 'NONE';
+  purchaseCostStatus: 'RECORDED' | 'UNKNOWN_LEGACY_COST';
+  isAccountingIncomplete?: boolean;
+  accountingStatus?: 'COMPLETE' | 'ACCOUNTING_INCOMPLETE';
   sourceOrder: RepairOrder;
 }
 
@@ -174,14 +177,38 @@ function movementCost(movement: any): { quantity: number; unitCost: number; tota
   return { quantity, unitCost, totalCost };
 }
 
+function explicitItemPurchaseCost(item: any): number | null {
+  if (!item || typeof item !== 'object') return null;
+  const candidates = [
+    item.costPrice,
+    item.cost_price,
+    item.purchaseCost,
+    item.purchase_cost,
+    item.purchase_unit_cost_snapshot,
+    item.purchaseUnitCostSnapshot,
+    item.partsPurchaseCost,
+    item.parts_purchase_cost,
+    item.partsCostPrice,
+    item.parts_cost_price
+  ];
+  for (const candidate of candidates) {
+    const n = Number(candidate);
+    if (Number.isFinite(n) && n > 0) return money(n);
+  }
+  return null;
+}
+
 function explicitDevicePurchaseCost(device: any): number | null {
+  if (!device || typeof device !== 'object') return null;
   const candidates = [
     device.partsPurchaseCost,
     device.purchaseCost,
     device.purchase_cost,
     device.parts_purchase_cost,
     device.partsCostPrice,
-    device.parts_cost_price
+    device.parts_cost_price,
+    device.purchase_unit_cost_snapshot,
+    device.purchaseUnitCostSnapshot
   ];
   for (const candidate of candidates) {
     const n = Number(candidate);
@@ -208,26 +235,26 @@ function explicitDeviceQuantity(device: any): number | null {
 
 function legacyDeviceDetails(order: RepairOrder): AccountingPartDetail[] {
   const rows: AccountingPartDetail[] = [];
-  (order.devices || []).forEach((device: any, deviceIndex: number) => {
-    const explicitPurchase = explicitDevicePurchaseCost(device);
-    const legacyCost = explicitPurchase ?? money(device.partsCost || 0);
-    if (legacyCost <= 0) return;
 
-    const candidateItems = [
+  (order.devices || []).forEach((device: any, deviceIndex: number) => {
+    // 1. First check if device has selectedRepairItems or technicalProcedures with explicit item costPrice / purchaseCost
+    const rawItems = [
       ...(Array.isArray(device.selectedRepairItems) ? device.selectedRepairItems : []),
       ...(Array.isArray(device.technicalProcedures) ? device.technicalProcedures : [])
-    ].filter((item: any) => Number(item?.costPrice) > 0);
+    ];
+
+    const candidateItems = rawItems.filter(item => explicitItemPurchaseCost(item) !== null);
 
     if (candidateItems.length > 0) {
       candidateItems.forEach((item: any, itemIndex: number) => {
+        const unitCost = explicitItemPurchaseCost(item)!;
         const rawItemQty = item.quantity ?? item.qty ?? item.partsQuantity ?? item.parts_quantity;
         const itemQtyNum = Number(rawItemQty);
-        const quantity = Number.isFinite(itemQtyNum) && itemQtyNum > 0 ? Math.round(itemQtyNum) : null;
-        const unitCost = money(item.costPrice || 0);
-        const totalPurchaseCost = quantity !== null ? money(quantity * unitCost) : unitCost;
+        const quantity = Number.isFinite(itemQtyNum) && itemQtyNum > 0 ? Math.round(itemQtyNum) : 1;
+        const totalPurchaseCost = money(quantity * unitCost);
         rows.push({
           id: `legacy-${order.id}-${deviceIndex}-${itemIndex}`,
-          partName: clean(item.name) || 'قطعة غيار قديمة',
+          partName: clean(item.name) || clean(item.label) || 'قطعة غيار مخصصة',
           quantity,
           unitPurchaseCost: unitCost,
           totalPurchaseCost,
@@ -237,17 +264,36 @@ function legacyDeviceDetails(order: RepairOrder): AccountingPartDetail[] {
       return;
     }
 
-    const explicitQty = explicitDeviceQuantity(device);
-    rows.push({
-      id: `legacy-${order.id}-${deviceIndex}`,
-      partName: `تكلفة قطع جهاز ${device.model || device.type || deviceIndex + 1}`,
-      // Explicit legacy quantity if present; otherwise null (legacy record, quantity unavailable)
-      quantity: explicitQty,
-      unitPurchaseCost: legacyCost,
-      totalPurchaseCost: legacyCost,
-      source: 'LEGACY_DEVICE'
-    });
+    // 2. Check for explicit device-level purchase cost fields
+    const devicePurchaseCost = explicitDevicePurchaseCost(device);
+    if (devicePurchaseCost !== null) {
+      const explicitQty = explicitDeviceQuantity(device);
+      rows.push({
+        id: `legacy-${order.id}-${deviceIndex}`,
+        partName: `تكلفة قطع جهاز ${clean(device.model) || clean(device.type) || deviceIndex + 1}`,
+        quantity: explicitQty,
+        unitPurchaseCost: devicePurchaseCost,
+        totalPurchaseCost: devicePurchaseCost,
+        source: 'LEGACY_DEVICE'
+      });
+    }
   });
+
+  // 3. Fallback: check if order root level has explicit purchase cost
+  if (rows.length === 0) {
+    const orderPurchaseCost = explicitDevicePurchaseCost(order as any);
+    if (orderPurchaseCost !== null) {
+      rows.push({
+        id: `legacy-${order.id}-order-root`,
+        partName: `تكلفة قطع الأوردر ${order.id}`,
+        quantity: null,
+        unitPurchaseCost: orderPurchaseCost,
+        totalPurchaseCost: orderPurchaseCost,
+        source: 'LEGACY_DEVICE'
+      });
+    }
+  }
+
   return rows;
 }
 
@@ -287,14 +333,20 @@ export function resolveOrderPartsAccounting(
   if (linkedUsages.length > 0) {
     const parts = linkedUsages.map((usage, index) => {
       const quantity = Math.max(1, Number(usage.quantity) || 1);
-      const unitCost = money(usage.unitCost || 0);
+      const anyUsage = usage as any;
+      const unitCost = money(
+        anyUsage.purchase_unit_cost_snapshot ??
+        anyUsage.purchaseUnitCostSnapshot ??
+        usage.unitCost ??
+        0
+      );
       const explicitTotal = Number(usage.totalCost);
       return {
         id: clean(usage.id) || `usage-${order.id}-${index}`,
         partName: clean(usage.partName) || clean(usage.sku) || 'صنف غير معروف',
         quantity,
         unitPurchaseCost: unitCost,
-        totalPurchaseCost: Number.isFinite(explicitTotal) && explicitTotal >= 0
+        totalPurchaseCost: Number.isFinite(explicitTotal) && explicitTotal >= 0 && !anyUsage.purchase_unit_cost_snapshot
           ? money(explicitTotal)
           : money(quantity * unitCost),
         source: 'REPAIR_PART_USAGE' as const
@@ -318,7 +370,7 @@ export function resolveOrderPartsAccounting(
     };
   }
 
-  return { parts: [], purchaseCost: 0, partsQuantity: 0, costSource: 'NONE' };
+  return { parts: [], purchaseCost: 0, partsQuantity: 0, costSource: 'UNKNOWN_LEGACY_COST' };
 }
 
 export function calculateOrderAccountingV2(
@@ -330,19 +382,38 @@ export function calculateOrderAccountingV2(
   const party = resolveOrderParty(order);
   const revenue = resolveInvoiceRevenue(order, invoices || []);
   const partsAccounting = resolveOrderPartsAccounting(order, movements || [], usages || []);
-  const purchaseCost = partsAccounting.purchaseCost;
-  const netProfit = money(revenue - purchaseCost);
+  const rawPurchaseCost = partsAccounting.purchaseCost;
 
+  const isUnknown =
+    partsAccounting.costSource === 'UNKNOWN_LEGACY_COST' ||
+    (rawPurchaseCost === 0 && partsAccounting.parts.length === 0);
+
+  const purchaseCostStatus: 'RECORDED' | 'UNKNOWN_LEGACY_COST' = isUnknown
+    ? 'UNKNOWN_LEGACY_COST'
+    : 'RECORDED';
+
+  const isAccountingIncomplete = isUnknown;
+  const accountingStatus: 'COMPLETE' | 'ACCOUNTING_INCOMPLETE' = isUnknown
+    ? 'ACCOUNTING_INCOMPLETE'
+    : 'COMPLETE';
+
+  let purchaseCost = 0;
+  let netProfit = 0;
   let ahmedShare = 0;
   let abdoShare = 0;
-  if (party === 'AHMED') {
-    ahmedShare = netProfit;
-  } else if (party === 'ABDO') {
-    ahmedShare = money(netProfit * 0.25);
-    abdoShare = money(netProfit * 0.75);
-  } else {
-    ahmedShare = money(netProfit * 0.5);
-    abdoShare = money(netProfit * 0.5);
+
+  if (!isAccountingIncomplete) {
+    purchaseCost = rawPurchaseCost;
+    netProfit = money(revenue - purchaseCost);
+    if (party === 'AHMED') {
+      ahmedShare = netProfit;
+    } else if (party === 'ABDO') {
+      ahmedShare = money(netProfit * 0.25);
+      abdoShare = money(netProfit * 0.75);
+    } else {
+      ahmedShare = money(netProfit * 0.5);
+      abdoShare = money(netProfit * 0.5);
+    }
   }
 
   const anyOrder = order as any;
@@ -358,10 +429,13 @@ export function calculateOrderAccountingV2(
     netProfit,
     ahmedShare,
     abdoShare,
-    amountDueFromAbdo: party === 'ABDO' ? ahmedShare : 0,
+    amountDueFromAbdo: party === 'ABDO' && !isAccountingIncomplete ? ahmedShare : 0,
     partsQuantity: partsAccounting.partsQuantity,
     parts: partsAccounting.parts,
     costSource: partsAccounting.costSource,
+    purchaseCostStatus,
+    isAccountingIncomplete,
+    accountingStatus,
     sourceOrder: order
   };
 }
