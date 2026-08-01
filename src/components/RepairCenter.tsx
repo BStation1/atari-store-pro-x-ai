@@ -1911,14 +1911,14 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                           </div>
 
                           {/* Quick Add Compatible Items Grid */}
-                          <div className="bg-[#181b2a] border border-[#2a2d42] p-2.5 rounded-xl max-h-[180px] overflow-y-auto custom-scrollbar space-y-2">
-                            <div className="text-[10px] text-gray-400 font-bold px-1">
-                              {partSearch.trim() ? `نتائج البحث (${matchedSearchResults.length}):` : `القطع المتوافقة القابلة للإضافة السريعة:`}
+                          <div className="bg-[#181b2a] border border-[#2a2d42] p-3 rounded-xl max-h-[340px] overflow-y-auto custom-scrollbar space-y-2.5">
+                            <div className="text-[11px] text-gray-300 font-bold px-1 flex items-center justify-between">
+                              <span>{partSearch.trim() ? `نتائج البحث (${matchedSearchResults.length}):` : `القطع المتوافقة القابلة للإضافة السريعة:`}</span>
                             </div>
                             {matchedSearchResults.length === 0 ? (
-                              <p className="text-xs text-gray-400 italic py-2 text-center">لا توجد قطع غيار مطابقة.</p>
+                              <p className="text-xs text-gray-400 italic py-3 text-center">لا توجد قطع غيار مطابقة.</p>
                             ) : (
-                              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                                 {matchedSearchResults.slice(0, 12).map((p) => {
                                   const price = Number(p.sellPrice || (p as any).price || p.purchasePrice || 0);
                                   const isBusy = busyProductIds.has(p.id);
@@ -1932,22 +1932,45 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                         handleAddPartToDevice(devIdx, p.id, 1);
                                         setPartSearch('');
                                       }}
-                                      className={`p-2 rounded-lg text-xs font-bold border text-right transition flex items-center justify-between gap-2 ${
+                                      className={`p-3.5 rounded-xl text-xs font-bold border text-right transition flex flex-col justify-between gap-2.5 w-full min-h-[135px] ${
                                         isOutOfStock || isBusy
-                                          ? "bg-gray-900 text-gray-500 border-gray-800 cursor-not-allowed opacity-60"
-                                          : "bg-[#11131e] text-white border-[#2a2d42] hover:border-indigo-500 hover:bg-indigo-950/40 cursor-pointer"
+                                          ? "bg-gray-900/80 text-gray-500 border-gray-800 cursor-not-allowed opacity-60"
+                                          : "bg-[#11131e] text-white border-[#2a2d42] hover:border-indigo-500 hover:bg-indigo-950/30 cursor-pointer shadow-sm hover:shadow-md"
                                       }`}
                                     >
-                                      <div className="truncate">
-                                        <p className="font-bold text-white truncate text-xs">{p.nameAr || p.name}</p>
-                                        <p className="text-[10px] text-gray-400 font-mono flex items-center gap-1">
-                                          <span>المتاح: {p.quantity}</span>
-                                          {isBusy && <span className="text-amber-400 font-bold animate-pulse text-[9px]">(جاري الحفظ...)</span>}
+                                      {/* Full Product Name (Wrap to 2 lines if needed, no truncate) */}
+                                      <div className="w-full">
+                                        <p className="font-bold text-gray-100 text-xs leading-snug line-clamp-2 break-words whitespace-normal">
+                                          {p.nameAr || p.name}
                                         </p>
                                       </div>
-                                      <span className="font-mono font-extrabold text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded text-[11px] shrink-0 border border-emerald-500/30">
-                                        {price.toLocaleString('ar-EG')} ج.م
-                                      </span>
+
+                                      {/* Available Stock Line */}
+                                      <div className="text-[11px] text-gray-300 font-medium flex items-center justify-between gap-1 border-t border-[#2a2d42]/60 pt-2 w-full">
+                                        <span className="text-gray-400 text-[10px]">المخزون المتاح:</span>
+                                        <span className="font-mono font-bold text-gray-100">{p.quantity} قطعة</span>
+                                        {isBusy && <span className="text-amber-400 font-bold animate-pulse text-[10px]">(جاري الحفظ...)</span>}
+                                      </div>
+
+                                      {/* Selling Price Line */}
+                                      <div className="text-[11px] text-gray-300 font-medium flex items-center justify-between gap-1 border-t border-[#2a2d42]/60 pt-2 w-full">
+                                        <span className="text-gray-400 text-[10px]">سعر البيع:</span>
+                                        <span className="font-mono font-extrabold text-emerald-400 text-xs bg-emerald-950/80 border border-emerald-500/30 px-2 py-0.5 rounded-md">
+                                          {price.toLocaleString('ar-EG')} ج.م
+                                        </span>
+                                      </div>
+
+                                      {/* Action Button Line */}
+                                      <div className="w-full pt-1">
+                                        <span className={`flex items-center justify-center gap-1.5 text-xs font-extrabold py-1.5 px-3 rounded-lg w-full transition ${
+                                          isOutOfStock || isBusy
+                                            ? "bg-gray-800 text-gray-500 border border-gray-700"
+                                            : "bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm"
+                                        }`}>
+                                          <span>{isOutOfStock ? "غير متوفر" : isBusy ? "جاري الإضافة..." : "إضافة للطلب"}</span>
+                                          {!isOutOfStock && !isBusy && <Plus className="w-3.5 h-3.5" />}
+                                        </span>
+                                      </div>
                                     </button>
                                   );
                                 })}
