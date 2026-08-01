@@ -886,6 +886,11 @@ export async function updateProductQuantityInSupabase(productId: string, newQuan
  * Adds an inventory movement to Supabase and updates local storage backup.
  */
 export async function addInventoryMovementToSupabase(movement: any): Promise<boolean> {
+  console.log("🔥 [INVOCATION] addInventoryMovementToSupabase called:", {
+    timestamp: new Date().toISOString(),
+    movement,
+    stack: new Error().stack
+  });
   db.addInventoryMovement(movement);
 
   if (!isSupabaseConfigured) {

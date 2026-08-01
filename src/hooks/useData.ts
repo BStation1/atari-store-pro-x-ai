@@ -831,6 +831,11 @@ export function useRepairPartUsages() {
   };
 
   const markPartUsageReturnedLocal = (id: string) => {
+    console.log("🔥 [INVOCATION] markPartUsageReturned / markPartUsageReturnedLocal called:", {
+      timestamp: new Date().toISOString(),
+      id,
+      stack: new Error().stack
+    });
     patchPartUsageLocal(id, { accountingStatus: 'RETURNED' });
   };
 
@@ -844,6 +849,12 @@ export function useRepairPartUsages() {
   };
 
   const replacePartUsageIdLocal = (temporaryId: string, persisted: RepairPartUsage) => {
+    console.log("🔥 [INVOCATION] replacePartUsageIdLocal called:", {
+      timestamp: new Date().toISOString(),
+      temporaryId,
+      persistedId: persisted?.id,
+      stack: new Error().stack
+    });
     replacePendingPartUsage(temporaryId, persisted);
   };
 

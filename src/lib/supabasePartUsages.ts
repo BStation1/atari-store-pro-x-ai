@@ -76,6 +76,11 @@ export function isUuid(id?: string): boolean {
 export async function addRepairPartUsageToSupabase(
   partUsage: Omit<RepairPartUsage, "id" | "createdAt"> & { id?: string; createdAt?: string }
 ): Promise<RepairPartUsage> {
+  console.log("🔥 [INVOCATION] addRepairPartUsageToSupabase called:", {
+    timestamp: new Date().toISOString(),
+    partUsage,
+    stack: new Error().stack
+  });
   if (!isSupabaseConfigured) {
     return db.addRepairPartUsage(partUsage);
   }
@@ -175,6 +180,12 @@ export async function addRepairPartUsageToSupabase(
 }
 
 export async function updateRepairPartUsageInSupabase(id: string, updates: Partial<RepairPartUsage>): Promise<void> {
+  console.log("🔥 [INVOCATION] updateRepairPartUsageInSupabase called:", {
+    timestamp: new Date().toISOString(),
+    id,
+    updates,
+    stack: new Error().stack
+  });
   if (isSupabaseConfigured && !isUuid(id)) {
     throw new Error(`Cannot update repair_part_usages with non-persisted id: ${id}`);
   }

@@ -325,24 +325,35 @@ export function useWorkshopParts({
 
   // 3. Add part logic with exact snapshot rollback & per-order queue
   const addPart = useCallback((productId: string, qtyToAdd: number = 1, deviceIdx: number = 0) => {
+    console.log("--> ENTER addPart", { productId, qtyToAdd, deviceIdx });
     const t0 = performance.now();
     console.log(`⏱️ [useWorkshopParts:AddPart] Click received for productId=${productId} at ${t0.toFixed(2)}ms`);
 
     const order = selectedOrderRef.current;
-    if (!order) return;
+    if (!order) {
+      console.log("<-- EXIT addPart (no selected order)");
+      return;
+    }
 
     const currentProducts = productsRef.current;
     const product = currentProducts.find(p => p.id === productId);
-    if (!product) return;
+    if (!product) {
+      console.log("<-- EXIT addPart (product not found)");
+      return;
+    }
 
     const qty = Math.max(1, Math.floor(qtyToAdd));
     if (product.quantity < qty) {
       dialog.alert({ message: "عفواً، هاته القطعة غير متوفرة بالمخزون حالياً!", variant: "error" });
+      console.log("<-- EXIT addPart (insufficient stock)");
       return;
     }
 
     const currentDevice = order.devices[deviceIdx];
-    if (!currentDevice) return;
+    if (!currentDevice) {
+      console.log("<-- EXIT addPart (device not found)");
+      return;
+    }
 
     const unitSellingPrice = Number(product.sellPrice || product.price || product.purchasePrice) || 0;
     const unitPurchaseCost = Number(product.purchasePrice || product.costPrice) || 0;
@@ -359,6 +370,21 @@ export function useWorkshopParts({
       isSameProductIdentity(pu.inventoryItemId, product.id, currentProducts)
     );
 
+    const tempUsageId = existingUsage ? undefined : `PU-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const currentQty = existingUsage ? existingUsage.quantity : 0;
+    const newUsageQty = currentQty + qty;
+
+    console.log("========================\nWORKSHOP MUTATION\n========================");
+    console.log("Timestamp:", new Date().toISOString());
+    console.log("Operation: addPart");
+    console.log("Caller:", new Error().stack?.split("\n")[2]?.trim() || "unknown");
+    console.trace();
+    console.log("Repair Order ID:", order.id);
+    console.log("Product ID:", productId);
+    console.log("Usage ID:", existingUsage?.id || tempUsageId);
+    console.log("Current Quantity:", currentQty);
+    console.log("New Quantity:", newUsageQty);
+
     const mutationId = `mut_add_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
     // Capture IMMUTABLE Snapshot BEFORE optimistic mutation
@@ -370,14 +396,14 @@ export function useWorkshopParts({
       usageBefore: existingUsage ? { ...existingUsage } : null,
       qtyDelta: -qty, // stock reduced by qty
       deviceIdx,
-      tempUsageId: existingUsage ? undefined : `PU-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`
+      tempUsageId
     };
 
     // 1. Synchronous Optimistic Update: Product Stock
-    const newQty = product.quantity - qty;
+    const newStockQty = product.quantity - qty;
     setProductLocal({
       ...product,
-      quantity: newQty
+      quantity: newStockQty
     });
 
     // 2. Synchronous Optimistic Update: Part Usages
@@ -385,7 +411,6 @@ export function useWorkshopParts({
     let usageRecordToSave: RepairPartUsage;
 
     if (existingUsage) {
-      const newUsageQty = existingUsage.quantity + qty;
       usageRecordToSave = {
         ...existingUsage,
         quantity: newUsageQty,
@@ -457,29 +482,21 @@ export function useWorkshopParts({
     const task = async () => {
       let createdPersistedUsage: RepairPartUsage | null = null;
       try {
-        // Debug testing hook: Force failure simulation if requested
-        if (
-          (window as any).__FORCE_FAIL_NEXT_ADD_PART__ ||
-          ((window as any).__FORCE_FAIL_A__ && (product.id === 'PROD-A' || product.name.includes('A')))
-        ) {
-          (window as any).__FORCE_FAIL_NEXT_ADD_PART__ = false;
-          (window as any).__FORCE_FAIL_A__ = false;
-          throw new Error("FORCED_FAILURE_SIMULATION");
-        }
-
         const [productUuid, repairOrderUuid] = await Promise.all([
           ensureProductUuidInSupabase(product).then(value => value || product.id),
           ensureRepairOrderUuidInSupabase(order).then(value => value || order.id)
         ]);
 
-        const quantityPromise = updateProductQuantityInSupabase(productUuid, newQty);
+        const quantityPromise = updateProductQuantityInSupabase(productUuid, newStockQty);
+        
+        console.log("🔥 [INVOCATION] Calling addInventoryMovementToSupabase in addPart task...");
         const movementPromise = addInventoryMovementToSupabase({
           productId: productUuid,
           productNameSnapshot: product.nameAr || product.name,
           movementType: 'REPAIR_USAGE',
           quantityChange: -qty,
           previousQuantity: product.quantity,
-          newQuantity: newQty,
+          newQuantity: newStockQty,
           costPriceSnapshot: unitPurchaseCost,
           sellingPriceSnapshot: unitSellingPrice,
           totalCost: totalCost,
@@ -492,6 +509,7 @@ export function useWorkshopParts({
 
         let usagePromise: Promise<any>;
         if (existingUsage) {
+          console.log("🔥 [INVOCATION] Calling updateRepairPartUsageInSupabase in addPart task...");
           usagePromise = updateRepairPartUsageInSupabase(existingUsage.id, {
             quantity: usageRecordToSave.quantity,
             unitCost: unitPurchaseCost,
@@ -500,6 +518,7 @@ export function useWorkshopParts({
             sellingTotal: usageRecordToSave.sellingTotal
           });
         } else {
+          console.log("🔥 [INVOCATION] Calling addRepairPartUsageToSupabase in addPart task...");
           usagePromise = addRepairPartUsageToSupabase({
             repairOrderId: repairOrderUuid,
             inventoryItemId: productUuid,
@@ -543,6 +562,7 @@ export function useWorkshopParts({
             workshopUsagesRef.current = next;
             return next;
           });
+          console.log("🔥 [INVOCATION] Calling replacePartUsageIdLocal in addPart task...");
           replacePartUsageIdLocal(snapshot.tempUsageId, reconciledUsage);
         }
       } catch (mutationError: any) {
@@ -574,7 +594,7 @@ export function useWorkshopParts({
         setWorkshopUsages(revertedUsages);
         workshopUsagesRef.current = revertedUsages;
 
-        // 3. Recalculate order totals based on current order state & reverted usages (preserving all other concurrent mutations!)
+        // 3. Recalculate order totals based on current order state & reverted usages
         const currentLatestOrder = selectedOrderRef.current || order;
         const rolledBackOrder = recalculateOrderTotals(currentLatestOrder, revertedUsages, deviceIdx, productsRef.current);
         setSelectedOrder(rolledBackOrder);
@@ -604,6 +624,8 @@ export function useWorkshopParts({
     const prevQueue = orderMutationQueueRef.current.get(order.id) || Promise.resolve();
     const nextQueue = prevQueue.then(task, task);
     orderMutationQueueRef.current.set(order.id, nextQueue);
+
+    console.log("<-- EXIT addPart");
   }, [
     dialog,
     persistLocalUsages,
@@ -615,17 +637,46 @@ export function useWorkshopParts({
 
   // 4. Increase part alias
   const increasePart = useCallback((productId: string, deviceIdx: number = 0) => {
+    console.log("--> ENTER increasePart", { productId, deviceIdx });
+    const order = selectedOrderRef.current;
+    const allUsages = workshopUsagesRef.current;
+    const currentProducts = productsRef.current;
+    const existingUsage = allUsages.find(pu =>
+      order && isPartUsageForOrderAndDevice(pu, order, deviceIdx, [], currentProducts) &&
+      isSameProductIdentity(pu.inventoryItemId, productId, currentProducts)
+    );
+
+    console.log("========================\nWORKSHOP MUTATION\n========================");
+    console.log("Timestamp:", new Date().toISOString());
+    console.log("Operation: increasePart");
+    console.log("Caller:", new Error().stack?.split("\n")[2]?.trim() || "unknown");
+    console.trace();
+    console.log("Repair Order ID:", order?.id || "N/A");
+    console.log("Product ID:", productId);
+    console.log("Usage ID:", existingUsage?.id || "N/A");
+    console.log("Current Quantity:", existingUsage ? existingUsage.quantity : 0);
+    console.log("New Quantity:", existingUsage ? existingUsage.quantity + 1 : 1);
+
     addPart(productId, 1, deviceIdx);
+    console.log("<-- EXIT increasePart");
   }, [addPart]);
 
   // 5. Remove part logic (supports decreasing quantity or complete removal) with granular rollback
   const removePartInternal = useCallback((usageId: string, deviceIdx: number = 0, removeQty: number = 1) => {
+    console.log("--> ENTER removePartInternal", { usageId, deviceIdx, removeQty });
+
     const order = selectedOrderRef.current;
-    if (!order) return;
+    if (!order) {
+      console.log("<-- EXIT removePartInternal (no selected order)");
+      return;
+    }
 
     const allUsages = workshopUsagesRef.current;
     const usage = allUsages.find(pu => pu.id === usageId);
-    if (!usage) return;
+    if (!usage) {
+      console.log("<-- EXIT removePartInternal (usage not found)");
+      return;
+    }
 
     const currentProducts = productsRef.current;
     const product = currentProducts.find(p => p.id === usage.inventoryItemId);
@@ -664,6 +715,7 @@ export function useWorkshopParts({
 
     if (isFullRemove) {
       updatedUsages = allUsages.map(pu => pu.id === usageId ? { ...pu, accountingStatus: 'RETURNED' as const } : pu);
+      console.log("🔥 [INVOCATION] Calling markPartUsageReturnedLocal from removePartInternal...");
       markPartUsageReturnedLocal(usageId);
     } else {
       updatedUsages = allUsages.map(pu => pu.id === usageId ? {
@@ -707,8 +759,10 @@ export function useWorkshopParts({
 
         try {
           if (isFullRemove) {
+            console.log("🔥 [INVOCATION] Calling updateRepairPartUsageInSupabase (RETURNED) from removePartInternal task...");
             await updateRepairPartUsageInSupabase(usageId, { accountingStatus: 'RETURNED' });
           } else {
+            console.log("🔥 [INVOCATION] Calling updateRepairPartUsageInSupabase (UPDATE QTY) from removePartInternal task...");
             await updateRepairPartUsageInSupabase(usageId, {
               quantity: newQty,
               totalCost: newTotalCost,
@@ -730,6 +784,7 @@ export function useWorkshopParts({
           if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) owner = 'AHMED';
           else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) owner = 'ABDO';
 
+          console.log("🔥 [INVOCATION] Calling addInventoryMovementToSupabase from removePartInternal task...");
           await addInventoryMovementToSupabase({
             id: `MOV-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
             productId: persistedProductId,
@@ -763,6 +818,7 @@ export function useWorkshopParts({
           }
           if (usageUpdatedOnServer) {
             try {
+              console.log("🔥 [INVOCATION] Calling updateRepairPartUsageInSupabase (COMPENSATE) from removePartInternal task...");
               await updateRepairPartUsageInSupabase(usageId, {
                 accountingStatus: snapshot.usageBefore.accountingStatus,
                 quantity: snapshot.usageBefore.quantity,
@@ -785,14 +841,12 @@ export function useWorkshopParts({
         });
 
         // GRANULAR EXACT ROLLBACK:
-        // 1. Revert product stock by -snapshot.qtyDelta
         if (product) {
           const currentLatestProduct = productsRef.current.find(p => p.id === product.id) || product;
           const restoredProductQty = currentLatestProduct.quantity - snapshot.qtyDelta;
           setProductLocal({ ...currentLatestProduct, quantity: restoredProductQty });
         }
 
-        // 2. Revert usage
         upsertPartUsageLocal(snapshot.usageBefore);
         const currentUsages = workshopUsagesRef.current;
         const revertedUsages = currentUsages.some(u => u.id === usageId)
@@ -801,7 +855,6 @@ export function useWorkshopParts({
         setWorkshopUsages(revertedUsages);
         workshopUsagesRef.current = revertedUsages;
 
-        // 3. Recalculate order totals
         const currentLatestOrder = selectedOrderRef.current || order;
         const rolledBackOrder = recalculateOrderTotals(currentLatestOrder, revertedUsages, deviceIdx, productsRef.current);
         setSelectedOrder(rolledBackOrder);
@@ -828,6 +881,8 @@ export function useWorkshopParts({
     const prevQueue = orderMutationQueueRef.current.get(order.id) || Promise.resolve();
     const nextQueue = prevQueue.then(task, task);
     orderMutationQueueRef.current.set(order.id, nextQueue);
+
+    console.log("<-- EXIT removePartInternal");
   }, [
     dialog,
     persistLocalUsages,
@@ -838,12 +893,46 @@ export function useWorkshopParts({
 
   // 6. Decrease quantity wrapper (reduces by 1)
   const decreasePart = useCallback((usageId: string, deviceIdx: number = 0) => {
+    console.log("--> ENTER decreasePart", { usageId, deviceIdx });
+    const order = selectedOrderRef.current;
+    const allUsages = workshopUsagesRef.current;
+    const usage = allUsages.find(pu => pu.id === usageId);
+
+    console.log("========================\nWORKSHOP MUTATION\n========================");
+    console.log("Timestamp:", new Date().toISOString());
+    console.log("Operation: decreasePart");
+    console.log("Caller:", new Error().stack?.split("\n")[2]?.trim() || "unknown");
+    console.trace();
+    console.log("Repair Order ID:", order?.id || "N/A");
+    console.log("Product ID:", usage?.inventoryItemId || "N/A");
+    console.log("Usage ID:", usageId);
+    console.log("Current Quantity:", usage ? usage.quantity : 0);
+    console.log("New Quantity:", usage ? usage.quantity - 1 : 0);
+
     removePartInternal(usageId, deviceIdx, 1);
+    console.log("<-- EXIT decreasePart");
   }, [removePartInternal]);
 
   // 7. Full remove wrapper
   const removePart = useCallback((usageId: string, deviceIdx: number = 0) => {
+    console.log("--> ENTER removePart", { usageId, deviceIdx });
+    const order = selectedOrderRef.current;
+    const allUsages = workshopUsagesRef.current;
+    const usage = allUsages.find(pu => pu.id === usageId);
+
+    console.log("========================\nWORKSHOP MUTATION\n========================");
+    console.log("Timestamp:", new Date().toISOString());
+    console.log("Operation: removePart");
+    console.log("Caller:", new Error().stack?.split("\n")[2]?.trim() || "unknown");
+    console.trace();
+    console.log("Repair Order ID:", order?.id || "N/A");
+    console.log("Product ID:", usage?.inventoryItemId || "N/A");
+    console.log("Usage ID:", usageId);
+    console.log("Current Quantity:", usage ? usage.quantity : 0);
+    console.log("New Quantity:", 0);
+
     removePartInternal(usageId, deviceIdx, -1);
+    console.log("<-- EXIT removePart");
   }, [removePartInternal]);
 
   return {
