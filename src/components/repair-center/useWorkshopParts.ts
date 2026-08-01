@@ -106,6 +106,7 @@ export function recalculateOrderTotals(
   if (!currentDevice) return order;
 
   const activeUsagesForDevice = usages.filter(pu =>
+    !pu.pendingRemoval &&
     isPartUsageForOrderAndDevice(pu, order, deviceIdx, ordersList, productsList)
   );
 
@@ -714,9 +715,7 @@ export function useWorkshopParts({
     const newSellingTotal = newQty * usageSellPrice;
 
     if (isFullRemove) {
-      updatedUsages = allUsages.map(pu => pu.id === usageId ? { ...pu, accountingStatus: 'RETURNED' as const } : pu);
-      console.log("🔥 [INVOCATION] Calling markPartUsageReturnedLocal from removePartInternal...");
-      markPartUsageReturnedLocal(usageId);
+      updatedUsages = allUsages.map(pu => pu.id === usageId ? { ...pu, pendingRemoval: true } : pu);
     } else {
       updatedUsages = allUsages.map(pu => pu.id === usageId ? {
         ...pu,
@@ -761,6 +760,14 @@ export function useWorkshopParts({
           if (isFullRemove) {
             console.log("🔥 [INVOCATION] Calling updateRepairPartUsageInSupabase (RETURNED) from removePartInternal task...");
             await updateRepairPartUsageInSupabase(usageId, { accountingStatus: 'RETURNED' });
+            usageUpdatedOnServer = true;
+
+            markPartUsageReturnedLocal(usageId);
+            setWorkshopUsages(prev => {
+              const next = prev.filter(pu => pu.id !== usageId);
+              workshopUsagesRef.current = next;
+              return next;
+            });
           } else {
             console.log("🔥 [INVOCATION] Calling updateRepairPartUsageInSupabase (UPDATE QTY) from removePartInternal task...");
             await updateRepairPartUsageInSupabase(usageId, {
@@ -769,8 +776,8 @@ export function useWorkshopParts({
               sellingPrice: usageSellPrice,
               sellingTotal: newSellingTotal
             });
+            usageUpdatedOnServer = true;
           }
-          usageUpdatedOnServer = true;
 
           if (product) {
             persistedProductId = (await ensureProductUuidInSupabase(product)) || product.id;
@@ -847,11 +854,12 @@ export function useWorkshopParts({
           setProductLocal({ ...currentLatestProduct, quantity: restoredProductQty });
         }
 
-        upsertPartUsageLocal(snapshot.usageBefore);
+        const restoredUsage = { ...snapshot.usageBefore, pendingRemoval: false };
+        upsertPartUsageLocal(restoredUsage);
         const currentUsages = workshopUsagesRef.current;
         const revertedUsages = currentUsages.some(u => u.id === usageId)
-          ? currentUsages.map(u => u.id === usageId ? snapshot.usageBefore : u)
-          : [...currentUsages, snapshot.usageBefore];
+          ? currentUsages.map(u => u.id === usageId ? restoredUsage : u)
+          : [...currentUsages, restoredUsage];
         setWorkshopUsages(revertedUsages);
         workshopUsagesRef.current = revertedUsages;
 

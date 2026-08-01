@@ -931,6 +931,7 @@ export interface RepairPartUsage {
   employeeName?: string;
   warehouse?: string;
   notes?: string;
+  pendingRemoval?: boolean;
 }
 
 export interface SettlementAuditLog {

@@ -44,16 +44,16 @@ export function PartsTable({
               const lineTotal = pu.quantity * unitSellPrice;
               const matchedProd = products.find(p => p.id === pu.inventoryItemId);
               const stockAvail = matchedProd ? matchedProd.quantity : 0;
-              const isBusy = busyProductIds.has(pu.inventoryItemId);
+              const isBusy = busyProductIds.has(pu.inventoryItemId) || Boolean(pu.pendingRemoval);
 
               return (
-                <tr key={pu.id} className="hover:bg-[#181b2a] transition-colors">
+                <tr key={pu.id} className={`transition-colors ${pu.pendingRemoval ? "bg-rose-950/20 opacity-60" : "hover:bg-[#181b2a]"}`}>
                   <td className="p-3 font-bold text-white">
                     <div className="flex items-center gap-2">
-                      <span>{pu.partName}</span>
+                      <span className={pu.pendingRemoval ? "line-through text-gray-400" : ""}>{pu.partName}</span>
                       {isBusy && (
                         <span className="text-[10px] text-amber-400 bg-amber-950/60 border border-amber-500/30 px-1.5 py-0.5 rounded font-bold animate-pulse">
-                          جاري التحديث...
+                          {pu.pendingRemoval ? "جاري الحذف..." : "جاري التحديث..."}
                         </span>
                       )}
                     </div>
