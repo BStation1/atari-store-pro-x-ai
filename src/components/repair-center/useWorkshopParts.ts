@@ -52,6 +52,45 @@ import {
   mergeRepairPartUsages
 } from "../../lib/partUsageUtils";
 
+function logDetailedMutationError(
+  operation: 'add' | 'increase' | 'decrease' | 'remove',
+  mutationError: any,
+  meta: {
+    productId?: string;
+    repairOrderId?: string;
+    usageId?: string;
+    tempUsageId?: string;
+  }
+) {
+  const sbError = mutationError?.cause || mutationError?.error || mutationError;
+  const rawCode = mutationError?.code || sbError?.code || "N/A";
+  const rawMessage = mutationError?.message || sbError?.message || String(mutationError);
+  const rawDetails = mutationError?.details || sbError?.details || "N/A";
+  const rawHint = mutationError?.hint || sbError?.hint || "N/A";
+  const rawStatus = mutationError?.status || sbError?.status || sbError?.statusCode || mutationError?.statusCode || "N/A";
+  const rawRequest = mutationError?.request || sbError?.request || "N/A";
+  const rawQuery = mutationError?.query || sbError?.query || "N/A";
+  const rawRows = mutationError?.affectedRows ?? sbError?.affectedRows ?? 0;
+  const rawStack = mutationError?.stack || new Error().stack;
+
+  console.error("=================== REAL UNDERLYING MUTATION ERROR ===================");
+  console.error(`- Operation: ${operation}`);
+  console.error(`- Product ID: ${meta.productId || "N/A"}`);
+  console.error(`- Repair Order ID: ${meta.repairOrderId || "N/A"}`);
+  console.error(`- Usage ID: ${meta.usageId || "N/A"}`);
+  console.error(`- Temp Usage ID (if any): ${meta.tempUsageId || "N/A"}`);
+  console.error(`- Supabase request:`, rawRequest);
+  console.error(`- HTTP status:`, rawStatus);
+  console.error(`- Supabase error.code:`, rawCode);
+  console.error(`- Supabase error.message:`, rawMessage);
+  console.error(`- Supabase error.details:`, rawDetails);
+  console.error(`- Supabase error.hint:`, rawHint);
+  console.error(`- The exact query that failed:`, rawQuery);
+  console.error(`- Number of affected rows:`, rawRows);
+  console.error(`- Full stack trace:\n${rawStack}`);
+  console.error("======================================================================");
+}
+
 /**
  * Pure helper function to recalculate repair order device partsCost and totals
  * based on a specific set of active part usages and products list.
@@ -507,7 +546,12 @@ export function useWorkshopParts({
           replacePartUsageIdLocal(snapshot.tempUsageId, reconciledUsage);
         }
       } catch (mutationError: any) {
-        console.error(`❌ [useWorkshopParts:AddPart] Mutation ${mutationId} failed, performing granular rollback:`, mutationError);
+        logDetailedMutationError('add', mutationError, {
+          productId: product.id,
+          repairOrderId: order.id,
+          usageId: existingUsage?.id,
+          tempUsageId: snapshot.tempUsageId
+        });
 
         // GRANULAR EXACT ROLLBACK:
         // 1. Revert product stock by -snapshot.qtyDelta
@@ -541,11 +585,6 @@ export function useWorkshopParts({
         } catch (dbErr) {
           console.error("Failed to sync rolled back order to Supabase:", dbErr);
         }
-
-        dialog.alert({
-          message: "حدث خطأ أثناء حفظ قطعة الغيار بالخادم، تم إلغاء العملية وتحديث المخزون.",
-          variant: "error"
-        });
       } finally {
         if (snapshot.tempUsageId) removePendingPartUsage(snapshot.tempUsageId);
         if (createdPersistedUsage?.id) removePendingPartUsage(createdPersistedUsage.id);
@@ -739,7 +778,11 @@ export function useWorkshopParts({
           throw serverError;
         }
       } catch (err) {
-        console.error(`❌ [useWorkshopParts:RemovePart] Mutation ${mutationId} failed, performing granular rollback:`, err);
+        logDetailedMutationError(isFullRemove ? 'remove' : 'decrease', err, {
+          productId: product?.id || usage.inventoryItemId,
+          repairOrderId: order.id,
+          usageId: usageId
+        });
 
         // GRANULAR EXACT ROLLBACK:
         // 1. Revert product stock by -snapshot.qtyDelta
@@ -769,11 +812,6 @@ export function useWorkshopParts({
         } catch (dbErr) {
           console.error("Failed to sync rolled back order to Supabase:", dbErr);
         }
-
-        dialog.alert({
-          message: "تعذر حفظ تعديل قطعة الغيار، وتمت إعادة الكمية والحساب للحالة السابقة.",
-          variant: "error"
-        });
       } finally {
         const remaining = (pendingMutationsRef.current.get(usage.inventoryItemId) || 1) - 1;
         pendingMutationsRef.current.set(usage.inventoryItemId, remaining);
