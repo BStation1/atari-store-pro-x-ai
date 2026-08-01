@@ -109,9 +109,16 @@ function useDbTrigger(watchedKeys?: string[]) {
       const changedKey = normalizeKey(detail?.key || detail?.table);
       const keys = watchedKeysRef.current;
 
-      // Auth events and unscoped events intentionally refresh all consumers.
-      if (!keys || keys.length === 0 || !changedKey || keys.some(key => normalizeKey(key) === changedKey)) {
-        setTrigger(prev => prev + 1);
+      if (keys && keys.length > 0) {
+        // Scoped listener: only trigger if event matches one of the scoped keys, or if event has no key (e.g. auth event)
+        if (!changedKey || keys.some(key => normalizeKey(key) === changedKey)) {
+          setTrigger(prev => prev + 1);
+        }
+      } else {
+        // Unscoped listener: only trigger if event has no specific key OR is explicit auth change
+        if (!changedKey || event?.type === 'atari_auth_changed') {
+          setTrigger(prev => prev + 1);
+        }
       }
     };
 
@@ -152,7 +159,7 @@ function useDbTrigger(watchedKeys?: string[]) {
 }
 
 export function useCustomers() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_customers']);
   const [customers, setCustomers] = useState<Customer[]>(getLocalCustomersBackup());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -447,7 +454,7 @@ export function useProducts() {
 }
 
 export function useInventoryMovements(productId?: string) {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_inventory_movements', 'atari_products']);
   const [movements, setMovements] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -479,7 +486,7 @@ export function useInventoryMovements(productId?: string) {
 }
 
 export function useSuppliers() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_suppliers']);
   const [suppliers, setSuppliers] = useState<Supplier[]>(getLocalSuppliersBackup());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -540,7 +547,7 @@ export function useSuppliers() {
 }
 
 export function useInvoices() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_invoices']);
   const [invoices, setInvoices] = useState<Invoice[]>(getLocalInvoicesBackup());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -597,7 +604,7 @@ export function useInvoices() {
 }
 
 export function useExpenses() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_expenses']);
   const [expenses, setExpenses] = useState<Expense[]>([]);
 
   useEffect(() => {
@@ -622,7 +629,7 @@ export function useExpenses() {
 }
 
 export function useSettings() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_settings']);
   const [settings, setSettings] = useState<SystemSettings>(db.getSettings());
 
   useEffect(() => {
@@ -650,7 +657,7 @@ export function useSettings() {
 }
 
 export function useCurrentUser() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_auth', 'atari_users']);
   const [user, setUser] = useState<User>(db.getCurrentUser());
 
   useEffect(() => {
@@ -667,7 +674,7 @@ export function useCurrentUser() {
 }
 
 export function useUsers() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_users']);
   const [users, setUsers] = useState<User[]>([]);
 
   useEffect(() => {
@@ -703,7 +710,7 @@ export function useUsers() {
 }
 
 export function useActivityLogs() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_activity_logs']);
   const [logs, setLogs] = useState<ActivityLog[]>([]);
 
   useEffect(() => {
@@ -714,7 +721,7 @@ export function useActivityLogs() {
 }
 
 export function useCategories() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_categories']);
   const [categories, setCategories] = useState<ProductCategory[]>(getLocalCategoriesBackup());
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -777,7 +784,7 @@ export function useCategories() {
 }
 
 export function useDeviceTypes() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_device_types']);
   const [deviceTypes, setDeviceTypes] = useState<DBDeviceType[]>(getDeviceTypesSync());
 
   useEffect(() => {
@@ -813,7 +820,7 @@ export function useDeviceTypes() {
 }
 
 export function useDeviceModels() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_device_models']);
   const [deviceModels, setDeviceModels] = useState<DBDeviceModel[]>(getDeviceModelsSync());
 
   useEffect(() => {
@@ -849,7 +856,7 @@ export function useDeviceModels() {
 }
 
 export function useCommonFaults() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_common_faults']);
   const [commonFaults, setCommonFaults] = useState<CommonFault[]>([]);
 
   useEffect(() => {
@@ -880,7 +887,7 @@ export function useCommonFaults() {
 }
 
 export function useRepairServices() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_repair_services']);
   const [repairServices, setRepairServices] = useState<RepairService[]>([]);
 
   useEffect(() => {
@@ -911,7 +918,7 @@ export function useRepairServices() {
 }
 
 export function useDefaultPrices() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_default_prices']);
   const [defaultPrices, setDefaultPrices] = useState<DefaultPrice[]>([]);
 
   useEffect(() => {
@@ -942,7 +949,7 @@ export function useDefaultPrices() {
 }
 
 export function useReceivedAccessories() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_received_accessories']);
   const [receivedAccessories, setReceivedAccessories] = useState<ReceivedAccessory[]>([]);
 
   useEffect(() => {
@@ -973,7 +980,7 @@ export function useReceivedAccessories() {
 }
 
 export function useDeviceConditions() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_device_conditions']);
   const [deviceConditions, setDeviceConditions] = useState<DeviceCondition[]>([]);
 
   useEffect(() => {
@@ -1004,7 +1011,7 @@ export function useDeviceConditions() {
 }
 
 export function useRepairTemplates() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_repair_templates']);
   const [repairTemplates, setRepairTemplates] = useState<RepairTemplateItem[]>(getRepairTemplatesSync());
 
   useEffect(() => {
@@ -1041,7 +1048,7 @@ export function useRepairTemplates() {
 }
 
 export function usePartners() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_partners']);
   const [partners, setPartners] = useState<Partner[]>([]);
 
   useEffect(() => {
@@ -1058,7 +1065,7 @@ export function usePartners() {
 }
 
 export function usePartnerLedger() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_partner_ledger']);
   const [ledger, setLedger] = useState<PartnerLedgerEntry[]>([]);
 
   useEffect(() => {
@@ -1082,7 +1089,7 @@ export function usePartnerLedger() {
 }
 
 export function usePartnerSettlements() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_partner_settlements']);
   const [settlements, setSettlements] = useState<PartnerSettlement[]>([]);
 
   useEffect(() => {
@@ -1126,7 +1133,7 @@ export function usePartnerSettlements() {
 }
 
 export function usePartnerTransactions() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_partner_transactions']);
   const [transactions, setTransactions] = useState<PartnerTransaction[]>([]);
 
   useEffect(() => {
@@ -1220,7 +1227,7 @@ export function useRepairPartUsages() {
 }
 
 export function useSettlementAuditLogs() {
-  const trigger = useDbTrigger();
+  const trigger = useDbTrigger(['atari_settlement_audit_logs']);
   const [auditLogs, setAuditLogs] = useState<SettlementAuditLog[]>([]);
 
   useEffect(() => {

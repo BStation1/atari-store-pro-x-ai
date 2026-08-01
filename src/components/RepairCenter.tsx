@@ -216,12 +216,8 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       if (!prev) return null;
       const fresh = orders.find(order => order.id === prev.id);
       if (!fresh || fresh === prev) return prev;
-      const sameVersion =
-        fresh.updatedAt === prev.updatedAt &&
-        fresh.status === prev.status &&
-        fresh.finalRepairPrice === prev.finalRepairPrice &&
-        fresh.devices.length === prev.devices.length;
-      return sameVersion ? prev : fresh;
+      if (JSON.stringify(fresh) === JSON.stringify(prev)) return prev;
+      return fresh;
     });
   }, [orders, busyProductIds.size]);
 
