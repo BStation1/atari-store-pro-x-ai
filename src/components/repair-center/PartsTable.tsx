@@ -1,7 +1,6 @@
 import React from "react";
 import { Trash2 } from "lucide-react";
 import { RepairPartUsage, Product } from "../../types";
-import { isSameProductIdentity } from "../../lib/partUsageUtils";
 
 interface PartsTableProps {
   deviceLinkedUsages: RepairPartUsage[];
@@ -44,14 +43,13 @@ export function PartsTable({
               const unitSellPrice = getUsageSellingUnitPrice(pu, products);
               const lineTotal = pu.quantity * unitSellPrice;
               const matchedProd = products.find(p =>
-                isSameProductIdentity(p.id, pu.inventoryItemId, products) ||
                 p.id === pu.inventoryItemId ||
-                String((p as any).uuid || '') === String(pu.inventoryItemId || '') ||
-                (!!pu.sku && String(p.sku || '') === String(pu.sku))
+                (p as any).uuid === pu.inventoryItemId ||
+                (!!pu.sku && p.sku === pu.sku) ||
+                (p.nameAr || p.name) === pu.partName
               );
-              const stockAvail = matchedProd ? Number(matchedProd.quantity || 0) : 999;
-              const busyIdentity = matchedProd?.id || pu.inventoryItemId;
-              const isBusy = busyProductIds.has(busyIdentity) || busyProductIds.has(pu.inventoryItemId);
+              const stockAvail = matchedProd ? matchedProd.quantity : 0;
+              const isBusy = !!matchedProd && busyProductIds.has(matchedProd.id);
 
               return (
                 <tr key={pu.id} className="hover:bg-[#181b2a] transition-colors">
@@ -74,8 +72,9 @@ export function PartsTable({
                     <div className="inline-flex items-center gap-2 bg-[#181b2a] px-2 py-1 rounded-lg border border-[#2a2d42]">
                       <button
                         type="button"
+                        disabled={isBusy}
                         onClick={() => onRemovePartUsage(pu.id, 1)}
-                        className="w-7 h-7 flex items-center justify-center bg-gray-800 hover:bg-gray-700 text-white rounded-md font-bold text-base transition cursor-pointer"
+                        className="w-7 h-7 flex items-center justify-center bg-gray-800 hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-md font-bold text-base transition cursor-pointer"
                         title="خصم قطعة (-)"
                       >
                         -
@@ -87,11 +86,8 @@ export function PartsTable({
 
                       <button
                         type="button"
-                        disabled={stockAvail <= 0}
-                        onClick={() => {
-                          const targetId = matchedProd ? matchedProd.id : pu.inventoryItemId;
-                          onAddPartToDevice(targetId, 1);
-                        }}
+                        disabled={stockAvail <= 0 || isBusy}
+                        onClick={() => matchedProd && onAddPartToDevice(matchedProd.id, 1)}
                         className="w-7 h-7 flex items-center justify-center bg-indigo-600 hover:bg-indigo-500 text-white rounded-md font-bold text-base transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                         title={stockAvail <= 0 ? "المخزون نفذ" : "إضافة قطعة (+)"}
                       >
@@ -107,8 +103,9 @@ export function PartsTable({
                   <td className="p-3 text-center">
                     <button
                       type="button"
+                      disabled={isBusy}
                       onClick={() => onRemovePartUsage(pu.id, -1)}
-                      className="p-1.5 bg-rose-500/10 hover:bg-rose-600 text-rose-400 hover:text-white rounded-lg transition cursor-pointer"
+                      className="p-1.5 bg-rose-500/10 hover:bg-rose-600 disabled:opacity-30 disabled:cursor-not-allowed text-rose-400 hover:text-white rounded-lg transition cursor-pointer"
                       title="حذف القطعة"
                     >
                       <Trash2 className="w-4 h-4" />

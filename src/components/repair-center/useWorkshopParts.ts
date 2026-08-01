@@ -212,6 +212,16 @@ export function useWorkshopParts({
   // Pending background mutation count per product ID
   const pendingMutationsRef = useRef<Map<string, number>>(new Map());
 
+  const findProductByAnyIdentity = useCallback((identity: string, usage?: RepairPartUsage) => {
+    return productsRef.current.find(p =>
+      p.id === identity ||
+      (p as any).uuid === identity ||
+      p.sku === identity ||
+      (!!usage?.sku && p.sku === usage.sku) ||
+      (!!usage?.partName && (p.nameAr || p.name) === usage.partName)
+    );
+  }, []);
+
   const fallbackUser: User = {
     id: "U-101",
     username: "elbanna",
@@ -336,7 +346,7 @@ export function useWorkshopParts({
     }
 
     const currentProducts = productsRef.current;
-    const product = currentProducts.find(p => p.id === productId);
+    const product = findProductByAnyIdentity(productId);
     if (!product) {
       console.log("<-- EXIT addPart (product not found)");
       return;
@@ -552,13 +562,12 @@ export function useWorkshopParts({
           const reconciledUsage: RepairPartUsage = {
             ...usageRecordToSave,
             ...persistedUsage,
-            // Keep the local product/order identities used by the workshop UI.
-            // Supabase UUIDs may differ from the local catalog IDs; allowing the
-            // remote payload to overwrite inventoryItemId makes stock lookup fail
-            // and leaves the + control disabled.
             repairOrderId: order.id,
-            inventoryItemId: product.id,
-            sku: usageRecordToSave.sku || product.sku || product.id
+            // Keep the local catalog identity for UI controls. The persisted
+            // UUID remains available on the remote row and is resolved when
+            // a server mutation is performed.
+            inventoryItemId: usageRecordToSave.inventoryItemId,
+            sku: usageRecordToSave.sku
           };
           setWorkshopUsages(current => {
             const next = current.map(row => row.id === snapshot.tempUsageId
@@ -638,7 +647,8 @@ export function useWorkshopParts({
     replacePartUsageIdLocal,
     setProductLocal,
     setRepairOrderLocal,
-    setSelectedOrder
+    setSelectedOrder,
+    findProductByAnyIdentity
   ]);
 
   // 4. Increase part alias
@@ -685,7 +695,7 @@ export function useWorkshopParts({
     }
 
     const currentProducts = productsRef.current;
-    const product = currentProducts.find(p => p.id === usage.inventoryItemId);
+    const product = findProductByAnyIdentity(usage.inventoryItemId, usage);
 
     const qtyToReturn = Math.min(usage.quantity, Math.max(1, removeQty));
     const isFullRemove = (usage.quantity <= qtyToReturn) || removeQty === -1;
@@ -755,45 +765,35 @@ export function useWorkshopParts({
 
     const task = async () => {
       try {
-        // Resolve target ID in case usageId was temporary and got replaced by addPart task
-        const currentUsage = workshopUsagesRef.current.find(pu =>
-          pu.id === usageId ||
-          (pu as any).tempId === usageId ||
-          isSameProductIdentity(pu.inventoryItemId, usage.inventoryItemId, productsRef.current)
-        ) || usage;
-        const targetUsageId = currentUsage.id;
+        const persistedUsage = partUsagesRef.current.find(candidate =>
+          isUuid(candidate.id) &&
+          isSameOrderIdentity(String(candidate.repairOrderId), String(usage.repairOrderId), [order]) &&
+          isSameProductIdentity(String(candidate.inventoryItemId), String(usage.inventoryItemId), productsRef.current) &&
+          isSameDeviceIdentity(candidate.notes, usage.notes)
+        );
+        const serverUsageId = isUuid(usageId) ? usageId : persistedUsage?.id;
+        if (!serverUsageId) {
+          throw new Error(`قطعة الغيار لم يكتمل حفظها بعد. أعد المحاولة بعد لحظة. usageId=${usageId}`);
+        }
 
         let usageUpdatedOnServer = false;
         let stockUpdatedOnServer = false;
         let persistedProductId = product?.id || usage.inventoryItemId;
 
         try {
-          if (isUuid(targetUsageId)) {
-            if (isFullRemove) {
-              console.log("🔥 [INVOCATION] Calling updateRepairPartUsageInSupabase (RETURNED) from removePartInternal task...");
-              await updateRepairPartUsageInSupabase(targetUsageId, { accountingStatus: 'RETURNED' });
-            } else {
-              console.log("🔥 [INVOCATION] Calling updateRepairPartUsageInSupabase (UPDATE QTY) from removePartInternal task...");
-              await updateRepairPartUsageInSupabase(targetUsageId, {
-                quantity: newQty,
-                totalCost: newTotalCost,
-                sellingPrice: usageSellPrice,
-                sellingTotal: newSellingTotal
-              });
-            }
-            usageUpdatedOnServer = true;
+          if (isFullRemove) {
+            console.log("🔥 [INVOCATION] Calling updateRepairPartUsageInSupabase (RETURNED) from removePartInternal task...");
+            await updateRepairPartUsageInSupabase(serverUsageId, { accountingStatus: 'RETURNED' });
           } else {
-            if (isFullRemove) {
-              markPartUsageReturnedLocal(targetUsageId);
-            } else {
-              patchPartUsageLocal(targetUsageId, {
-                quantity: newQty,
-                totalCost: newTotalCost,
-                sellingPrice: usageSellPrice,
-                sellingTotal: newSellingTotal
-              });
-            }
+            console.log("🔥 [INVOCATION] Calling updateRepairPartUsageInSupabase (UPDATE QTY) from removePartInternal task...");
+            await updateRepairPartUsageInSupabase(serverUsageId, {
+              quantity: newQty,
+              totalCost: newTotalCost,
+              sellingPrice: usageSellPrice,
+              sellingTotal: newSellingTotal
+            });
           }
+          usageUpdatedOnServer = true;
 
           if (product) {
             persistedProductId = (await ensureProductUuidInSupabase(product)) || product.id;
@@ -842,7 +842,7 @@ export function useWorkshopParts({
           if (usageUpdatedOnServer) {
             try {
               console.log("🔥 [INVOCATION] Calling updateRepairPartUsageInSupabase (COMPENSATE) from removePartInternal task...");
-              await updateRepairPartUsageInSupabase(usageId, {
+              await updateRepairPartUsageInSupabase(serverUsageId, {
                 accountingStatus: snapshot.usageBefore.accountingStatus,
                 quantity: snapshot.usageBefore.quantity,
                 unitCost: snapshot.usageBefore.unitCost,
@@ -911,7 +911,8 @@ export function useWorkshopParts({
     persistLocalUsages,
     setProductLocal,
     setRepairOrderLocal,
-    setSelectedOrder
+    setSelectedOrder,
+    findProductByAnyIdentity
   ]);
 
   // 6. Decrease quantity wrapper (reduces by 1)
