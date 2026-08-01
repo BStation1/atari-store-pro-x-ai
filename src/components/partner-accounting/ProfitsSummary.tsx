@@ -167,7 +167,26 @@ export default function ProfitsSummary({
     return roundMoney(quantity * unitCost);
   };
 
+  const getLegacyDevicePurchaseCost = (order: RepairOrder): number => {
+    if (!order.devices || order.devices.length === 0) return 0;
+    return roundMoney(
+      order.devices.reduce((sum, d: any) => {
+        // 3. Explicit device-level purchase cost field if available
+        const explicitPurchaseCost = Number(
+          d.partsPurchaseCost ?? d.purchaseCost ?? d.parts_purchase_cost ?? d.costPrice
+        );
+        if (!isNaN(explicitPurchaseCost) && explicitPurchaseCost > 0) {
+          return sum + explicitPurchaseCost;
+        }
+        // 4. Legacy order.devices[].partsCost fallback for old records
+        const legacyPartsCost = Number(d.partsCost) || 0;
+        return sum + legacyPartsCost;
+      }, 0)
+    );
+  };
+
   const getOrderPurchaseCost = (order: RepairOrder): number => {
+    // 1. Inventory movement purchase cost snapshots
     const orderMovements = (rawMovements || []).filter(
       (movement: any) => isPhysicalOutMovement(movement) && movementBelongsToOrder(movement, order)
     );
@@ -176,19 +195,23 @@ export default function ProfitsSummary({
       return roundMoney(orderMovements.reduce((sum: number, movement: any) => sum + movementPurchaseTotal(movement), 0));
     }
 
-    // Legacy fallback only: use purchase-cost snapshots from part usages when an
-    // older order has no inventory movement. Never fall back to device.partsCost.
+    // 2. Repair part usage purchase cost
     const legacyUsages = partUsages.filter(
       (usage) => isPartBelongsToOrder(usage.repairOrderId, order) &&
         usage.accountingStatus !== 'RETURNED' && usage.accountingStatus !== 'REVERSED'
     );
 
-    return roundMoney(legacyUsages.reduce((sum, usage) => {
-      const quantity = Math.max(0, Number(usage.quantity) || 0);
-      const unitCost = Math.max(0, Number(usage.unitCost) || 0);
-      const totalCost = Math.max(0, Number(usage.totalCost) || 0);
-      return sum + (totalCost > 0 ? totalCost : quantity * unitCost);
-    }, 0));
+    if (legacyUsages.length > 0) {
+      return roundMoney(legacyUsages.reduce((sum, usage) => {
+        const quantity = Math.max(0, Number(usage.quantity) || 0);
+        const unitCost = Math.max(0, Number(usage.unitCost) || 0);
+        const totalCost = Math.max(0, Number(usage.totalCost) || 0);
+        return sum + (totalCost > 0 ? totalCost : quantity * unitCost);
+      }, 0));
+    }
+
+    // 3 & 4. Safe legacy device purchase cost fallback
+    return getLegacyDevicePurchaseCost(order);
   };
 
   // 1. Filter Orders by Date & Party
