@@ -11,7 +11,7 @@ export type AccountingParty = 'SHOP' | 'AHMED' | 'ABDO';
 export interface AccountingPartDetail {
   id: string;
   partName: string;
-  quantity: number;
+  quantity: number | null;
   unitPurchaseCost: number;
   totalPurchaseCost: number;
   source: 'INVENTORY_MOVEMENT' | 'REPAIR_PART_USAGE' | 'LEGACY_DEVICE';
@@ -190,6 +190,22 @@ function explicitDevicePurchaseCost(device: any): number | null {
   return null;
 }
 
+function explicitDeviceQuantity(device: any): number | null {
+  const candidates = [
+    device.partsQuantity,
+    device.quantity,
+    device.parts_quantity,
+    device.itemQuantity,
+    device.item_quantity,
+    device.qty
+  ];
+  for (const candidate of candidates) {
+    const n = Number(candidate);
+    if (Number.isFinite(n) && n > 0) return Math.round(n);
+  }
+  return null;
+}
+
 function legacyDeviceDetails(order: RepairOrder): AccountingPartDetail[] {
   const rows: AccountingPartDetail[] = [];
   (order.devices || []).forEach((device: any, deviceIndex: number) => {
@@ -204,25 +220,29 @@ function legacyDeviceDetails(order: RepairOrder): AccountingPartDetail[] {
 
     if (candidateItems.length > 0) {
       candidateItems.forEach((item: any, itemIndex: number) => {
-        const quantity = Math.max(1, Number(item.quantity) || 1);
+        const rawItemQty = item.quantity ?? item.qty ?? item.partsQuantity ?? item.parts_quantity;
+        const itemQtyNum = Number(rawItemQty);
+        const quantity = Number.isFinite(itemQtyNum) && itemQtyNum > 0 ? Math.round(itemQtyNum) : null;
         const unitCost = money(item.costPrice || 0);
+        const totalPurchaseCost = quantity !== null ? money(quantity * unitCost) : unitCost;
         rows.push({
           id: `legacy-${order.id}-${deviceIndex}-${itemIndex}`,
           partName: clean(item.name) || 'قطعة غيار قديمة',
           quantity,
           unitPurchaseCost: unitCost,
-          totalPurchaseCost: money(quantity * unitCost),
+          totalPurchaseCost,
           source: 'LEGACY_DEVICE'
         });
       });
       return;
     }
 
+    const explicitQty = explicitDeviceQuantity(device);
     rows.push({
       id: `legacy-${order.id}-${deviceIndex}`,
       partName: `تكلفة قطع جهاز ${device.model || device.type || deviceIndex + 1}`,
-      // Legacy records often contain only a total purchase cost and no reliable quantity.
-      quantity: 0,
+      // Explicit legacy quantity if present; otherwise null (legacy record, quantity unavailable)
+      quantity: explicitQty,
       unitPurchaseCost: legacyCost,
       totalPurchaseCost: legacyCost,
       source: 'LEGACY_DEVICE'
@@ -255,7 +275,7 @@ export function resolveOrderPartsAccounting(
     return {
       parts,
       purchaseCost: money(parts.reduce((sum, part) => sum + part.totalPurchaseCost, 0)),
-      partsQuantity: parts.reduce((sum, part) => sum + part.quantity, 0),
+      partsQuantity: parts.reduce((sum, part) => sum + (part.quantity ?? 0), 0),
       costSource: 'INVENTORY_MOVEMENTS'
     };
   }
@@ -283,7 +303,7 @@ export function resolveOrderPartsAccounting(
     return {
       parts,
       purchaseCost: money(parts.reduce((sum, part) => sum + part.totalPurchaseCost, 0)),
-      partsQuantity: parts.reduce((sum, part) => sum + part.quantity, 0),
+      partsQuantity: parts.reduce((sum, part) => sum + (part.quantity ?? 0), 0),
       costSource: 'REPAIR_PART_USAGES'
     };
   }
@@ -293,7 +313,7 @@ export function resolveOrderPartsAccounting(
     return {
       parts,
       purchaseCost: money(parts.reduce((sum, part) => sum + part.totalPurchaseCost, 0)),
-      partsQuantity: parts.reduce((sum, part) => sum + part.quantity, 0),
+      partsQuantity: parts.reduce((sum, part) => sum + (part.quantity ?? 0), 0),
       costSource: 'LEGACY_DEVICE'
     };
   }

@@ -34,7 +34,7 @@ interface ProfitsSummaryProps {
 export interface WithdrawnItemDetail {
   id: string;
   partName: string;
-  quantity: number;
+  quantity: number | null;
   unitCost: number;
   totalCost: number;
   refNum: string;
@@ -49,6 +49,7 @@ export interface WithdrawnItemDetail {
 export interface AggregatedItem {
   partName: string;
   totalQuantity: number;
+  hasUnknownQuantity: boolean;
   unitCost: number;
   totalCost: number;
 }
@@ -231,13 +232,19 @@ export default function ProfitsSummary({
       aggregated = {
         partName: key,
         totalQuantity: 0,
+        hasUnknownQuantity: false,
         unitCost: tx.unitCost,
         totalCost: 0
       };
       aggregatedItemsMap.set(key, aggregated);
     }
 
-    aggregated.totalQuantity += tx.quantity;
+    if (tx.quantity !== null && tx.quantity !== undefined) {
+      aggregated.totalQuantity += tx.quantity;
+    } else {
+      aggregated.hasUnknownQuantity = true;
+    }
+
     aggregated.totalCost += tx.totalCost;
     aggregated.unitCost = aggregated.totalQuantity > 0 ? roundMoney(aggregated.totalCost / aggregated.totalQuantity) : tx.unitCost;
   });
@@ -248,7 +255,7 @@ export default function ProfitsSummary({
   aggregatedItemsList.sort((a, b) => b.totalQuantity - a.totalQuantity);
 
   // Withdrawn Inventory Aggregations
-  const totalWithdrawnQty = withdrawnItemsList.reduce((sum, i) => sum + i.quantity, 0);
+  const totalWithdrawnQty = withdrawnItemsList.reduce((sum, i) => sum + (i.quantity ?? 0), 0);
   const totalWithdrawnCost = roundMoney(withdrawnItemsList.reduce((sum, i) => sum + i.totalCost, 0));
 
   // Overall KPI Summaries for displayed dataset
@@ -313,7 +320,7 @@ export default function ProfitsSummary({
     withdrawnItemsList.forEach((item) => {
       csvRows.push([
         `"${item.partName}"`,
-        item.quantity,
+        item.quantity !== null ? item.quantity : 'سجل قديم (الكمية غير متاحة)',
         item.unitCost,
         item.totalCost,
         `"${item.refNum}"`,
@@ -763,7 +770,14 @@ export default function ProfitsSummary({
                                     {r.partsList.map((p, pIdx) => (
                                       <tr key={pIdx} className="hover:bg-[#1a1e30]">
                                         <td className="p-2 font-semibold text-white">{p.partName}</td>
-                                        <td className="p-2 font-bold text-cyan-300">{p.quantity}</td>
+                                        <td className="p-2 font-bold text-cyan-300">{p.quantity !== null && p.quantity !== undefined ? (
+                                             `${p.quantity} قطعة`
+                                           ) : (
+                                             <span className="text-amber-400 font-semibold text-[11px] inline-flex items-center gap-1">
+                                               <AlertCircle className="w-3 h-3" />
+                                               سجل قديم (الكمية غير متاحة)
+                                             </span>
+                                           )}</td>
                                         <td className="p-2">{p.unitCost.toLocaleString('ar-EG')} {currencySymbol}</td>
                                         <td className="p-2 font-bold text-rose-400">
                                           {p.totalCost.toLocaleString('ar-EG')} {currencySymbol}
@@ -914,7 +928,14 @@ export default function ProfitsSummary({
                                 <span className="text-sm">{item.partName}</span>
                               </td>
                               <td className="p-3 font-extrabold text-cyan-300 text-center text-sm">
-                                {item.totalQuantity} قطعة
+                                {item.totalQuantity > 0 ? (
+                                  `${item.totalQuantity} قطعة${item.hasUnknownQuantity ? ' (+ سجل قديم)' : ''}`
+                                ) : (
+                                  <span className="text-amber-400 font-semibold text-xs inline-flex items-center justify-center gap-1">
+                                    <AlertCircle className="w-3.5 h-3.5" />
+                                    سجل قديم (الكمية غير متاحة)
+                                  </span>
+                                )}
                               </td>
                               <td className="p-3 text-center text-gray-300 font-medium text-sm">
                                 {item.unitCost.toLocaleString('ar-EG')} {currencySymbol}
