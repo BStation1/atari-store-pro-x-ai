@@ -15,7 +15,8 @@ import {
 } from "../../lib/supabaseProducts";
 import {
   addRepairPartUsageToSupabase,
-  updateRepairPartUsageInSupabase
+  updateRepairPartUsageInSupabase,
+  isUuid
 } from "../../lib/supabasePartUsages";
 import {
   ensureRepairOrderUuidInSupabase,
@@ -657,56 +658,86 @@ export function useWorkshopParts({
 
     const task = async () => {
       try {
-        const quantityPromise = product
-          ? updateProductQuantityInSupabase(product.id, product.quantity + actualReturnedQty)
-          : Promise.resolve();
-
-        const ownership = order.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
-        let owner: 'SHOP' | 'AHMED' | 'ABDO' = 'SHOP';
-        if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) owner = 'AHMED';
-        else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) owner = 'ABDO';
-
-        const movementPromise = addInventoryMovementToSupabase({
-          id: `MOV-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
-          productId: usage.inventoryItemId,
-          productNameSnapshot: usage.partName,
-          movementType: 'IN',
-          usageType: 'REPAIR_USAGE_RETURN',
-          quantityChange: actualReturnedQty,
-          previousQuantity: product ? product.quantity : 0,
-          newQuantity: product ? product.quantity + actualReturnedQty : actualReturnedQty,
-          costPriceSnapshot: usage.unitCost,
-          sellingPriceSnapshot: 0,
-          totalCost: usage.unitCost * actualReturnedQty,
-          referenceId: order.id,
-          repairOrderId: order.id,
-          owner: owner,
-          notes: `إرجاع قطعة غيار صيانة للمخزن: ${usage.partName}`,
-          createdAt: new Date().toISOString()
-        });
-
-        let usagePromise: Promise<any>;
-        if (isFullRemove) {
-          usagePromise = updateRepairPartUsageInSupabase(usageId, { accountingStatus: 'RETURNED' });
-        } else {
-          usagePromise = updateRepairPartUsageInSupabase(usageId, {
-            quantity: newQty,
-            totalCost: newTotalCost,
-            sellingPrice: usageSellPrice,
-            sellingTotal: newSellingTotal
-          });
+        if (!isUuid(usageId)) {
+          throw new Error(`قطعة الغيار لم يكتمل حفظها بعد. أعد المحاولة بعد لحظة. usageId=${usageId}`);
         }
 
-        const latestOrderForDb = selectedOrderRef.current
-          ? recalculateOrderTotals(selectedOrderRef.current, workshopUsagesRef.current, deviceIdx, productsRef.current)
-          : updatedOrder;
+        let usageUpdatedOnServer = false;
+        let stockUpdatedOnServer = false;
+        let persistedProductId = product?.id || usage.inventoryItemId;
 
-        await Promise.all([
-          quantityPromise,
-          movementPromise,
-          usagePromise,
-          updateRepairOrderInSupabase(latestOrderForDb)
-        ]);
+        try {
+          if (isFullRemove) {
+            await updateRepairPartUsageInSupabase(usageId, { accountingStatus: 'RETURNED' });
+          } else {
+            await updateRepairPartUsageInSupabase(usageId, {
+              quantity: newQty,
+              totalCost: newTotalCost,
+              sellingPrice: usageSellPrice,
+              sellingTotal: newSellingTotal
+            });
+          }
+          usageUpdatedOnServer = true;
+
+          if (product) {
+            persistedProductId = (await ensureProductUuidInSupabase(product)) || product.id;
+            await updateProductQuantityInSupabase(persistedProductId, product.quantity + actualReturnedQty);
+            stockUpdatedOnServer = true;
+          }
+
+          const persistedOrderId = (await ensureRepairOrderUuidInSupabase(order)) || order.id;
+          const ownership = order.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
+          let owner: 'SHOP' | 'AHMED' | 'ABDO' = 'SHOP';
+          if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) owner = 'AHMED';
+          else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) owner = 'ABDO';
+
+          await addInventoryMovementToSupabase({
+            id: `MOV-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+            productId: persistedProductId,
+            productNameSnapshot: usage.partName,
+            movementType: 'IN',
+            usageType: 'REPAIR_USAGE_RETURN',
+            quantityChange: actualReturnedQty,
+            previousQuantity: product ? product.quantity : 0,
+            newQuantity: product ? product.quantity + actualReturnedQty : actualReturnedQty,
+            costPriceSnapshot: usage.unitCost,
+            sellingPriceSnapshot: 0,
+            totalCost: usage.unitCost * actualReturnedQty,
+            referenceId: order.id,
+            repairOrderId: persistedOrderId,
+            owner,
+            notes: `إرجاع قطعة غيار صيانة للمخزن: ${usage.partName}`,
+            createdAt: new Date().toISOString()
+          });
+
+          const latestOrderForDb = selectedOrderRef.current
+            ? recalculateOrderTotals(selectedOrderRef.current, workshopUsagesRef.current, deviceIdx, productsRef.current)
+            : updatedOrder;
+          await updateRepairOrderInSupabase(latestOrderForDb);
+        } catch (serverError) {
+          if (stockUpdatedOnServer && product) {
+            try {
+              await updateProductQuantityInSupabase(persistedProductId, product.quantity);
+            } catch (compensationError) {
+              console.error('Failed to compensate product stock:', compensationError);
+            }
+          }
+          if (usageUpdatedOnServer) {
+            try {
+              await updateRepairPartUsageInSupabase(usageId, {
+                accountingStatus: snapshot.usageBefore.accountingStatus,
+                quantity: snapshot.usageBefore.quantity,
+                unitCost: snapshot.usageBefore.unitCost,
+                totalCost: snapshot.usageBefore.totalCost,
+                sellingPrice: snapshot.usageBefore.sellingPrice,
+                sellingTotal: snapshot.usageBefore.sellingTotal
+              });
+            } catch (compensationError) {
+              console.error('Failed to compensate repair part usage:', compensationError);
+            }
+          }
+          throw serverError;
+        }
       } catch (err) {
         console.error(`❌ [useWorkshopParts:RemovePart] Mutation ${mutationId} failed, performing granular rollback:`, err);
 
