@@ -521,8 +521,8 @@ export async function runMonthlySettlementTestSuite(): Promise<{
       {
         accountOwner: 'ABDO',
         transactionType: 'SETTLEMENT_OBLIGATION',
-        amount: 700,
-        signedAmount: -700,
+        amount: 100,
+        signedAmount: -100,
         invoiceId: 'i2',
         invoiceNumber: 'INV-B',
         workType: 'ABDO_WORK',
@@ -538,14 +538,14 @@ export async function runMonthlySettlementTestSuite(): Promise<{
       settlement.ahmedCogsRecovery === 600 &&
       settlement.ahmedNetPayout === 1100 &&
       settlement.abdouProfitShare === 300 &&
-      settlement.abdouSettlementObligation === 700 &&
-      settlement.abdouNetPayout === -400;
+      settlement.abdouSettlementObligation === 100 &&
+      settlement.abdouNetPayout === 200;
 
     results.push({
       id: 8,
-      title: '8) مطابقة حسابات التسوية (Settlement Calculations): أحمد=1100، عبده=-400',
+      title: '8) مطابقة حسابات التسوية (Settlement Calculations): أحمد=1100، عبده=200',
       passed: pass,
-      expected: 'أحمد استحقاق صافي=1100 (500+600)، عبده صافي=-400 (300-700)',
+      expected: 'أحمد استحقاق صافي=1100 (500+600)، عبده صافي=200 (300-100)',
       actual: `أحمد صافي=${settlement.ahmedNetPayout}، عبده صافي=${settlement.abdouNetPayout}`
     });
   } catch (err: any) {

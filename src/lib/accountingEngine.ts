@@ -142,7 +142,7 @@ export function calculateInvoiceAccounting(input: InvoiceAccountingInput): Invoi
   } else if (workType === 'ABDO_WORK') {
     ahmedProfitShare = roundMoney(grossProfit * 0.25);
     abdouProfitShare = roundMoney(grossProfit * 0.75);
-    abdouSettlementObligation = roundMoney(cogs + ahmedProfitShare);
+    abdouSettlementObligation = ahmedProfitShare;
     replacementFundAmount = 0;
   }
 

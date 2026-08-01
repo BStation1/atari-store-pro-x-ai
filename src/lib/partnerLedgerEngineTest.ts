@@ -155,15 +155,15 @@ export async function runPartnerLedgerTestSuite(): Promise<{
     const pass =
       ahmedProfit?.signedAmount === 100 &&
       abdoProfit?.signedAmount === 300 &&
-      abdoObligation?.amount === 700 &&
-      abdoObligation?.signedAmount === -700 &&
+      abdoObligation?.amount === 100 &&
+      abdoObligation?.signedAmount === -100 &&
       abdoProfit?.transactionType === 'PROFIT_SHARE';
 
     results.push({
       id: 3,
-      title: '3) شغل عبده الخارجي (ABDO_WORK): ربح عبده 300، ربح أحمد 100، التزام تسوية 700',
+      title: '3) شغل عبده الخارجي (ABDO_WORK): ربح عبده 300، ربح أحمد 100، التزام تسوية 100',
       passed: pass,
-      expected: 'أحمد ربح=100، عبده ربح=300، التزام تسوية=700 (ليس ربحًا)، مفصولان تمامًا',
+      expected: 'أحمد ربح=100، عبده ربح=300، التزام تسوية=100 (نسبة أحمد فقط)',
       actual: `أحمد ربح=${ahmedProfit?.signedAmount}, عبده ربح=${abdoProfit?.signedAmount}, التزام عبده=${abdoObligation?.amount}`,
       details: JSON.stringify(entries)
     });
@@ -466,15 +466,15 @@ export async function runPartnerLedgerTestSuite(): Promise<{
       balances.ahmedCogsRecovery === 600 &&
       balances.ahmedTotalEntitlements === 1300 &&
       balances.abdouProfitShare === 500 &&
-      balances.abdouSettlementObligation === 700 &&
-      balances.abdouNetBalance === -200 &&
+      balances.abdouSettlementObligation === 100 &&
+      balances.abdouNetBalance === 400 &&
       balances.replacementFundBalance === 600;
 
     results.push({
       id: 10,
       title: '10) استعلام الأرصدة المجمعة والتصفية (Partner Balances RPC & Query)',
       passed: pass,
-      expected: 'أحمد استحقاق=1300 (ربح 700 + استرداد 600)، عبده ربح=500، التزام عبده=700 (صافي -200)، الصندوق=600',
+      expected: 'أحمد استحقاق=1300 (ربح 700 + استرداد 600)، عبده ربح=500، التزام عبده=100 (صافي 400)، الصندوق=600',
       actual: `أحمد إجمالي=${balances.ahmedTotalEntitlements}, عبده ربح=${balances.abdouProfitShare}, عبده التزام=${balances.abdouSettlementObligation} (صافي=${balances.abdouNetBalance}), الصندوق=${balances.replacementFundBalance}`
     });
   } catch (err: any) {

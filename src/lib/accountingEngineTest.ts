@@ -144,16 +144,16 @@ export async function runAccountingTestSuite(): Promise<AccountingTestSuiteResul
       res3.grossProfit === 400 &&
       res3.ahmedProfitShare === 100 &&
       res3.abdouProfitShare === 300 &&
-      res3.abdouSettlementObligation === 700 &&
+      res3.abdouSettlementObligation === 100 &&
       res3.ahmedCogsRecovery === 0 &&
       res3.replacementFundAmount === 0;
 
-    const exp3 = "الربح 400 | أرباح أحمد 100 (25%) | أرباح عبده 300 (75%) | مطلوب تسويته من عبده 700";
+    const exp3 = "الربح 400 | أرباح أحمد 100 (25%) | أرباح عبده 300 (75%) | مطلوب تسويته من عبده 100";
     const act3 = `الربح ${res3.grossProfit} | أرباح أحمد ${res3.ahmedProfitShare} | أرباح عبده ${res3.abdouProfitShare} | تسوية عبده ${res3.abdouSettlementObligation}`;
     const diff3 = pass3 ? undefined : `القيم غير متطابقة: ${JSON.stringify(res3)}`;
     assertTest(3, "ABDO_WORK — شغل عبده", exp3, act3, pass3, diff3);
   } catch (e: any) {
-    assertTest(3, "ABDO_WORK — شغل عبده", "أحمد 100 | عبده 300 | تسوية عبده 700", `خطأ: ${e?.message}`, false);
+    assertTest(3, "ABDO_WORK — شغل عبده", "أحمد 100 | عبده 300 | تسوية عبده 100", `خطأ: ${e?.message}`, false);
   }
 
   // =========================================================================
