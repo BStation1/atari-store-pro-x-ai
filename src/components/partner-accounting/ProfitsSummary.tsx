@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   Calendar,
   Building2,
@@ -64,35 +64,7 @@ export default function ProfitsSummary({
   const { products } = useProducts();
   const { movements: rawMovements, loading: movementsLoading } = useInventoryMovements();
 
-  const isReady = !ordersLoading && !invoicesLoading && !movementsLoading && !partUsagesLoading;
-
-  const readyState = {
-    ordersLoading,
-    invoicesLoading,
-    movementsLoading,
-    partUsagesLoading,
-    isReady
-  };
-
-  const [lastReadyState, setLastReadyState] = useState<string>('');
-  useEffect(() => {
-    const serialized = JSON.stringify(readyState);
-    if (serialized !== lastReadyState) {
-      console.log(serialized);
-      setLastReadyState(serialized);
-    }
-  }, [readyState, lastReadyState]);
-
   // Current Date Helper Values
-  if (!isReady) {
-    return (
-      <div className="bg-[#11131e] border border-[#2a2d42] rounded-2xl p-6 text-center text-white">
-        <p className="text-lg font-black mb-2">جاري تحميل بيانات محاسبة الشركاء...</p>
-        <p className="text-xs text-gray-400">الرجاء الانتظار بينما يتم تحميل الأوامر والفواتير والمخزون والاستخدامات.</p>
-      </div>
-    );
-  }
-
   const now = new Date();
   const todayISO = now.toISOString().split('T')[0];
   const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
