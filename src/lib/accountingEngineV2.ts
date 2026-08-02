@@ -69,6 +69,9 @@ const money = (value: unknown): number => {
 const clean = (value: unknown): string => String(value ?? '').trim();
 const upper = (value: unknown): string => clean(value).toUpperCase();
 
+let lastMovementsAvailable = false;
+let lastUsagesAvailable = false;
+
 function orderIdentitySet(order: RepairOrder): Set<string> {
   const anyOrder = order as any;
   return new Set(
@@ -486,6 +489,22 @@ export function buildAccountingSummaryV2(input: {
   movements?: InventoryMovement[];
   usages?: RepairPartUsage[];
 }): AccountingSummaryV2 {
+  const currentMovementsAvailable = Array.isArray(input.movements);
+  const currentUsagesAvailable = Array.isArray(input.usages);
+  const recomputedAfterLoad = (!lastMovementsAvailable && currentMovementsAvailable) || (!lastUsagesAvailable && currentUsagesAvailable);
+  lastMovementsAvailable = currentMovementsAvailable;
+  lastUsagesAvailable = currentUsagesAvailable;
+
+  console.log(
+    'ACCOUNTING_SUMMARY_TRACE=' +
+    JSON.stringify({
+      ordersLength: (input.orders || []).length,
+      inventoryMovementsLength: (input.movements || []).length ?? 0,
+      repairPartUsagesLength: (input.usages || []).length ?? 0,
+      recomputedAfterLoad
+    })
+  );
+
   return calculateAccountingSummaryV2((input.orders || []).map(order =>
     calculateOrderAccountingV2(order, input.invoices || [], input.movements || [], input.usages || [])
   ));
