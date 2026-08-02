@@ -237,10 +237,13 @@ function legacyDeviceDetails(order: RepairOrder): AccountingPartDetail[] {
   const rows: AccountingPartDetail[] = [];
 
   (order.devices || []).forEach((device: any, deviceIndex: number) => {
-    // 1. First check if device has selectedRepairItems or technicalProcedures with explicit item costPrice / purchaseCost
+    // 1. First check if device has selectedRepairItems, technicalProcedures, repairItems, items, or parts with explicit item costPrice / purchaseCost
     const rawItems = [
       ...(Array.isArray(device.selectedRepairItems) ? device.selectedRepairItems : []),
-      ...(Array.isArray(device.technicalProcedures) ? device.technicalProcedures : [])
+      ...(Array.isArray(device.technicalProcedures) ? device.technicalProcedures : []),
+      ...(Array.isArray(device.repairItems) ? device.repairItems : []),
+      ...(Array.isArray(device.items) ? device.items : []),
+      ...(Array.isArray(device.parts) ? device.parts : [])
     ];
 
     const candidateItems = rawItems.filter(item => explicitItemPurchaseCost(item) !== null);
@@ -417,35 +420,6 @@ export function calculateOrderAccountingV2(
   }
 
   const anyOrder = order as any;
-
-  console.log("-------------------------");
-  console.log("ORDER");
-  console.log("order.id:", order.id);
-  console.log("order.number:", anyOrder.orderNumber ?? anyOrder.order_number ?? order.id);
-  console.log("party:", party);
-
-  (order.devices || []).forEach((device: any, idx: number) => {
-    console.log(`--- DEVICE ${idx} ---`);
-    console.log("device keys:", Object.keys(device));
-    console.log("selectedRepairItems:", JSON.stringify(device.selectedRepairItems));
-    console.log("technicalProcedures:", JSON.stringify(device.technicalProcedures));
-    console.log("repairItems:", JSON.stringify(device.repairItems));
-    console.log("partsPurchaseCost:", device.partsPurchaseCost);
-    console.log("purchaseCost:", device.purchaseCost);
-    console.log("partsCost:", device.partsCost);
-
-    const rawItems = [
-      ...(Array.isArray(device.selectedRepairItems) ? device.selectedRepairItems : []),
-      ...(Array.isArray(device.technicalProcedures) ? device.technicalProcedures : []),
-      ...(Array.isArray(device.repairItems) ? device.repairItems : [])
-    ];
-    const resolvedItemCosts = rawItems.map(item => ({ name: item?.name || item?.label, cost: explicitItemPurchaseCost(item), rawItem: item }));
-    console.log("resolved explicit item cost:", JSON.stringify(resolvedItemCosts));
-    console.log("resolved explicit device cost:", explicitDevicePurchaseCost(device));
-  });
-
-  console.log("purchaseCostStatus:", purchaseCostStatus);
-  console.log("-------------------------");
 
   return {
     orderId: order.id,
