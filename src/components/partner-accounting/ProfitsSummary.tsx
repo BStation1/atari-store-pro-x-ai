@@ -28,6 +28,7 @@ import { useRepairPartUsages, useInvoices, useProducts, useInventoryMovements } 
 
 interface ProfitsSummaryProps {
   orders: RepairOrder[];
+  ordersLoading?: boolean;
   currencySymbol?: string;
 }
 
@@ -55,19 +56,36 @@ export interface AggregatedItem {
 
 export default function ProfitsSummary({
   orders,
+  ordersLoading = false,
   currencySymbol = 'ج.م.'
 }: ProfitsSummaryProps) {
-  const { partUsages } = useRepairPartUsages();
-  const { invoices } = useInvoices();
+  const { partUsages, loading: partUsagesLoading } = useRepairPartUsages();
+  const { invoices, loading: invoicesLoading } = useInvoices();
   const { products } = useProducts();
-  const { movements: rawMovements } = useInventoryMovements();
+  const { movements: rawMovements, loading: movementsLoading } = useInventoryMovements();
 
-  console.log('COMPONENT_PROFITSSUMMARY_BUILD_SUMMARY=' + JSON.stringify({
-    inventoryMovementsLength: (rawMovements || []).length,
-    repairPartUsagesLength: partUsages.length
-  }));
+  const isReady = !ordersLoading && !invoicesLoading && !movementsLoading && !partUsagesLoading;
+
+  const readyState = {
+    ordersLoading,
+    invoicesLoading,
+    movementsLoading,
+    partUsagesLoading,
+    isReady
+  };
+
+  console.log('COMPONENT_PROFITSSUMMARY_READY_STATE=' + JSON.stringify(readyState));
 
   // Current Date Helper Values
+  if (!isReady) {
+    return (
+      <div className="bg-[#11131e] border border-[#2a2d42] rounded-2xl p-6 text-center text-white">
+        <p className="text-lg font-black mb-2">جاري تحميل بيانات محاسبة الشركاء...</p>
+        <p className="text-xs text-gray-400">الرجاء الانتظار بينما يتم تحميل الأوامر والفواتير والمخزون والاستخدامات.</p>
+      </div>
+    );
+  }
+
   const now = new Date();
   const todayISO = now.toISOString().split('T')[0];
   const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;

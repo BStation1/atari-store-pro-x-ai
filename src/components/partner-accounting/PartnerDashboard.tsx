@@ -10,7 +10,7 @@ interface PartnerDashboardProps {
 }
 
 export default function PartnerDashboard({ currentUserId = "U-101" }: PartnerDashboardProps) {
-  const { orders } = useRepairOrders();
+  const { orders, loading: ordersLoading } = useRepairOrders();
   const [activeTab, setActiveTab] = useState<"summary" | "statement" | "settlements">("summary");
 
   return (
@@ -55,7 +55,7 @@ export default function PartnerDashboard({ currentUserId = "U-101" }: PartnerDas
       </div>
 
       {/* Tab Content */}
-      {activeTab === "summary" && <ProfitsSummary orders={orders} />}
+      {activeTab === "summary" && <ProfitsSummary orders={orders} ordersLoading={ordersLoading} />}
       {activeTab === "statement" && <PartnerStatement />}
       {activeTab === "settlements" && <MonthlySettlements currentUserId={currentUserId} />}
     </div>
