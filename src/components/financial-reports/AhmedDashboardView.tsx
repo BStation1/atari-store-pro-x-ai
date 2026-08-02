@@ -17,6 +17,8 @@ import {
 import { Expense, MonthlySettlementResult, RepairOrder, WorkOwnershipType } from '../../types';
 import { PartnerLedgerEntry } from '../../lib/partnerLedgerEngine';
 import { calculateAhmedDashboardData, formatDateISO, roundMoney } from '../../lib/finalReportsEngine';
+import { calculateOrderAccountingV2 } from '../../lib/accountingEngineV2';
+import { useInvoices, useInventoryMovements, useRepairPartUsages } from '../../hooks/useData';
 
 interface AhmedDashboardViewProps {
   partnerLedger: PartnerLedgerEntry[];
@@ -33,71 +35,36 @@ export default function AhmedDashboardView({
   orders = [],
   currencySymbol = 'ج.م.'
 }: AhmedDashboardViewProps) {
+  const { invoices } = useInvoices();
+  const { movements } = useInventoryMovements();
+  const { partUsages } = useRepairPartUsages();
   const [dateFrom, setDateFrom] = useState<string>('');
   const [dateTo, setDateTo] = useState<string>('');
 
   const ahmedData = calculateAhmedDashboardData(partnerLedger, expenses, settlements, dateFrom, dateTo);
 
-  // Filter repair orders for Ahmed's report
-  const filteredOrders = orders.filter((o) => {
-    if (o.receivedDate) {
-      const orderDate = formatDateISO(o.receivedDate);
+  const engineRows = orders
+    .map(order => calculateOrderAccountingV2(order, invoices, movements, partUsages))
+    .filter(row => {
+      const orderDate = formatDateISO(row.date);
       if (dateFrom && orderDate < dateFrom) return false;
       if (dateTo && orderDate > dateTo) return false;
-    }
-    return true;
-  });
+      return true;
+    });
 
-  // Calculate Ahmed's 3 revenue streams from repair orders
   let ahmedPrivateProfits = 0;
   let ahmedShopShare = 0;
   let ahmedFromAbdoShare = 0;
 
-  const orderRows = filteredOrders.map((o) => {
-    const orderNum = (o as any).orderNumber || o.id;
-    const customer = o.customerNameSnapshot || o.guestCustomerName || 'عميل نقدي';
-    const totalInvoice = Number(o.finalRepairPrice ?? o.totalEstimatedCost) || 0;
-    const discount = Number(o.discount) || 0;
-    const netRevenue = Math.max(0, totalInvoice - discount);
-    const partsCost = o.devices?.reduce((sum, d) => sum + (Number(d.partsCost) || 0), 0) || 0;
-    const otherCosts = Number(o.otherDirectCosts) || 0;
-    const netProfit = Math.max(0, netRevenue - partsCost - otherCosts);
-
-    const ownership = o.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
-
-    let ahmedEntitlement = 0;
-    let workTypeLabel = 'شغل المحل';
-    let entitlementNote = '50% أرباح شراكة المحل';
-
-    if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) {
-      ahmedEntitlement = netProfit; // 100%
-      ahmedPrivateProfits += ahmedEntitlement;
-      workTypeLabel = 'شغل أحمد';
-      entitlementNote = '100% أرباح خاصة لأحمد';
-    } else if (ownership === WorkOwnershipType.CUSTOMER_SHARED) {
-      ahmedEntitlement = roundMoney(netProfit * 0.5); // 50%
-      ahmedShopShare += ahmedEntitlement;
-      workTypeLabel = 'شغل المحل';
-      entitlementNote = '50% نصيب من أرباح المحل';
-    } else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) {
-      ahmedEntitlement = roundMoney(netProfit * 0.25); // 25%
-      ahmedFromAbdoShare += ahmedEntitlement;
-      workTypeLabel = 'شغل عبده';
-      entitlementNote = '25% تضاف لحساب أحمد الشخصي';
-    }
-
+  const orderRows = engineRows.map(row => {
+    if (row.party === 'AHMED') ahmedPrivateProfits += row.ahmedShare;
+    else if (row.party === 'SHOP') ahmedShopShare += row.ahmedShare;
+    else if (row.party === 'ABDO') ahmedFromAbdoShare += row.ahmedShare;
     return {
-      id: o.id,
-      orderNum,
-      customer,
-      date: formatDateISO(o.receivedDate),
-      ownership,
-      workTypeLabel,
-      totalInvoice,
-      partsCost,
-      netProfit,
-      ahmedEntitlement,
-      entitlementNote
+      id: row.orderId, orderNum: row.orderNumber, customer: row.customerName, date: formatDateISO(row.date),
+      ownership: row.sourceOrder.workOwnershipType, workTypeLabel: row.workLabel, totalInvoice: row.revenue,
+      partsCost: row.purchaseCost, netProfit: row.netProfit, ahmedEntitlement: row.ahmedShare,
+      entitlementNote: row.party === 'AHMED' ? '100% أرباح خاصة لأحمد' : row.party === 'ABDO' ? '25% من صافي شغل عبده' : '50% من صافي شغل المحل'
     };
   });
 

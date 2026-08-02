@@ -12,6 +12,8 @@ import {
 } from 'lucide-react';
 import { RepairOrder, WorkOwnershipType } from '../../types';
 import { roundMoney, formatDateISO } from '../../lib/finalReportsEngine';
+import { calculateOrderAccountingV2 } from '../../lib/accountingEngineV2';
+import { useInvoices, useInventoryMovements, useRepairPartUsages } from '../../hooks/useData';
 
 interface ShopProfitsReportViewProps {
   orders: RepairOrder[];
@@ -22,48 +24,26 @@ export default function ShopProfitsReportView({
   orders,
   currencySymbol = 'ج.م.'
 }: ShopProfitsReportViewProps) {
+  const { invoices } = useInvoices();
+  const { movements } = useInventoryMovements();
+  const { partUsages } = useRepairPartUsages();
   const [dateFrom, setDateFrom] = useState<string>('');
   const [dateTo, setDateTo] = useState<string>('');
 
-  // Filter ONLY Shop Work ("شغل المحل")
-  const shopOrders = orders.filter((o) => {
-    const ownership = o.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
-    if (ownership !== WorkOwnershipType.CUSTOMER_SHARED) return false;
-
-    if (o.receivedDate) {
-      const orderDate = formatDateISO(o.receivedDate);
+  const engineRows = orders.map(order => calculateOrderAccountingV2(order, invoices, movements, partUsages));
+  const rows = engineRows
+    .filter(row => row.party === 'SHOP')
+    .filter(row => {
+      const orderDate = formatDateISO(row.date);
       if (dateFrom && orderDate < dateFrom) return false;
       if (dateTo && orderDate > dateTo) return false;
-    }
-    return true;
-  });
-
-  // Calculate Order Breakdown Rows
-  const rows = shopOrders.map((o) => {
-    const orderNum = (o as any).orderNumber || o.id;
-    const customer = o.customerNameSnapshot || o.guestCustomerName || 'عميل نقدي';
-    const totalInvoice = Number(o.finalRepairPrice ?? o.totalEstimatedCost) || 0;
-    const discount = Number(o.discount) || 0;
-    const netRevenue = Math.max(0, totalInvoice - discount);
-    const partsCost = o.devices?.reduce((sum, d) => sum + (Number(d.partsCost) || 0), 0) || 0;
-    const otherCosts = Number(o.otherDirectCosts) || 0;
-    const netProfit = Math.max(0, netRevenue - partsCost - otherCosts);
-    const ahmedShare = roundMoney(netProfit * 0.5);
-    const abdoShare = roundMoney(netProfit * 0.5);
-
-    return {
-      id: o.id,
-      orderNum,
-      customer,
-      date: formatDateISO(o.receivedDate),
-      status: o.status,
-      totalInvoice,
-      partsCost,
-      netProfit,
-      ahmedShare,
-      abdoShare
-    };
-  });
+      return true;
+    })
+    .map(row => ({
+      id: row.orderId, orderNum: row.orderNumber, customer: row.customerName, date: formatDateISO(row.date),
+      status: row.sourceOrder.status, totalInvoice: row.revenue, partsCost: row.purchaseCost,
+      netProfit: row.netProfit, ahmedShare: row.ahmedShare, abdoShare: row.abdoShare
+    }));
 
   // Totals
   const totalInvoiceSum = roundMoney(rows.reduce((s, r) => s + r.totalInvoice, 0));

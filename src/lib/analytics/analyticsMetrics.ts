@@ -6,6 +6,7 @@
  */
 
 import { db } from '../db';
+import { buildAccountingSummaryV2, calculateDirectSalesAccountingV2, calculateOrderAccountingV2 } from '../accountingEngineV2';
 import {
   isDateInRange,
   formatDateKey,
@@ -200,37 +201,21 @@ export function calculateProfitAnalytics(
   const validInvoices = invoices.filter(inv => !inv.isCancelled && inv.isPaid && isDateInRange(inv.date, start, end));
   const validExpenses = rawExpenses.filter(exp => !exp.isCancelled && isDateInRange(exp.date, start, end));
 
-  // Repair Profit: Repair Revenue - Spare Parts Cost
-  let repairRevenue = 0;
-  let sparePartsCost = 0;
-
-  validRepairs.forEach(ro => {
-    const rev = Number(ro.finalRepairPrice ?? ro.totalEstimatedCost ?? ro.advancePayment) || 0;
-    repairRevenue += rev;
-
-    const devices = ro.devices || [];
-    devices.forEach(dev => {
-      const pCost = Number(dev.partsCost) || 0;
-      const itemsCost = (dev.selectedRepairItems || []).reduce((sum, item) => sum + ((Number(item.costPrice) || 0) * (Number(item.quantity) || 1)), 0);
-      sparePartsCost += Math.max(pCost, itemsCost);
-    });
+  // Repair and sales profit use Accounting Engine V2 to avoid treating selling prices as COGS.
+  const accounting = buildAccountingSummaryV2({
+    orders: validRepairs,
+    invoices: validInvoices,
+    movements: db.getInventoryMovements ? db.getInventoryMovements() : [],
+    usages: db.getRepairPartUsages ? db.getRepairPartUsages() : []
   });
+  const repairRevenue = accounting.finalizedRevenue;
+  const sparePartsCost = accounting.totalPurchaseCost;
+  const repairProfit = accounting.totalNetProfit;
 
-  const repairProfit = repairRevenue - sparePartsCost;
-
-  // Sales Profit: Sales Revenue - COGS
-  let salesRevenue = 0;
-  let cogs = 0;
-
-  validInvoices.filter(inv => inv.type !== 'repair' && !inv.orderId).forEach(inv => {
-    salesRevenue += Number(inv.paidAmount ?? inv.totalAmount) || 0;
-    const items = inv.items || [];
-    items.forEach(item => {
-      cogs += (Number(item.costPrice) || 0) * (Number(item.quantity) || 1);
-    });
-  });
-
-  const salesProfit = salesRevenue - cogs;
+  const directSales = calculateDirectSalesAccountingV2(validInvoices);
+  const salesRevenue = directSales.revenue;
+  const cogs = directSales.purchaseCost;
+  const salesProfit = directSales.grossProfit;
 
   // Operating Expenses
   const operatingExpenses = validExpenses.reduce((sum, exp) => sum + (Number(exp.amount) || 0), 0);

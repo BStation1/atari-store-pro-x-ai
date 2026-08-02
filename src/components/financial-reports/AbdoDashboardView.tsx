@@ -11,6 +11,8 @@ import {
 import { Expense, MonthlySettlementResult, RepairOrder, WorkOwnershipType } from '../../types';
 import { PartnerLedgerEntry } from '../../lib/partnerLedgerEngine';
 import { calculateAbdoDashboardData, formatDateISO, roundMoney } from '../../lib/finalReportsEngine';
+import { calculateOrderAccountingV2 } from '../../lib/accountingEngineV2';
+import { useInvoices, useInventoryMovements, useRepairPartUsages } from '../../hooks/useData';
 
 interface AbdoDashboardViewProps {
   partnerLedger: PartnerLedgerEntry[];
@@ -27,69 +29,34 @@ export default function AbdoDashboardView({
   orders = [],
   currencySymbol = 'ج.م.'
 }: AbdoDashboardViewProps) {
+  const { invoices } = useInvoices();
+  const { movements } = useInventoryMovements();
+  const { partUsages } = useRepairPartUsages();
   const [dateFrom, setDateFrom] = useState<string>('');
   const [dateTo, setDateTo] = useState<string>('');
 
   const abdoData = calculateAbdoDashboardData(partnerLedger, expenses, settlements, dateFrom, dateTo);
 
-  // Filter repair orders for Abdo's report
-  const filteredOrders = orders.filter((o) => {
-    if (o.receivedDate) {
-      const orderDate = formatDateISO(o.receivedDate);
+  const engineRows = orders
+    .map(order => calculateOrderAccountingV2(order, invoices, movements, partUsages))
+    .filter(row => {
+      const orderDate = formatDateISO(row.date);
       if (dateFrom && orderDate < dateFrom) return false;
       if (dateTo && orderDate > dateTo) return false;
-    }
-    return true;
-  });
+      return true;
+    });
 
-  // Calculate Abdo's 2 revenue streams from repair orders
   let abdoShopShare = 0;
   let abdoPrivateProfits = 0;
 
-  const orderRows = filteredOrders.map((o) => {
-    const orderNum = (o as any).orderNumber || o.id;
-    const customer = o.customerNameSnapshot || o.guestCustomerName || 'عميل نقدي';
-    const totalInvoice = Number(o.finalRepairPrice ?? o.totalEstimatedCost) || 0;
-    const discount = Number(o.discount) || 0;
-    const netRevenue = Math.max(0, totalInvoice - discount);
-    const partsCost = o.devices?.reduce((sum, d) => sum + (Number(d.partsCost) || 0), 0) || 0;
-    const otherCosts = Number(o.otherDirectCosts) || 0;
-    const netProfit = Math.max(0, netRevenue - partsCost - otherCosts);
-
-    const ownership = o.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
-
-    let abdoEntitlement = 0;
-    let workTypeLabel = 'شغل المحل';
-    let entitlementNote = '50% أرباح شراكة المحل';
-
-    if (ownership === WorkOwnershipType.CUSTOMER_SHARED) {
-      abdoEntitlement = roundMoney(netProfit * 0.5); // 50%
-      abdoShopShare += abdoEntitlement;
-      workTypeLabel = 'شغل المحل';
-      entitlementNote = '50% نصيب من أرباح المحل';
-    } else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) {
-      abdoEntitlement = roundMoney(netProfit * 0.75); // 75%
-      abdoPrivateProfits += abdoEntitlement;
-      workTypeLabel = 'شغل عبده';
-      entitlementNote = '75% أرباح خاصة لعبده';
-    } else if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) {
-      abdoEntitlement = 0;
-      workTypeLabel = 'شغل أحمد';
-      entitlementNote = 'خاصة بأحمد بالكامل (0% لعبده)';
-    }
-
+  const orderRows = engineRows.map(row => {
+    if (row.party === 'SHOP') abdoShopShare += row.abdoShare;
+    else if (row.party === 'ABDO') abdoPrivateProfits += row.abdoShare;
     return {
-      id: o.id,
-      orderNum,
-      customer,
-      date: formatDateISO(o.receivedDate),
-      ownership,
-      workTypeLabel,
-      totalInvoice,
-      partsCost,
-      netProfit,
-      abdoEntitlement,
-      entitlementNote
+      id: row.orderId, orderNum: row.orderNumber, customer: row.customerName, date: formatDateISO(row.date),
+      ownership: row.sourceOrder.workOwnershipType, workTypeLabel: row.workLabel, totalInvoice: row.revenue,
+      partsCost: row.purchaseCost, netProfit: row.netProfit, abdoEntitlement: row.abdoShare,
+      entitlementNote: row.party === 'ABDO' ? '75% من صافي شغل عبده' : row.party === 'SHOP' ? '50% من صافي شغل المحل' : 'شغل أحمد (0% لعبده)'
     };
   });
 

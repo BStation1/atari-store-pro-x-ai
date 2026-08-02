@@ -8,6 +8,7 @@
 import { db } from '../db';
 import { syncQueue } from '../sync/syncQueue';
 import { calculateSyncHealthMetrics, verifyAuditChain, getAllAuditEvents } from '../sync/audit';
+import { buildAccountingSummaryV2 } from '../accountingEngineV2';
 import {
   DashboardMetrics,
   DashboardKPISummary,
@@ -61,24 +62,14 @@ export function computeTotalRevenueMetric(): KPIItem {
 }
 
 export function computeRepairProfitMetric(): KPIItem {
-  const repairOrders = db.getRepairOrders() || [];
-  const validRepairs = repairOrders.filter(ro => ro.status !== 'Cancelled');
-
-  const repairRevenue = validRepairs.reduce((sum, ro) => {
-    return sum + (ro.finalRepairPrice || ro.totalEstimatedCost || ro.advancePayment || 0);
-  }, 0);
-
-  const sparePartsCost = validRepairs.reduce((sum, ro) => {
-    const devices = ro.devices || [];
-    const devicesPartsCost = devices.reduce((dSum, dev) => {
-      const pCost = dev.partsCost || 0;
-      const itemsCost = (dev.selectedRepairItems || []).reduce((iSum, item) => iSum + ((item.costPrice || 0) * (item.quantity || 1)), 0);
-      return dSum + Math.max(pCost, itemsCost);
-    }, 0);
-    return sum + devicesPartsCost;
-  }, 0);
-
-  const profit = repairRevenue - sparePartsCost;
+  const repairOrders = (db.getRepairOrders() || []).filter(ro => ro.status !== 'Cancelled');
+  const accounting = buildAccountingSummaryV2({
+    orders: repairOrders,
+    invoices: db.getInvoices() || [],
+    movements: db.getInventoryMovements ? db.getInventoryMovements() : [],
+    usages: db.getRepairPartUsages ? db.getRepairPartUsages() : []
+  });
+  const profit = accounting.totalNetProfit;
 
   return {
     id: 'kpi-repair-profit',
@@ -90,10 +81,12 @@ export function computeRepairProfitMetric(): KPIItem {
     category: 'finance',
     status: profit >= 0 ? 'good' : 'warning',
     trendStatus: 'NOT_AVAILABLE',
-    dataQuality: validRepairs.length > 0 ? 'VALID' : 'INSUFFICIENT_DATA',
-    sourceCount: validRepairs.length,
+    dataQuality: accounting.incompleteRows.length > 0 ? 'INSUFFICIENT_DATA' : (repairOrders.length > 0 ? 'VALID' : 'INSUFFICIENT_DATA'),
+    sourceCount: accounting.completeRows.length,
     lastCalculatedAt: nowIso(),
-    subtext: 'إيرادات الصيانة - تكلفة قطع الغيار'
+    subtext: accounting.incompleteRows.length > 0
+      ? `أرباح مكتملة؛ ${accounting.incompleteRows.length} أوردر معلق التكلفة`
+      : 'إيرادات الصيانة - تكلفة شراء قطع الغيار'
   };
 }
 
