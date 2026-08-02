@@ -284,7 +284,7 @@ export default function ProfitsSummary({
   const abdoTotalNetProfit = roundMoney(abdoSummary.totalNetProfit);
   const abdoAhmed25Share = roundMoney(abdoSummary.totalAhmedShare);
   const abdoAbdo75Profit = roundMoney(abdoSummary.totalAbdoShare);
-  const abdoTotalOwedByAbdo = roundMoney(abdoSummary.totalAhmedShare);
+  const abdoTotalOwedByAbdo = roundMoney(abdoSummary.totalAmountDueFromAbdo);
 
   // Print & Export Handlers
   const handlePrint = () => {
@@ -337,7 +337,7 @@ export default function ProfitsSummary({
     csvRows.push(['إجمالي تكلفة البضاعة المسحوبة', abdoTotalPartsCost]);
     csvRows.push(['نسبة أحمد (25%)', abdoAhmed25Share]);
     csvRows.push(['صافي ربح عبده (75%)', abdoAbdo75Profit]);
-    csvRows.push(['إجمالي المستحق على عبده (نسبة أحمد 25%)', abdoTotalOwedByAbdo]);
+    csvRows.push(['إجمالي المستحق على عبده', abdoTotalOwedByAbdo]);
 
     const csvContent =
       'data:text/csv;charset=utf-8,\uFEFF' +
@@ -575,7 +575,7 @@ export default function ProfitsSummary({
 
           <div className="bg-[#131625] p-2.5 rounded-xl border border-amber-500/20 text-xs text-amber-200/90 flex items-center justify-between">
             <span>
-              💡 <strong>معادلة التسوية:</strong> إجمالي المستحق على عبده = نسبة أحمد 25% من صافي الربح = <strong>{abdoTotalOwedByAbdo.toLocaleString('ar-EG')} ج.م.</strong>
+              💡 <strong>معادلة التسوية:</strong> إجمالي المستحق على عبده = تكلفة الشراء + نصيب أحمد = <strong>{abdoTotalOwedByAbdo.toLocaleString('ar-EG')} ج.م.</strong>
             </span>
           </div>
         </div>

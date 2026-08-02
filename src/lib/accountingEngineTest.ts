@@ -4,6 +4,7 @@ import {
   InvoiceAccountingInput,
   InvoiceAccountingResult
 } from './accountingEngine';
+import { calculateOrderAccountingV2, buildAccountingSummaryV2 } from './accountingEngineV2';
 import { supabase } from './supabaseClient';
 
 export interface SingleTestDetail {
@@ -154,6 +155,49 @@ export async function runAccountingTestSuite(): Promise<AccountingTestSuiteResul
     assertTest(3, "ABDO_WORK — شغل عبده", exp3, act3, pass3, diff3);
   } catch (e: any) {
     assertTest(3, "ABDO_WORK — شغل عبده", "أحمد 100 | عبده 300 | تسوية عبده 100", `خطأ: ${e?.message}`, false);
+  }
+
+  // =========================================================================
+  // Test 3.1: ABDO_WORK amount due from Abdo uses purchaseCost + Ahmed share
+  // =========================================================================
+  try {
+    const abdoOrder = {
+      id: 'TEST-ABDO-001',
+      orderNumber: 'ABDO-001',
+      receivedDate: '2026-08-02T00:00:00Z',
+      customerName: 'Test Customer',
+      workOwnershipType: 'ABDO',
+      finalRepairPrice: 1200,
+      discount: 0,
+      devices: [
+        {
+          selectedRepairItems: [
+            {
+              id: 'legacy-part-1',
+              name: 'Test Part',
+              quantity: 1,
+              costPrice: 100
+            }
+          ]
+        }
+      ]
+    } as any;
+
+    const accounting = calculateOrderAccountingV2(abdoOrder, [], [], []);
+    const pass3_1 =
+      accounting.revenue === 1200 &&
+      accounting.purchaseCost === 100 &&
+      accounting.netProfit === 1100 &&
+      accounting.ahmedShare === 275 &&
+      accounting.abdoShare === 825 &&
+      accounting.amountDueFromAbdo === 375;
+
+    const exp3_1 = "المستحق على عبده = تكلفة الشراء + نصيب أحمد";
+    const act3_1 = `amountDueFromAbdo=${accounting.amountDueFromAbdo} purchaseCost=${accounting.purchaseCost} ahmedShare=${accounting.ahmedShare}`;
+    const diff3_1 = pass3_1 ? undefined : `القيم غير متطابقة: ${JSON.stringify(accounting)}`;
+    assertTest(3.1, "ABDO_WORK V2 — amountDueFromAbdo uses purchaseCost+ahmedShare", exp3_1, act3_1, pass3_1, diff3_1);
+  } catch (e: any) {
+    assertTest(3.1, "ABDO_WORK V2 — amountDueFromAbdo uses purchaseCost+ahmedShare", "amountDueFromAbdo=375", `خطأ: ${e?.message}`, false);
   }
 
   // =========================================================================

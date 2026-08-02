@@ -453,7 +453,7 @@ export function calculateOrderAccountingV2(
     netProfit,
     ahmedShare,
     abdoShare,
-    amountDueFromAbdo: party === 'ABDO' ? ahmedShare : 0,
+    amountDueFromAbdo: party === 'ABDO' ? money(purchaseCost + ahmedShare) : 0,
     partsQuantity: partsAccounting.partsQuantity,
     parts: partsAccounting.parts,
     costSource: partsAccounting.costSource,
