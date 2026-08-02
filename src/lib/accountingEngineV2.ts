@@ -277,9 +277,15 @@ export function resolveOrderPartsAccounting(
   movements: InventoryMovement[],
   usages: RepairPartUsage[]
 ): Pick<OrderAccountingV2, 'purchaseCost' | 'partsQuantity' | 'parts' | 'costSource' | 'purchaseCostStatus' | 'isAccountingIncomplete'> {
+  const traceOrderId = (order as any)?.id;
+  const traceOrderNumber = (order as any)?.orderNumber ?? (order as any)?.order_number;
+  console.log('[ACCOUNTING_TRACE] resolveOrderPartsAccounting:start', { orderId: traceOrderId, orderNumber: traceOrderNumber });
+
   const linkedMovements = (movements || []).filter(
     movement => isOutgoingMovement(movement) && movementMatchesOrder(movement, order)
   );
+
+  console.log('[ACCOUNTING_TRACE] resolveOrderPartsAccounting:linkedMovements', { orderId: traceOrderId, linkedMovements: linkedMovements.length });
 
   if (linkedMovements.length > 0) {
     const parts = linkedMovements.map((movement: any, index) => {
@@ -293,17 +299,20 @@ export function resolveOrderPartsAccounting(
         source: 'INVENTORY_MOVEMENT' as const
       };
     });
-    return {
+    const result = {
       parts,
       purchaseCost: money(parts.reduce((sum, part) => sum + part.totalPurchaseCost, 0)),
       partsQuantity: parts.reduce((sum, part) => sum + part.quantity, 0),
-      costSource: 'INVENTORY_MOVEMENTS',
-      purchaseCostStatus: 'RECORDED',
+      costSource: 'INVENTORY_MOVEMENTS' as const,
+      purchaseCostStatus: 'RECORDED' as const,
       isAccountingIncomplete: false
     };
+    console.log('[ACCOUNTING_TRACE] resolveOrderPartsAccounting:result', { orderId: traceOrderId, orderNumber: traceOrderNumber, costSource: result.costSource, purchaseCostStatus: result.purchaseCostStatus, purchaseCost: result.purchaseCost });
+    return result;
   }
 
   const linkedUsages = (usages || []).filter(usage => isActiveUsage(usage) && usageMatchesOrder(usage, order));
+  console.log('[ACCOUNTING_TRACE] resolveOrderPartsAccounting:linkedUsages', { orderId: traceOrderId, linkedUsages: linkedUsages.length });
   if (linkedUsages.length > 0) {
     const parts = linkedUsages.map((usage, index) => {
       const quantity = Math.max(0, Number(usage.quantity) || 0);
@@ -318,40 +327,53 @@ export function resolveOrderPartsAccounting(
         source: 'REPAIR_PART_USAGE' as const
       };
     });
-    return {
+    const result = {
       parts,
       purchaseCost: money(parts.reduce((sum, part) => sum + part.totalPurchaseCost, 0)),
       partsQuantity: parts.reduce((sum, part) => sum + part.quantity, 0),
-      costSource: 'REPAIR_PART_USAGES',
-      purchaseCostStatus: 'RECORDED',
+      costSource: 'REPAIR_PART_USAGES' as const,
+      purchaseCostStatus: 'RECORDED' as const,
       isAccountingIncomplete: false
     };
+    console.log('[ACCOUNTING_TRACE] resolveOrderPartsAccounting:result', { orderId: traceOrderId, orderNumber: traceOrderNumber, costSource: result.costSource, purchaseCostStatus: result.purchaseCostStatus, purchaseCost: result.purchaseCost });
+    return result;
   }
 
   const parts = legacyDeviceDetails(order);
+  console.log('[ACCOUNTING_TRACE] resolveOrderPartsAccounting:legacyDeviceDetails', { orderId: traceOrderId, parts: parts });
   if (parts.length > 0) {
     const source = parts.some(part => part.source === 'LEGACY_ITEM') ? 'LEGACY_ITEMS' : 'LEGACY_DEVICE';
-    return {
+    const result = {
       parts,
       purchaseCost: money(parts.reduce((sum, part) => sum + part.totalPurchaseCost, 0)),
       partsQuantity: parts.reduce((sum, part) => sum + part.quantity, 0),
-      costSource: source,
-      purchaseCostStatus: 'RECORDED',
+      costSource: source as const,
+      purchaseCostStatus: 'RECORDED' as const,
       isAccountingIncomplete: false
     };
+    console.log('[ACCOUNTING_TRACE] resolveOrderPartsAccounting:result', { orderId: traceOrderId, orderNumber: traceOrderNumber, costSource: result.costSource, purchaseCostStatus: result.purchaseCostStatus, purchaseCost: result.purchaseCost });
+    return result;
   }
 
-  if (hasPartEvidence(order)) {
-    return {
-      parts: [], purchaseCost: 0, partsQuantity: 0, costSource: 'NONE',
-      purchaseCostStatus: 'UNKNOWN_LEGACY_COST', isAccountingIncomplete: true
+  const purchaseCostBeforeFallback = money(parts.reduce((sum, part) => sum + part.totalPurchaseCost, 0));
+  const hasEvidence = hasPartEvidence(order);
+  console.log('[ACCOUNTING_TRACE] resolveOrderPartsAccounting:pre-fallback', { orderId: traceOrderId, hasPartEvidence: hasEvidence, purchaseCostBeforeFallback });
+
+  if (hasEvidence) {
+    const result = {
+      parts: [], purchaseCost: 0, partsQuantity: 0, costSource: 'NONE' as const,
+      purchaseCostStatus: 'UNKNOWN_LEGACY_COST' as const, isAccountingIncomplete: true
     };
+    console.log('[ACCOUNTING_TRACE] resolveOrderPartsAccounting:result', { orderId: traceOrderId, orderNumber: traceOrderNumber, costSource: result.costSource, purchaseCostStatus: result.purchaseCostStatus, purchaseCost: result.purchaseCost });
+    return result;
   }
 
-  return {
-    parts: [], purchaseCost: 0, partsQuantity: 0, costSource: 'NONE',
-    purchaseCostStatus: 'NO_PARTS', isAccountingIncomplete: false
+  const finalResult = {
+    parts: [], purchaseCost: 0, partsQuantity: 0, costSource: 'NONE' as const,
+    purchaseCostStatus: 'NO_PARTS' as const, isAccountingIncomplete: false
   };
+  console.log('[ACCOUNTING_TRACE] resolveOrderPartsAccounting:result', { orderId: traceOrderId, orderNumber: traceOrderNumber, costSource: finalResult.costSource, purchaseCostStatus: finalResult.purchaseCostStatus, purchaseCost: finalResult.purchaseCost });
+  return finalResult;
 }
 
 export function calculateOrderAccountingV2(
