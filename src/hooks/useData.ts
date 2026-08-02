@@ -455,11 +455,14 @@ export function useProducts() {
 
 export function useInventoryMovements(productId?: string) {
   const trigger = useDbTrigger(['atari_inventory_movements', 'atari_products']);
-  const [movements, setMovements] = useState<any[]>([]);
+  const [movements, setMovements] = useState<any[]>(() => db.getInventoryMovements ? db.getInventoryMovements() : []);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const requestId = useRef(0);
 
   useEffect(() => {
+    requestId.current += 1;
+    const currentRequestId = requestId.current;
     let active = true;
     setLoading(true);
     setError(null);
@@ -469,15 +472,15 @@ export function useInventoryMovements(productId?: string) {
       try {
         const movs = await getInventoryMovements(productId);
         console.log('HOOK_INVENTORY_MOVEMENTS_FETCH_SUCCESS=' + JSON.stringify({ productId, dataLength: movs?.length ?? 0 }));
-        if (active) {
-          setMovements(movs);
+        if (active && currentRequestId === requestId.current) {
+          setMovements(movs ?? (db.getInventoryMovements ? db.getInventoryMovements() : []));
           setError(null);
         }
       } catch (err: any) {
         console.log('HOOK_INVENTORY_MOVEMENTS_FETCH_ERROR=' + JSON.stringify({ productId, error: err?.message || String(err) }));
-        if (active) {
+        if (active && currentRequestId === requestId.current) {
           console.warn("⚠️ Error fetching inventory movements:", err);
-          setMovements(db.getInventoryMovements ? db.getInventoryMovements() : []);
+          setMovements(prev => prev.length > 0 ? prev : (db.getInventoryMovements ? db.getInventoryMovements() : []));
           setError(err?.message || String(err));
         }
       } finally {
@@ -496,12 +499,11 @@ export function useInventoryMovements(productId?: string) {
   }, [trigger, productId]);
 
   useEffect(() => {
-    console.log('HOOK_INVENTORY_MOVEMENTS=' + JSON.stringify({
+    console.log('HOOK_INVENTORY_MOVEMENTS_RENDER=' + JSON.stringify({
       loading,
-      error,
       dataLength: movements.length
     }));
-  }, [loading, error, movements.length]);
+  }, [loading, movements.length]);
 
   return { movements, loading, error };
 }
@@ -1196,8 +1198,11 @@ export function useRepairPartUsages() {
   const [partUsages, setPartUsages] = useState<RepairPartUsage[]>(() => db.getRepairPartUsages());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const requestId = useRef(0);
 
   useEffect(() => {
+    requestId.current += 1;
+    const currentRequestId = requestId.current;
     let active = true;
     setLoading(true);
     setError(null);
@@ -1207,14 +1212,14 @@ export function useRepairPartUsages() {
       try {
         const res = await fetchOrMigrateRepairPartUsages();
         console.log('HOOK_REPAIR_PART_USAGES_FETCH_SUCCESS=' + JSON.stringify({ dataLength: res.partUsages?.length ?? 0, success: res.success, error: res.error }));
-        if (active) {
-          setPartUsages(res.partUsages);
+        if (active && currentRequestId === requestId.current) {
+          setPartUsages(res.partUsages ?? db.getRepairPartUsages());
           setError(null);
         }
       } catch (err: any) {
         console.log('HOOK_REPAIR_PART_USAGES_FETCH_ERROR=' + JSON.stringify({ error: err?.message || String(err) }));
-        if (active) {
-          setPartUsages(db.getRepairPartUsages());
+        if (active && currentRequestId === requestId.current) {
+          setPartUsages(prev => prev.length > 0 ? prev : db.getRepairPartUsages());
           setError(err?.message || String(err));
         }
       } finally {
@@ -1230,12 +1235,11 @@ export function useRepairPartUsages() {
   }, [trigger]);
 
   useEffect(() => {
-    console.log('HOOK_REPAIR_PART_USAGES=' + JSON.stringify({
+    console.log('HOOK_REPAIR_PART_USAGES_RENDER=' + JSON.stringify({
       loading,
-      error,
       dataLength: partUsages.length
     }));
-  }, [loading, error, partUsages.length]);
+  }, [loading, partUsages.length]);
 
   const persistLocalUsages = (next: RepairPartUsage[]) => {
     setPartUsages(next);
