@@ -3,6 +3,18 @@ import { Product, InventoryMovement, WorkOwnershipType } from '../types';
 import { getAuthenticatedUserRole } from './authPermissions';
 import { db } from './db';
 
+async function awaitWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Timeout after ${timeoutMs}ms`)), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+}
+
 const PRODUCTS_STORAGE_KEY = 'atari_products';
 const CATEGORIES_STORAGE_KEY = 'atari_categories';
 
@@ -762,7 +774,7 @@ export async function getInventoryMovements(productId?: string): Promise<Invento
       query = query.eq('product_id', productId);
     }
 
-    const { data, error } = await query;
+    const { data, error } = await awaitWithTimeout(query, 10000);
     console.log('FETCH_INVENTORY_MOVEMENTS_RESPONSE=' + JSON.stringify({ productId, dataLength: (data || []).length, error: error?.message ?? null }));
     if (error) {
       console.warn('⚠️ [getInventoryMovements] Supabase notice (using local movements):', error.message || error);

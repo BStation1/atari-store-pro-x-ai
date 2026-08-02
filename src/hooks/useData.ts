@@ -464,30 +464,31 @@ export function useInventoryMovements(productId?: string) {
     setLoading(true);
     setError(null);
 
-    console.log('HOOK_INVENTORY_MOVEMENTS_FETCH_START=' + JSON.stringify({ productId }));
-    getInventoryMovements(productId)
-      .then(movs => {
+    const loadMovements = async () => {
+      console.log('HOOK_INVENTORY_MOVEMENTS_FETCH_START=' + JSON.stringify({ productId }));
+      try {
+        const movs = await getInventoryMovements(productId);
         console.log('HOOK_INVENTORY_MOVEMENTS_FETCH_SUCCESS=' + JSON.stringify({ productId, dataLength: movs?.length ?? 0 }));
         if (active) {
           setMovements(movs);
-          setLoading(false);
-          console.log('HOOK_INVENTORY_MOVEMENTS_LOADING_FALSE=' + JSON.stringify({ productId }));
           setError(null);
         }
-      })
-      .catch(err => {
+      } catch (err: any) {
         console.log('HOOK_INVENTORY_MOVEMENTS_FETCH_ERROR=' + JSON.stringify({ productId, error: err?.message || String(err) }));
         if (active) {
           console.warn("⚠️ Error fetching inventory movements:", err);
           setMovements(db.getInventoryMovements ? db.getInventoryMovements() : []);
-          setLoading(false);
-          console.log('HOOK_INVENTORY_MOVEMENTS_LOADING_FALSE=' + JSON.stringify({ productId, via: 'catch' }));
           setError(err?.message || String(err));
         }
-      })
-      .finally(() => {
-        console.log('HOOK_INVENTORY_MOVEMENTS_FETCH_FINALLY=' + JSON.stringify({ productId }));
-      });
+      } finally {
+        if (active) {
+          setLoading(false);
+          console.log('HOOK_INVENTORY_MOVEMENTS_LOADING_FALSE=' + JSON.stringify({ productId }));
+        }
+      }
+    };
+
+    loadMovements();
 
     return () => {
       active = false;
@@ -1201,30 +1202,30 @@ export function useRepairPartUsages() {
     setLoading(true);
     setError(null);
 
-    console.log('HOOK_REPAIR_PART_USAGES_FETCH_START=1');
-    fetchOrMigrateRepairPartUsages()
-      .then(res => {
+    const loadPartUsages = async () => {
+      console.log('HOOK_REPAIR_PART_USAGES_FETCH_START=1');
+      try {
+        const res = await fetchOrMigrateRepairPartUsages();
         console.log('HOOK_REPAIR_PART_USAGES_FETCH_SUCCESS=' + JSON.stringify({ dataLength: res.partUsages?.length ?? 0, success: res.success, error: res.error }));
         if (active) {
           setPartUsages(res.partUsages);
-          setLoading(false);
-          console.log('HOOK_REPAIR_PART_USAGES_LOADING_FALSE=1');
           setError(null);
         }
-      })
-      .catch(err => {
+      } catch (err: any) {
         console.log('HOOK_REPAIR_PART_USAGES_FETCH_ERROR=' + JSON.stringify({ error: err?.message || String(err) }));
         if (active) {
           setPartUsages(db.getRepairPartUsages());
-          setLoading(false);
-          console.log('HOOK_REPAIR_PART_USAGES_LOADING_FALSE=1');
           setError(err?.message || String(err));
         }
-      })
-      .finally(() => {
-        console.log('HOOK_REPAIR_PART_USAGES_FETCH_FINALLY=1');
-      });
+      } finally {
+        if (active) {
+          setLoading(false);
+          console.log('HOOK_REPAIR_PART_USAGES_LOADING_FALSE=1');
+        }
+      }
+    };
 
+    loadPartUsages();
     return () => { active = false; };
   }, [trigger]);
 
