@@ -457,16 +457,19 @@ export function useInventoryMovements(productId?: string) {
   const trigger = useDbTrigger(['atari_inventory_movements', 'atari_products']);
   const [movements, setMovements] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
     setLoading(true);
+    setError(null);
 
     getInventoryMovements(productId)
       .then(movs => {
         if (active) {
           setMovements(movs);
           setLoading(false);
+          setError(null);
         }
       })
       .catch(err => {
@@ -474,6 +477,7 @@ export function useInventoryMovements(productId?: string) {
           console.warn("⚠️ Error fetching inventory movements:", err);
           setMovements(db.getInventoryMovements ? db.getInventoryMovements() : []);
           setLoading(false);
+          setError(err?.message || String(err));
         }
       });
 
@@ -482,7 +486,15 @@ export function useInventoryMovements(productId?: string) {
     };
   }, [trigger, productId]);
 
-  return { movements, loading };
+  useEffect(() => {
+    console.log('HOOK_INVENTORY_MOVEMENTS=' + JSON.stringify({
+      loading,
+      error,
+      dataLength: movements.length
+    }));
+  }, [loading, error, movements.length]);
+
+  return { movements, loading, error };
 }
 
 export function useSuppliers() {
@@ -1173,16 +1185,40 @@ export function usePartnerTransactions() {
 export function useRepairPartUsages() {
   const trigger = useDbTrigger(['atari_repair_part_usages']);
   const [partUsages, setPartUsages] = useState<RepairPartUsage[]>(() => db.getRepairPartUsages());
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
-    fetchOrMigrateRepairPartUsages().then(res => {
-      if (active) setPartUsages(res.partUsages);
-    }).catch(() => {
-      if (active) setPartUsages(db.getRepairPartUsages());
-    });
+    setLoading(true);
+    setError(null);
+
+    fetchOrMigrateRepairPartUsages()
+      .then(res => {
+        if (active) {
+          setPartUsages(res.partUsages);
+          setLoading(false);
+          setError(null);
+        }
+      })
+      .catch(err => {
+        if (active) {
+          setPartUsages(db.getRepairPartUsages());
+          setLoading(false);
+          setError(err?.message || String(err));
+        }
+      });
+
     return () => { active = false; };
   }, [trigger]);
+
+  useEffect(() => {
+    console.log('HOOK_REPAIR_PART_USAGES=' + JSON.stringify({
+      loading,
+      error,
+      dataLength: partUsages.length
+    }));
+  }, [loading, error, partUsages.length]);
 
   const persistLocalUsages = (next: RepairPartUsage[]) => {
     setPartUsages(next);

@@ -50,6 +50,11 @@ export default function Accounting({ openInvoiceModal = false }: AccountingProps
   const { partUsages } = useRepairPartUsages();
   const { movements } = useInventoryMovements();
 
+  console.log('COMPONENT_ACCOUNTING_BUILD_SUMMARY=' + JSON.stringify({
+    inventoryMovementsLength: movements.length,
+    repairPartUsagesLength: partUsages.length
+  }));
+
   // Selected Invoice for Delete Modal
   const [selectedInvoiceToDelete, setSelectedInvoiceToDelete] = useState<Invoice | null>(null);
 

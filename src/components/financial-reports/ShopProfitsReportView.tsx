@@ -28,6 +28,11 @@ export default function ShopProfitsReportView({
   const { movements } = useInventoryMovements();
   const { partUsages } = useRepairPartUsages();
   const [dateFrom, setDateFrom] = useState<string>('');
+
+  console.log('COMPONENT_SHOPPROFITS_BUILD_SUMMARY=' + JSON.stringify({
+    inventoryMovementsLength: movements.length,
+    repairPartUsagesLength: partUsages.length
+  }));
   const [dateTo, setDateTo] = useState<string>('');
 
   const accountingSummary = buildAccountingSummaryV2({

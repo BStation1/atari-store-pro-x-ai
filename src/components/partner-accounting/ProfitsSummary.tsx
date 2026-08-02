@@ -62,6 +62,11 @@ export default function ProfitsSummary({
   const { products } = useProducts();
   const { movements: rawMovements } = useInventoryMovements();
 
+  console.log('COMPONENT_PROFITSSUMMARY_BUILD_SUMMARY=' + JSON.stringify({
+    inventoryMovementsLength: (rawMovements || []).length,
+    repairPartUsagesLength: partUsages.length
+  }));
+
   // Current Date Helper Values
   const now = new Date();
   const todayISO = now.toISOString().split('T')[0];
