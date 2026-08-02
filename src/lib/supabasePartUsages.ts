@@ -10,6 +10,7 @@ export async function fetchOrMigrateRepairPartUsages(): Promise<{
   const localUsages = db.getRepairPartUsages();
 
   try {
+    console.log('FETCH_REPAIR_PART_USAGES_START=' + JSON.stringify({ supabaseConfigured: isSupabaseConfigured }));
     if (!isSupabaseConfigured) {
       return { success: true, partUsages: localUsages };
     }
@@ -19,6 +20,7 @@ export async function fetchOrMigrateRepairPartUsages(): Promise<{
       .select('*')
       .order('created_at', { ascending: false });
 
+    console.log('FETCH_REPAIR_PART_USAGES_RESPONSE=' + JSON.stringify({ dataLength: (data || []).length, error: error?.message ?? null }));
     if (error) {
       console.warn("⚠️ [fetchOrMigrateRepairPartUsages] Supabase fetch notice:", error.message);
       return { success: false, error: error.message, partUsages: localUsages };

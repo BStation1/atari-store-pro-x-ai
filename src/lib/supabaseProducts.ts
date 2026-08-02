@@ -750,6 +750,7 @@ function isUuid(id?: string): boolean {
 export async function getInventoryMovements(productId?: string): Promise<InventoryMovement[]> {
   try {
     const localMovs = db.getInventoryMovements ? db.getInventoryMovements() : [];
+    console.log('FETCH_INVENTORY_MOVEMENTS_START=' + JSON.stringify({ productId, supabaseConfigured: isSupabaseConfigured }));
 
     if (productId && !isUuid(productId)) {
       return localMovs.filter(m => m.productId === productId);
@@ -762,6 +763,7 @@ export async function getInventoryMovements(productId?: string): Promise<Invento
     }
 
     const { data, error } = await query;
+    console.log('FETCH_INVENTORY_MOVEMENTS_RESPONSE=' + JSON.stringify({ productId, dataLength: (data || []).length, error: error?.message ?? null }));
     if (error) {
       console.warn('⚠️ [getInventoryMovements] Supabase notice (using local movements):', error.message || error);
       return productId ? localMovs.filter(m => m.productId === productId) : localMovs;
@@ -789,8 +791,11 @@ export async function getInventoryMovements(productId?: string): Promise<Invento
     return mapped;
   } catch (err: any) {
     console.warn('⚠️ [getInventoryMovements] Exception (using local movements):', err?.message || err);
+    console.log('FETCH_INVENTORY_MOVEMENTS_EXCEPTION=' + JSON.stringify({ productId, error: err?.message || String(err) }));
     const localMovs = db.getInventoryMovements ? db.getInventoryMovements() : [];
     return productId ? localMovs.filter(m => m.productId === productId) : localMovs;
+  } finally {
+    console.log('FETCH_INVENTORY_MOVEMENTS_FINALLY=' + JSON.stringify({ productId }));
   }
 }
 
