@@ -6,6 +6,18 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase, isSupabaseConfigured } from "../lib/supabaseClient";
 import { fetchOrMigrateRepairPartUsages, addRepairPartUsageToSupabase } from "../lib/supabasePartUsages";
+
+async function awaitWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Timeout after ${timeoutMs}ms`)), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+}
 import { fetchOrMigrateExpenses, addExpenseToSupabase } from "../lib/supabaseExpenses";
 import { fetchOrMigratePartnerTransactions, fetchOrMigratePartnerLedger, fetchOrMigratePartnerSettlements } from "../lib/supabasePartnerAccounting";
 import {
@@ -233,46 +245,54 @@ export function useRepairOrders() {
 
   useEffect(() => {
     let active = true;
+    setLoading(true);
+    setError(null);
 
-    fetchOrMigrateRepairOrders()
-      .then(res => {
-        if (active) {
-          setOrders(prev => {
-            const mergedMap = new Map<string, RepairOrder>();
-            // 1. Put freshly fetched remote/backup orders
-            (res.orders || []).forEach(o => mergedMap.set(o.id, o));
-            // 2. Preserve any order currently in local memory or localStorage
-            const backupLocal = getLocalRepairOrdersBackup();
-            backupLocal.forEach(o => {
-              if (!mergedMap.has(o.id)) {
-                mergedMap.set(o.id, o);
-              }
-            });
-            prev.forEach(o => {
-              if (!mergedMap.has(o.id)) {
-                mergedMap.set(o.id, o);
-              }
-            });
-            return Array.from(mergedMap.values()).sort((a, b) => {
-              return new Date(b.receivedDate || 0).getTime() - new Date(a.receivedDate || 0).getTime();
-            });
+    const loadOrders = async () => {
+      try {
+        const res = await awaitWithTimeout(fetchOrMigrateRepairOrders(), 10000);
+        if (!active) return;
+
+        setOrders(prev => {
+          const mergedMap = new Map<string, RepairOrder>();
+          // 1. Put freshly fetched remote/backup orders
+          (res.orders || []).forEach(o => mergedMap.set(o.id, o));
+          // 2. Preserve any order currently in local memory or localStorage
+          const backupLocal = getLocalRepairOrdersBackup();
+          backupLocal.forEach(o => {
+            if (!mergedMap.has(o.id)) {
+              mergedMap.set(o.id, o);
+            }
           });
-          setLoading(false);
-          if (!res.success && res.error) {
-            setError(res.error);
-          } else {
-            setError(null);
-          }
+          prev.forEach(o => {
+            if (!mergedMap.has(o.id)) {
+              mergedMap.set(o.id, o);
+            }
+          });
+          return Array.from(mergedMap.values()).sort((a, b) => {
+            return new Date(b.receivedDate || 0).getTime() - new Date(a.receivedDate || 0).getTime();
+          });
+        });
+
+        if (!res.success && res.error) {
+          setError(res.error);
+        } else {
+          setError(null);
         }
-      })
-      .catch(err => {
+      } catch (err: any) {
         if (active) {
           console.warn("⚠️ Error fetching repair orders from Supabase:", err);
           setError(err?.message || "تعذر الاتصال بـ Supabase لقراءة أوامر الصيانة");
           setOrders(getLocalRepairOrdersBackup());
+        }
+      } finally {
+        if (active) {
           setLoading(false);
         }
-      });
+      }
+    };
+
+    loadOrders();
 
     return () => {
       active = false;
@@ -577,27 +597,34 @@ export function useInvoices() {
 
   useEffect(() => {
     let active = true;
+    setLoading(true);
+    setError(null);
 
-    fetchOrMigrateInvoices()
-      .then(res => {
-        if (active) {
-          setInvoices(res.invoices);
-          setLoading(false);
-          if (!res.success && res.error) {
-            setError(res.error);
-          } else {
-            setError(null);
-          }
+    const loadInvoices = async () => {
+      try {
+        const res = await awaitWithTimeout(fetchOrMigrateInvoices(), 10000);
+        if (!active) return;
+
+        setInvoices(res.invoices);
+        if (!res.success && res.error) {
+          setError(res.error);
+        } else {
+          setError(null);
         }
-      })
-      .catch(err => {
+      } catch (err: any) {
         if (active) {
           console.warn("⚠️ Error fetching invoices from Supabase:", err);
           setError(err?.message || "تعذر الاتصال بـ Supabase لقراءة الفواتير");
           setInvoices(getLocalInvoicesBackup());
+        }
+      } finally {
+        if (active) {
           setLoading(false);
         }
-      });
+      }
+    };
+
+    loadInvoices();
 
     return () => {
       active = false;

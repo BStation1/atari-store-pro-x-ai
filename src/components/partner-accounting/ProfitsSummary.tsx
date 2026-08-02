@@ -74,7 +74,14 @@ export default function ProfitsSummary({
     isReady
   };
 
-  console.log('COMPONENT_PROFITSSUMMARY_READY_STATE=' + JSON.stringify(readyState));
+  const [lastReadyState, setLastReadyState] = useState<string>('');
+  useEffect(() => {
+    const serialized = JSON.stringify(readyState);
+    if (serialized !== lastReadyState) {
+      console.log(serialized);
+      setLastReadyState(serialized);
+    }
+  }, [readyState, lastReadyState]);
 
   // Current Date Helper Values
   if (!isReady) {
