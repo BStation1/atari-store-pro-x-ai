@@ -284,24 +284,15 @@ export function resolveOrderPartsAccounting(
 
   // Temporary: JSON logging for order ATR-10001
   if (traceOrderId === 'ATR-10001' || traceOrderNumber === 'ATR-10001') {
-    try {
-      console.log(JSON.stringify({ fullOrder: order }, null, 2));
-      console.log(JSON.stringify({ devices: order.devices || [] }, null, 2));
-      console.log(JSON.stringify({ orderKeys: Object.keys(order || {}) }, null, 2));
-      (order.devices || []).forEach((device: any, idx: number) => {
-        console.log(JSON.stringify({ deviceIndex: idx, deviceKeys: Object.keys(device || {}) }, null, 2));
-        console.log(JSON.stringify({ selectedRepairItems: device.selectedRepairItems ?? null }, null, 2));
-        console.log(JSON.stringify({ repairItems: device.repairItems ?? null }, null, 2));
-        console.log(JSON.stringify({ items: device.items ?? null }, null, 2));
-        console.log(JSON.stringify({ parts: device.parts ?? null }, null, 2));
-        console.log(JSON.stringify({ technicalProcedures: device.technicalProcedures ?? null }, null, 2));
-        console.log(JSON.stringify({ partsCost: device.partsCost ?? null }, null, 2));
-        console.log(JSON.stringify({ partsPurchaseCost: device.partsPurchaseCost ?? null }, null, 2));
-        console.log(JSON.stringify({ purchaseCost: device.purchaseCost ?? null }, null, 2));
-      });
-    } catch (err) {
-      console.log(JSON.stringify({ error: String(err) }));
-    }
+    console.log(
+      'ORDER_PAYLOAD_JSON=' +
+      JSON.stringify({
+        order,
+        orderKeys: Object.keys(order || {}),
+        devices: order?.devices || [],
+        deviceKeys: (order?.devices || []).map(d => Object.keys(d || {}))
+      })
+    );
   }
 
   const printTrace = (props: { purchaseCost: unknown; purchaseCostStatus: unknown; costSource: unknown }) => {
