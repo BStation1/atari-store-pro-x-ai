@@ -185,30 +185,30 @@ function positiveNumber(...values: unknown[]): number | null {
 }
 
 function explicitItemQuantity(item: any): number {
-  return Math.max(1, Number(item?.quantity ?? item?.qty ?? item?.partsQuantity ?? item?.parts_quantity ?? 1) || 1);
+  const qty = Number(item?.quantity ?? item?.qty ?? item?.partsQuantity ?? item?.parts_quantity ?? item?.itemQuantity ?? item?.item_quantity);
+  if (Number.isFinite(qty) && qty > 0) return qty;
+  // default to 1 only when a valid purchase-cost field exists
+  const hasCost = explicitItemPurchaseUnitCost(item) !== null;
+  return hasCost ? 1 : 0;
 }
 
 function explicitItemPurchaseUnitCost(item: any): number | null {
+  // Only resolve from approved fields per requirements
   return positiveNumber(
     item?.costPrice,
     item?.purchaseCost,
     item?.purchase_cost,
-    item?.unitCost,
-    item?.unit_cost,
-    item?.purchaseUnitCost,
     item?.purchase_unit_cost_snapshot,
-    item?.defaultCostPrice
+    item?.partsPurchaseCost
   );
 }
 
 function explicitDevicePurchaseCost(device: any): number | null {
+  // Only resolve device-level purchase cost from approved fields
   return positiveNumber(
     device?.partsPurchaseCost,
     device?.purchaseCost,
     device?.purchase_cost,
-    device?.parts_purchase_cost,
-    device?.partsCostPrice,
-    device?.parts_cost_price,
     device?.purchase_unit_cost_snapshot
   );
 }
@@ -221,7 +221,8 @@ function legacyDeviceDetails(order: RepairOrder): AccountingPartDetail[] {
       ...(Array.isArray(device.selectedRepairItems) ? device.selectedRepairItems : []),
       ...(Array.isArray(device.repairItems) ? device.repairItems : []),
       ...(Array.isArray(device.items) ? device.items : []),
-      ...(Array.isArray(device.parts) ? device.parts : [])
+      ...(Array.isArray(device.parts) ? device.parts : []),
+      ...(Array.isArray(device.technicalProcedures) ? device.technicalProcedures : [])
     ];
 
     const explicitItems = rawItems
@@ -229,6 +230,7 @@ function legacyDeviceDetails(order: RepairOrder): AccountingPartDetail[] {
         const unitCost = explicitItemPurchaseUnitCost(item);
         if (!unitCost) return null;
         const quantity = explicitItemQuantity(item);
+        if (!Number.isFinite(quantity) || quantity <= 0) return null;
         return {
           id: clean(item?.id) || `legacy-item-${order.id}-${deviceIndex}-${itemIndex}`,
           partName: clean(item?.name ?? item?.nameAr ?? item?.label ?? item?.sku) || 'قطعة غيار قديمة',
@@ -266,9 +268,9 @@ function legacyDeviceDetails(order: RepairOrder): AccountingPartDetail[] {
 
 function hasPartEvidence(order: RepairOrder): boolean {
   return (order.devices || []).some((device: any) => {
-    const arrays = [device.selectedRepairItems, device.repairItems, device.items, device.parts];
+    const arrays = [device.selectedRepairItems, device.repairItems, device.items, device.parts, device.technicalProcedures];
     const hasItems = arrays.some(items => Array.isArray(items) && items.length > 0);
-    return hasItems || Number(device.partsCost || 0) > 0 || explicitDevicePurchaseCost(device) !== null;
+    return hasItems || explicitDevicePurchaseCost(device) !== null;
   });
 }
 
