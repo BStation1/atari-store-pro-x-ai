@@ -655,16 +655,37 @@ export function useInvoices() {
 
 export function useExpenses() {
   const trigger = useDbTrigger(['atari_expenses']);
-  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>(db.getExpenses());
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
-    fetchOrMigrateExpenses().then(res => {
-      if (active) setExpenses(res.expenses);
-    }).catch(() => {
-      if (active) setExpenses(db.getExpenses());
-    });
-    return () => { active = false; };
+    setLoading(true);
+    setError(null);
+
+    const loadExpenses = async () => {
+      try {
+        const res = await fetchOrMigrateExpenses();
+        if (!active) return;
+        setExpenses(res.expenses);
+        if (!res.success && res.error) {
+          setError(res.error);
+        }
+      } catch (err: any) {
+        if (!active) return;
+        setError(err?.message || String(err));
+        setExpenses(db.getExpenses());
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+
+    loadExpenses();
+
+    return () => {
+      active = false;
+    };
   }, [trigger]);
 
   const addExpense = (expense: Omit<Expense, "id" | "date">) => {
@@ -675,7 +696,7 @@ export function useExpenses() {
     return created;
   };
 
-  return { expenses, addExpense };
+  return { expenses, loading, error, addExpense };
 }
 
 export function useSettings() {

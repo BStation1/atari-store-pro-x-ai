@@ -17,7 +17,7 @@ export async function fetchOrMigrateExpenses(): Promise<{
     const { data, error } = await supabase
       .from('expenses')
       .select('*')
-      .order('date', { ascending: false });
+      .order('expense_date', { ascending: false });
 
     if (error) {
       console.warn("⚠️ [fetchOrMigrateExpenses] Supabase fetch notice:", error.message);
@@ -33,7 +33,7 @@ export async function fetchOrMigrateExpenses(): Promise<{
       category: String(r.category || 'عام'),
       description: String(r.description || r.title || ''),
       amount: Number(r.amount || 0),
-      date: r.date || r.created_at || new Date().toISOString(),
+      date: r.expense_date || r.date || r.created_at || new Date().toISOString(),
       createdBy: r.created_by || r.createdBy || 'system',
       expenseOwner: r.expense_owner || r.expenseOwner,
       isCancelled: Boolean(r.is_cancelled || r.isCancelled),
@@ -73,10 +73,11 @@ export async function addExpenseToSupabase(expense: Omit<Expense, "id" | "date">
         category: created.category,
         description: created.description,
         amount: created.amount,
-        date: created.date,
-        created_by: created.createdBy || 'system',
+        expense_date: created.date,
+        paid_by_user_id: created.createdBy || null,
         expense_owner: created.expenseOwner || null,
-        is_cancelled: created.isCancelled || false
+        is_cancelled: created.isCancelled || false,
+        notes: created.description || null
       };
 
       const { error } = await supabase.from('expenses').upsert([row]);
