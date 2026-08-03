@@ -380,36 +380,67 @@ export function resolveOrderPartsAccounting(
   movements: InventoryMovement[],
   usages: RepairPartUsage[]
 ): Pick<OrderAccountingV2, 'purchaseCost' | 'partsQuantity' | 'parts' | 'costSource' | 'purchaseCostStatus' | 'isAccountingIncomplete'> {
-  const linkedUsages = (usages || []).filter(usage => isActiveUsage(usage) && usageMatchesOrder(usage, order));
-  if (linkedUsages.length > 0) {
-    const parts = linkedUsages.map((usage, index) => {
-      const quantity = Math.max(0, Number(usage.quantity) || 0);
-      const unitCost = money(usage.unitCost || 0);
-      const explicitTotal = Number(usage.totalCost);
+  const allOrderUsages = (usages || []).filter(usage => usageMatchesOrder(usage, order));
+  if (allOrderUsages.length > 0) {
+    const linkedUsages = allOrderUsages.filter(usage => isActiveUsage(usage));
+    if (linkedUsages.length > 0) {
+      const parts = linkedUsages.map((usage, index) => {
+        const quantity = Math.max(0, Number(usage.quantity) || 0);
+        const unitCost = money(usage.unitCost || 0);
+        const explicitTotal = Number(usage.totalCost);
+        return {
+          id: clean(usage.id) || `usage-${order.id}-${index}`,
+          partName: clean(usage.partName) || clean(usage.sku) || 'صنف غير معروف',
+          quantity,
+          unitPurchaseCost: unitCost,
+          totalPurchaseCost: Number.isFinite(explicitTotal) && explicitTotal >= 0 ? money(explicitTotal) : money(quantity * unitCost),
+          source: 'REPAIR_PART_USAGE' as const
+        };
+      });
       return {
-        id: clean(usage.id) || `usage-${order.id}-${index}`,
-        partName: clean(usage.partName) || clean(usage.sku) || 'صنف غير معروف',
-        quantity,
-        unitPurchaseCost: unitCost,
-        totalPurchaseCost: Number.isFinite(explicitTotal) && explicitTotal >= 0 ? money(explicitTotal) : money(quantity * unitCost),
-        source: 'REPAIR_PART_USAGE' as const
+        parts,
+        purchaseCost: money(parts.reduce((sum, part) => sum + part.totalPurchaseCost, 0)),
+        partsQuantity: parts.reduce((sum, part) => sum + part.quantity, 0),
+        costSource: 'REPAIR_PART_USAGES',
+        purchaseCostStatus: 'RECORDED',
+        isAccountingIncomplete: false
       };
-    });
-    return {
-      parts,
-      purchaseCost: money(parts.reduce((sum, part) => sum + part.totalPurchaseCost, 0)),
-      partsQuantity: parts.reduce((sum, part) => sum + part.quantity, 0),
-      costSource: 'REPAIR_PART_USAGES',
-      purchaseCostStatus: 'RECORDED',
-      isAccountingIncomplete: false
-    };
+    } else {
+      // All usages for this order were RETURNED
+      return {
+        parts: [],
+        purchaseCost: 0,
+        partsQuantity: 0,
+        costSource: 'REPAIR_PART_USAGES',
+        purchaseCostStatus: 'NO_PARTS',
+        isAccountingIncomplete: false
+      };
+    }
   }
 
-  const linkedMovements = (movements || []).filter(
-    movement => isOutgoingMovement(movement) && movementMatchesOrder(movement, order)
-  );
+  const allOrderMovements = (movements || []).filter(m => movementMatchesOrder(m, order));
+  const linkedMovements = allOrderMovements.filter(m => isOutgoingMovement(m));
 
   if (linkedMovements.length > 0) {
+    const returnMovements = allOrderMovements.filter(m => {
+      const type = upper(m.movementType ?? (m as any).movement_type);
+      return type === 'RETURN' || (m as any).usageType === 'REPAIR_USAGE_RETURN' || type === 'IN';
+    });
+
+    const returnQty = returnMovements.reduce((sum, m) => sum + Math.abs(Number(m.quantityChange ?? (m as any).quantity_change ?? 0)), 0);
+    const outgoingQty = linkedMovements.reduce((sum, m) => sum + Math.abs(Number(m.quantityChange ?? (m as any).quantity_change ?? 0)), 0);
+
+    if (returnQty >= outgoingQty && outgoingQty > 0) {
+      return {
+        parts: [],
+        purchaseCost: 0,
+        partsQuantity: 0,
+        costSource: 'INVENTORY_MOVEMENTS',
+        purchaseCostStatus: 'NO_PARTS',
+        isAccountingIncomplete: false
+      };
+    }
+
     const parts = linkedMovements.map((movement: any, index) => {
       const cost = movementCost(movement);
       return {

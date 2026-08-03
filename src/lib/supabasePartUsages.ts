@@ -174,7 +174,7 @@ export async function addRepairPartUsageToSupabase(
   }
 }
 
-export async function updateRepairPartUsageInSupabase(id: string, updates: Partial<RepairPartUsage>): Promise<void> {
+export async function updateRepairPartUsageInSupabase(id: string, updates: Partial<RepairPartUsage>): Promise<boolean> {
   const all = db.getRepairPartUsages();
   const index = all.findIndex(pu => pu.id === id);
   if (index !== -1) {
@@ -201,4 +201,5 @@ export async function updateRepairPartUsageInSupabase(id: string, updates: Parti
       console.warn("⚠️ Exception updating repair_part_usages in Supabase:", err);
     }
   }
+  return true;
 }

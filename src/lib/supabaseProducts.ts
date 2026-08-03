@@ -843,6 +843,13 @@ export async function ensureProductUuidInSupabase(product: Product): Promise<str
 }
 
 export async function updateProductQuantityInSupabase(productId: string, newQuantity: number): Promise<boolean> {
+  const allProds = db.getProducts();
+  const index = allProds.findIndex(p => p.id === productId || (p as any).uuid === productId);
+  if (index !== -1) {
+    allProds[index] = { ...allProds[index], quantity: newQuantity };
+    db.saveProducts(allProds);
+  }
+
   if (!isSupabaseConfigured) {
     return true;
   }
@@ -854,28 +861,23 @@ export async function updateProductQuantityInSupabase(productId: string, newQuan
       if (fetched) realUuid = fetched;
     }
 
-    if (!isUuid(realUuid)) {
-      console.warn("⚠️ Cannot update product quantity in Supabase: Invalid Product UUID", productId);
-      return false;
+    if (isUuid(realUuid)) {
+      const { error } = await supabase
+        .from('products')
+        .update({
+          quantity: newQuantity,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', realUuid);
+
+      if (error) {
+        console.warn("⚠️ Notice updating product quantity in Supabase:", error.message);
+      }
     }
-
-    const { error } = await supabase
-      .from('products')
-      .update({
-        quantity: newQuantity,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', realUuid);
-
-    if (error) {
-      console.warn("⚠️ Notice updating product quantity in Supabase:", error.message);
-      return false;
-    }
-
     return true;
   } catch (err) {
     console.warn("⚠️ Exception updating product quantity in Supabase:", err);
-    return false;
+    return true;
   }
 }
 
@@ -905,7 +907,9 @@ export async function addInventoryMovementToSupabase(movement: any): Promise<boo
 
   // Map movement_type to valid enum: ('SALE', 'PURCHASE', 'RETURN', 'REPAIR_USAGE', 'ADJUSTMENT', 'DELETION_RESTORE')
   let movType = movement.movementType;
-  if (movement.movementType === 'OUT' || movement.usageType === 'REPAIR_USAGE') {
+  if (movement.movementType === 'RETURN' || movement.usageType === 'REPAIR_USAGE_RETURN' || movement.movementType === 'PARTNER_WITHDRAWAL_RETURN') {
+    movType = 'RETURN';
+  } else if (movement.movementType === 'OUT' || movement.usageType === 'REPAIR_USAGE') {
     movType = 'REPAIR_USAGE';
   } else if (movement.movementType === 'IN') {
     movType = 'PURCHASE';

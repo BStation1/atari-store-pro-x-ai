@@ -54,6 +54,7 @@ import { db } from "../lib/data";
 import { addInventoryMovementToSupabase, ensureProductUuidInSupabase, updateProductQuantityInSupabase } from "../lib/supabaseProducts";
 import { addRepairPartUsageToSupabase, updateRepairPartUsageInSupabase } from "../lib/supabasePartUsages";
 import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabase } from "../lib/supabaseRepairOrders";
+import { executeRemovePartUsageTransaction } from "../lib/repairPartRemovalService";
 import { usageMatchesOrder, usageMatchesDevice, syncOrderSelectedRepairItemsFromUsages } from "../lib/accountingEngineV2";
 import { sendRepairNotificationWorkflow } from "../lib/whatsapp";
 import { 
@@ -926,194 +927,59 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     })();
   };
 
-  const handleRemovePartUsage = (usageId: string, deviceIdx: number, removeQty: number = 1) => {
+  const handleRemovePartUsage = async (usageId: string, deviceIdx: number, removeQty: number = 1) => {
     if (!selectedOrder) return;
-    const allUsages = partUsages;
-    const usage = allUsages.find(pu => pu.id === usageId);
+    const usage = partUsages.find(pu => pu.id === usageId);
     if (!usage) return;
 
+    if (usage.accountingStatus === 'RETURNED') return;
     if (busyProductIds.has(usage.inventoryItemId)) return;
+
     setBusyProductIds(prev => new Set(prev).add(usage.inventoryItemId));
 
-    const product = products.find(p => p.id === usage.inventoryItemId);
-
-    const qtyToReturn = Math.min(usage.quantity, Math.max(1, removeQty));
-    const isFullRemove = (usage.quantity <= qtyToReturn) || removeQty === -1; // -1 means remove all
-    const actualReturnedQty = isFullRemove ? usage.quantity : qtyToReturn;
-
-    // 1. Instant Synchronous Product Stock Update
-    if (product) {
-      setProductLocal({
-        ...product,
-        quantity: product.quantity + actualReturnedQty
+    try {
+      const res = await executeRemovePartUsageTransaction({
+        usageId,
+        deviceIdx,
+        removeQty,
+        selectedOrder,
+        products,
+        partUsages
       });
-    }
 
-    // 2. Instant Synchronous Usage Update
-    let updatedUsages: RepairPartUsage[] = [];
-    const newQty = usage.quantity - actualReturnedQty;
-    const newTotalCost = newQty * usage.unitCost;
-    const usageSellPrice = getUsageSellingUnitPrice(usage, products);
-    const newSellingTotal = newQty * usageSellPrice;
-
-    if (isFullRemove) {
-      updatedUsages = allUsages.map(pu => {
-        if (pu.id === usageId) {
-          return { ...pu, accountingStatus: 'RETURNED' as const };
-        }
-        return pu;
-      });
-    } else {
-      updatedUsages = allUsages.map(pu => {
-        if (pu.id === usageId) {
-          return {
-            ...pu,
-            quantity: newQty,
-            totalCost: newTotalCost,
-            sellingPrice: usageSellPrice,
-            sellingTotal: newSellingTotal
-          };
-        }
-        return pu;
-      });
-    }
-    persistLocalUsages(updatedUsages);
-
-    // 3. Instant Synchronous Order Recalculation
-    const orderIdsToMatch = new Set<string>([
-      String(selectedOrder.id || ''),
-      String((selectedOrder as any).orderNumber || ''),
-      String((selectedOrder as any).uuid || ''),
-      String(usage.repairOrderId || '')
-    ].filter(Boolean));
-
-    const updatedDevices = [...selectedOrder.devices];
-    const currentDevice = updatedDevices[deviceIdx];
-    let updatedOrder: RepairOrder = selectedOrder;
-
-    if (currentDevice) {
-      const remainingUsages = updatedUsages.filter(
-        pu => usageMatchesOrder(pu, selectedOrder) && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
-      );
-      const deviceRemainingUsages = remainingUsages.filter(
-        pu => usageMatchesDevice(pu, currentDevice, deviceIdx, selectedOrder.devices.length)
-      );
-
-      const newPartsCost = deviceRemainingUsages.reduce((sum, pu) => {
-        const sellP = getUsageSellingUnitPrice(pu, products);
-        return sum + (pu.quantity * sellP);
-      }, 0);
-
-      const nextSelectedRepairItems = (currentDevice.selectedRepairItems || []).map(i => {
-        if (i.id === usageId || i.usageId === usageId) {
-          if (isFullRemove) return null;
-          return { ...i, quantity: newQty, repairPrice: usageSellPrice, salePrice: usageSellPrice };
-        }
-        return i;
-      }).filter(Boolean) as SelectedRepairItem[];
-
-      const tags = currentDevice.selectedQuickFaults || (currentDevice.issue ? currentDevice.issue.split(" - ").map(s => s.trim()) : []);
-      const faultsCost = currentDevice.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(tags);
-      const newAutoPrice = faultsCost + newPartsCost;
-
-      if (currentDevice.isPriceManuallyEdited) {
-        updatedDevices[deviceIdx] = {
-          ...currentDevice,
-          selectedRepairItems: nextSelectedRepairItems,
-          partsCost: newPartsCost,
-          priceOverrideAcknowledged: false
-        };
-      } else {
-        updatedDevices[deviceIdx] = {
-          ...currentDevice,
-          selectedRepairItems: nextSelectedRepairItems,
-          partsCost: newPartsCost,
-          finalRepairPrice: newAutoPrice,
-          estimatedCost: newAutoPrice
-        };
-      }
-
-      const totalFinal = updatedDevices.reduce((sum, d) => sum + (d.finalRepairPrice ?? d.estimatedCost ?? 0), 0);
-
-      updatedOrder = {
-        ...selectedOrder,
-        devices: updatedDevices,
-        totalEstimatedCost: totalFinal,
-        finalRepairPrice: totalFinal
-      };
-
-      setSelectedOrder(updatedOrder);
-      setRepairOrderLocal(updatedOrder);
-    }
-
-
-    // 4. Background Persistence to Supabase (Non-blocking)
-    (async () => {
-      try {
-        const quantityPromise = product
-          ? updateProductQuantityInSupabase(product.id, product.quantity + actualReturnedQty)
-          : Promise.resolve();
-
-        const ownership = selectedOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
-        let owner: 'SHOP' | 'AHMED' | 'ABDO' = 'SHOP';
-        if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) owner = 'AHMED';
-        else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) owner = 'ABDO';
-
-        const movementPromise = addInventoryMovementToSupabase({
-          id: `MOV-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
-          productId: usage.inventoryItemId,
-          productNameSnapshot: usage.partName,
-          movementType: 'IN',
-          usageType: 'REPAIR_USAGE_RETURN',
-          quantityChange: actualReturnedQty,
-          previousQuantity: product ? product.quantity : 0,
-          newQuantity: product ? product.quantity + actualReturnedQty : actualReturnedQty,
-          costPriceSnapshot: usage.unitCost,
-          sellingPriceSnapshot: 0,
-          totalCost: usage.unitCost * actualReturnedQty,
-          referenceId: selectedOrder.id,
-          repairOrderId: selectedOrder.id,
-          owner: owner,
-          notes: `إرجاع قطعة غيار صيانة للمخزن: ${usage.partName}`,
-          createdAt: new Date().toISOString()
-        });
-
-        let usagePromise: Promise<any>;
-        if (isFullRemove) {
-          usagePromise = updateRepairPartUsageInSupabase(usageId, { accountingStatus: 'RETURNED' });
-        } else {
-          usagePromise = updateRepairPartUsageInSupabase(usageId, {
-            quantity: newQty,
-            totalCost: newTotalCost,
-            sellingPrice: usageSellPrice,
-            sellingTotal: newSellingTotal
-          });
-        }
-
-        await Promise.all([
-          quantityPromise,
-          movementPromise,
-          usagePromise!,
-          updateRepairOrderInSupabase(updatedOrder)
-        ]);
-      } catch (err) {
-        console.error("Background removal sync failed; rolling back:", err);
-        if (product) setProductLocal(product);
-        persistLocalUsages(partUsages);
-        setSelectedOrder(selectedOrder);
-        setRepairOrderLocal(selectedOrder);
+      if (!res.success) {
         dialog.alert({
-          message: "تعذر حفظ تعديل قطعة الغيار، وتمت إعادة الكمية والحساب للحالة السابقة.",
+          message: res.error || "تعذر إكمال عملية إرجاع قطعة الغيار. تبقى القطعة قائمة كما هي.",
           variant: "error"
         });
-      } finally {
-        setBusyProductIds(prev => {
-          const next = new Set(prev);
-          next.delete(usage.inventoryItemId);
-          return next;
-        });
+        return;
       }
-    })();
+
+      // UI updates ONLY AFTER all three persistence operations succeed
+      if (res.updatedProducts) {
+        const prod = res.updatedProducts.find(p => p.id === usage.inventoryItemId);
+        if (prod) setProductLocal(prod);
+      }
+      if (res.updatedPartUsages) {
+        persistLocalUsages(res.updatedPartUsages);
+      }
+      if (res.updatedOrder) {
+        setSelectedOrder(res.updatedOrder);
+        setRepairOrderLocal(res.updatedOrder);
+      }
+    } catch (err: any) {
+      console.error("Removal transaction exception:", err);
+      dialog.alert({
+        message: err?.message || "خطأ أثناء إرجاع قطعة الغيار.",
+        variant: "error"
+      });
+    } finally {
+      setBusyProductIds(prev => {
+        const next = new Set(prev);
+        next.delete(usage.inventoryItemId);
+        return next;
+      });
+    }
   };
 
   // Update Work Ownership Type (شغل المحل / أحمد البنا / عبده)
