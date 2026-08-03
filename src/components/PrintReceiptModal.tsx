@@ -7,6 +7,7 @@ import React, { useRef } from "react";
 import { Printer, X, Check, Share2 } from "lucide-react";
 import { RepairOrder, Customer, SystemSettings, Invoice, RepairStatus } from "../types";
 import { formatPhoneDisplay } from "../utils/phone";
+import { formatDateSafe } from "../utils/dateFormat";
 import { PhoneDisplay } from "./PhoneDisplay";
 import {
   getInvoiceCustomerName,
@@ -245,7 +246,7 @@ export default function PrintReceiptModal({
               </div>
               <div className="flex justify-between">
                 <span>التاريخ:</span>
-                <span>{new Date(order?.deliveredAt || order?.receivedDate || invoice?.date || "").toLocaleString("ar-EG")}</span>
+                <span>{formatDateSafe(order?.deliveredAt || order?.receivedDate || invoice?.date)}</span>
               </div>
               {order?.deliveredByUserName && (
                 <div className="flex justify-between">

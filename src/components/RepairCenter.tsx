@@ -56,6 +56,7 @@ import { addRepairPartUsageToSupabase, updateRepairPartUsageInSupabase } from ".
 import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabase } from "../lib/supabaseRepairOrders";
 import { executeRemovePartUsageTransaction } from "../lib/repairPartRemovalService";
 import { executeAddPartUsageTransaction } from "../lib/repairPartAddService";
+import { formatDateSafe } from "../utils/dateFormat";
 import { usageMatchesOrder, usageMatchesDevice, syncOrderSelectedRepairItemsFromUsages, getActiveRepairUsagesForDevice, getActiveRepairUsagesForOrder } from "../lib/accountingEngineV2";
 import { sendRepairNotificationWorkflow } from "../lib/whatsapp";
 import { 
@@ -1378,7 +1379,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                       ownershipType: selectedOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED,
                       responsiblePartnerId: 'SHOP',
                       accountingStatus: 'CONSUMED',
-                      createdAt: selectedOrder.createdAt || new Date().toISOString()
+                      createdAt: selectedOrder.receivedDate || new Date().toISOString()
                     }));
 
                 const matchedOrderUsages = getActiveRepairUsagesForOrder(selectedOrder, partUsages);
@@ -1826,7 +1827,11 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                             <div className="flex justify-between">
                               <span className="text-gray-400">تاريخ الاستلام:</span>
                               <span className="font-mono text-white">
-                                {new Date(selectedOrder.createdAt).toLocaleDateString('ar-EG')}
+                                {formatDateSafe(selectedOrder.receivedDate, {
+                                  year: "numeric",
+                                  month: "numeric",
+                                  day: "numeric"
+                                })}
                               </span>
                             </div>
                             <div className="flex justify-between">

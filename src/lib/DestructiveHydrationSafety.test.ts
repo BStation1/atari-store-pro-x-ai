@@ -1,5 +1,5 @@
 import { syncOrderSelectedRepairItemsFromUsages } from "./accountingEngineV2";
-import { RepairOrder, RepairPartUsage, WorkOwnershipType, RepairStatus } from "../types";
+import { DeviceType, RepairOrder, RepairPartUsage, WorkOwnershipType, RepairStatus } from "../types";
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -18,16 +18,21 @@ export function runDestructiveHydrationSafetyTests() {
     id: "RO-TEST-HYDRATION-001",
     customerName: "عميل تجربة الهيدريشن",
     customerPhone: "01000000000",
-    status: RepairStatus.Approved,
+    status: RepairStatus.WaitingCustomerApproval,
     devices: [
       {
         id: "DEV-1",
-        type: "PlayStation",
+        type: DeviceType.PS5,
         model: "PS5",
+        serialNumber: "TEST-SN-001",
+        color: "أسود",
+        accessories: "بدون ملحقات",
         issue: "عطل بور",
         partsCost: 500,
+        laborCost: 1000,
         estimatedCost: 1500,
         finalRepairPrice: 1500,
+        status: RepairStatus.WaitingCustomerApproval,
         selectedRepairItems: [
           {
             id: "PU-100",
@@ -48,7 +53,8 @@ export function runDestructiveHydrationSafetyTests() {
     finalRepairPrice: 1500,
     advancePayment: 0,
     isPaid: false,
-    createdAt: new Date().toISOString()
+    receivedDate: new Date().toISOString(),
+    trackingToken: "TRACK-HYDRATION-001"
   };
 
   const activeUsage: RepairPartUsage = {
@@ -56,6 +62,7 @@ export function runDestructiveHydrationSafetyTests() {
     repairOrderId: "RO-TEST-HYDRATION-001",
     inventoryItemId: "PROD-POWER-IC",
     partName: "آيسي باور سوني 5",
+    sku: "POWER-IC-PS5",
     quantity: 1,
     unitCost: 300,
     totalCost: 300,
