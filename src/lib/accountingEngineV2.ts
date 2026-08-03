@@ -257,8 +257,8 @@ function netActiveOutgoingMovements(movements: InventoryMovement[], order: Repai
       matchedWithdrawal.totalCost -= money(reversedQty * unitCost);
     }
   });
-
-  return withdrawals
+  // Build final active withdrawals list after applying all matched reversals.
+  const activeWithdrawals = withdrawals
     .filter(withdrawal => withdrawal.quantity > 0)
     .map((withdrawal: any, index: number) => ({
       id: clean(withdrawal.id) || `movement-net-${order.id}-${index}`,
@@ -268,6 +268,8 @@ function netActiveOutgoingMovements(movements: InventoryMovement[], order: Repai
       totalPurchaseCost: money(withdrawal.totalCost),
       source: 'INVENTORY_MOVEMENT' as const
     }));
+
+  return activeWithdrawals;
 }
 
 function movementMatchesOrder(movement: any, order: RepairOrder): boolean {

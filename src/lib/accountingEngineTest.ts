@@ -497,6 +497,74 @@ export async function runAccountingTestSuite(): Promise<AccountingTestSuiteResul
   }
 
   // =========================================================================
+  // Test 7.4: Regression - fully return one of two identical withdrawals
+  // =========================================================================
+  try {
+    const repairOrder = {
+      id: 'TEST-REPAIR-004',
+      orderNumber: 'R-004',
+      receivedDate: '2026-08-02T00:00:00Z',
+      customerName: 'Test Repair',
+      workOwnershipType: 'CUSTOMER_SHARED',
+      devices: []
+    } as any;
+
+    const movements = [
+      {
+        id: 'M-OUT-004-A',
+        productId: 'P-004',
+        movementType: 'REPAIR_USAGE',
+        quantityChange: -1,
+        previousQuantity: 10,
+        newQuantity: 9,
+        costPriceSnapshot: 100,
+        sellingPriceSnapshot: 0,
+        referenceId: repairOrder.id,
+        repairOrderId: repairOrder.id,
+        notes: 'deviceId:D-4',
+        createdAt: '2026-08-02T00:00:00Z'
+      },
+      {
+        id: 'M-OUT-004-B',
+        productId: 'P-004',
+        movementType: 'REPAIR_USAGE',
+        quantityChange: -1,
+        previousQuantity: 9,
+        newQuantity: 8,
+        costPriceSnapshot: 100,
+        sellingPriceSnapshot: 0,
+        referenceId: repairOrder.id,
+        repairOrderId: repairOrder.id,
+        notes: 'deviceId:D-4',
+        createdAt: '2026-08-02T00:05:00Z'
+      },
+      {
+        id: 'M-IN-004',
+        productId: 'P-004',
+        movementType: 'REPAIR_USAGE_RETURN',
+        quantityChange: 1,
+        previousQuantity: 8,
+        newQuantity: 9,
+        costPriceSnapshot: 100,
+        sellingPriceSnapshot: 0,
+        referenceId: repairOrder.id,
+        repairOrderId: repairOrder.id,
+        notes: 'deviceId:D-4',
+        createdAt: '2026-08-02T01:00:00Z'
+      }
+    ];
+
+    const result = calculateOrderAccountingV2(repairOrder, [], movements, []);
+    const pass7_4 = result.purchaseCost === 100 && result.partsQuantity === 1 && result.parts.length === 1;
+    const exp7_4 = 'بعد إرجاع الحركة الثانية يجب أن يبقى تكلفة قطع 100 وكمية 1';
+    const act7_4 = `qty=${result.partsQuantity} cost=${result.purchaseCost} parts=${result.parts.length}`;
+    const diff7_4 = pass7_4 ? undefined : `القيم غير متطابقة: ${JSON.stringify(result)}`;
+    assertTest(7.4, 'تراجع كامل لحركة من حركتين يعكس التكلفة بشكل صحيح', exp7_4, act7_4, pass7_4, diff7_4);
+  } catch (e: any) {
+    assertTest(7.4, 'تراجع كامل لحركة من حركتين', 'التكلفة النهائية = 100', `خطأ: ${e?.message}`, false);
+  }
+
+  // =========================================================================
   // Test 8: Invoice Edit & Re-calculation (تعديل الفاتورة وإعادة الحساب)
   // =========================================================================
   try {
