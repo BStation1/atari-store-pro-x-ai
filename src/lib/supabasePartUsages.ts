@@ -48,8 +48,18 @@ export async function fetchOrMigrateRepairPartUsages(): Promise<{
       notes: r.notes
     }));
 
+    const localById = new Map(localUsages.map(u => [u.id, u]));
     const mergedMap = new Map<string, RepairPartUsage>();
-    remoteUsages.forEach(u => mergedMap.set(u.id, u));
+    remoteUsages.forEach(remote => {
+      const local = localById.get(remote.id);
+      const localTerminal = local?.accountingStatus === 'RETURNED' || local?.accountingStatus === 'REVERSED';
+      mergedMap.set(remote.id, {
+        ...remote,
+        sku: remote.sku || local?.sku || '',
+        notes: remote.notes || local?.notes,
+        accountingStatus: localTerminal ? local.accountingStatus : remote.accountingStatus
+      });
+    });
     localUsages.forEach(u => {
       if (!mergedMap.has(u.id)) {
         mergedMap.set(u.id, u);
@@ -210,15 +220,6 @@ export async function updateRepairPartUsageInSupabase(
 ): Promise<boolean> {
   if (isSupabaseConfigured) {
     try {
-      const rowUpdates: any = {};
-      if (updates.accountingStatus) rowUpdates.accounting_status = updates.accountingStatus;
-      if (updates.notes !== undefined) rowUpdates.notes = updates.notes;
-      if (updates.quantity !== undefined) rowUpdates.quantity = updates.quantity;
-      if (updates.unitCost !== undefined) rowUpdates.unit_cost = updates.unitCost;
-      if (updates.totalCost !== undefined) rowUpdates.total_cost = updates.totalCost;
-      if (updates.sellingPrice !== undefined) rowUpdates.selling_price_snapshot = updates.sellingPrice;
-      if (updates.sellingTotal !== undefined) rowUpdates.selling_total = updates.sellingTotal;
-
       const applyIdentity = (query: any) => {
         if (isUuid(id)) return query.eq('id', id);
         if (usageSnapshot && isUuid(usageSnapshot.repairOrderId)) {
@@ -229,33 +230,25 @@ export async function updateRepairPartUsageInSupabase(
         return null;
       };
 
-      let query = applyIdentity(supabase.from('repair_part_usages').update(rowUpdates));
+      const isTerminal = updates.accountingStatus === 'RETURNED' || updates.accountingStatus === 'REVERSED';
+      const legacySafeUpdates: any = {};
+      if (updates.quantity !== undefined) legacySafeUpdates.quantity = updates.quantity;
+      if (updates.unitCost !== undefined) legacySafeUpdates.cost_price_snapshot = updates.unitCost;
+      if (updates.sellingPrice !== undefined) legacySafeUpdates.selling_price_snapshot = updates.sellingPrice;
+
+      // The production table may still use the original schema. A terminal
+      // usage is removed after its compensating inventory movement succeeds;
+      // partial changes only touch columns present in every schema version.
+      const operation = isTerminal
+        ? supabase.from('repair_part_usages').delete()
+        : supabase.from('repair_part_usages').update(legacySafeUpdates);
+      const query = applyIdentity(operation);
       if (!query) {
         console.warn('⚠️ Cannot safely resolve remote repair_part_usage:', id);
         return false;
       }
-      let { data, error } = await query.select('id');
-
-      if (error && isMissingColumnError(error)) {
-        if (updates.accountingStatus === 'RETURNED' || updates.accountingStatus === 'REVERSED') {
-          const deleteQuery = applyIdentity(supabase.from('repair_part_usages').delete());
-          if (!deleteQuery) return false;
-          const retry = await deleteQuery.select('id');
-          data = retry.data;
-          error = retry.error;
-        } else {
-          const legacyUpdates: any = {};
-          if (updates.quantity !== undefined) legacyUpdates.quantity = updates.quantity;
-          if (updates.unitCost !== undefined) legacyUpdates.cost_price_snapshot = updates.unitCost;
-          if (updates.sellingPrice !== undefined) legacyUpdates.selling_price_snapshot = updates.sellingPrice;
-          if (Object.keys(legacyUpdates).length === 0) return false;
-          const retryQuery = applyIdentity(supabase.from('repair_part_usages').update(legacyUpdates));
-          if (!retryQuery) return false;
-          const retry = await retryQuery.select('id');
-          data = retry.data;
-          error = retry.error;
-        }
-      }
+      if (!isTerminal && Object.keys(legacySafeUpdates).length === 0) return false;
+      const { data, error } = await query.select('id');
       if (error) {
         console.warn("⚠️ Notice updating repair_part_usages in Supabase:", error.message);
         return false;
