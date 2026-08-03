@@ -920,9 +920,13 @@ export async function addInventoryMovementToSupabase(movement: any): Promise<boo
     }
   }
 
-  // Map movement_type to valid enum: ('SALE', 'PURCHASE', 'RETURN', 'REPAIR_USAGE', 'ADJUSTMENT', 'DELETION_RESTORE')
+  // Map movement_type to valid enum: ('SALE', 'PURCHASE', 'RETURN', 'REPAIR_USAGE', 'ADJUSTMENT', 'DELETION_RESTORE', 'PARTNER_WITHDRAWAL_RETURN', 'REPAIR_USAGE_RETURN')
   let movType = movement.movementType;
-  if (movement.movementType === 'OUT' || movement.usageType === 'REPAIR_USAGE') {
+  if (movement.usageType === 'REPAIR_USAGE_RETURN' || movement.movementType === 'REPAIR_USAGE_RETURN') {
+    movType = 'REPAIR_USAGE_RETURN';
+  } else if (movement.usageType === 'PARTNER_WITHDRAWAL_RETURN' || movement.movementType === 'PARTNER_WITHDRAWAL_RETURN') {
+    movType = 'PARTNER_WITHDRAWAL_RETURN';
+  } else if (movement.movementType === 'OUT' || movement.usageType === 'REPAIR_USAGE' || movement.movementType === 'REPAIR_USAGE') {
     movType = 'REPAIR_USAGE';
   } else if (movement.movementType === 'IN') {
     movType = 'PURCHASE';

@@ -307,6 +307,196 @@ export async function runAccountingTestSuite(): Promise<AccountingTestSuiteResul
   }
 
   // =========================================================================
+  // Test 7.1: Repair Part Add and Remove Regression
+  // =========================================================================
+  try {
+    const repairOrder = {
+      id: 'TEST-REPAIR-001',
+      orderNumber: 'R-001',
+      receivedDate: '2026-08-02T00:00:00Z',
+      customerName: 'Test Repair',
+      workOwnershipType: 'CUSTOMER_SHARED',
+      devices: []
+    } as any;
+
+    const movements = [
+      {
+        id: 'M-OUT-001',
+        productId: 'P-001',
+        movementType: 'REPAIR_USAGE',
+        quantityChange: -1,
+        previousQuantity: 10,
+        newQuantity: 9,
+        costPriceSnapshot: 100,
+        sellingPriceSnapshot: 0,
+        referenceId: repairOrder.id,
+        repairOrderId: repairOrder.id,
+        notes: 'deviceId:D-1',
+        createdAt: '2026-08-02T00:00:00Z'
+      },
+      {
+        id: 'M-IN-001',
+        productId: 'P-001',
+        movementType: 'REPAIR_USAGE_RETURN',
+        quantityChange: 1,
+        previousQuantity: 9,
+        newQuantity: 10,
+        costPriceSnapshot: 100,
+        sellingPriceSnapshot: 0,
+        referenceId: repairOrder.id,
+        repairOrderId: repairOrder.id,
+        notes: 'deviceId:D-1',
+        createdAt: '2026-08-02T01:00:00Z'
+      }
+    ];
+
+    const result = calculateOrderAccountingV2(repairOrder, [], movements, []);
+    const pass7_1 =
+      result.partsQuantity === 0 &&
+      result.purchaseCost === 0 &&
+      result.netProfit === 0 &&
+      result.parts.length === 0;
+
+    const exp7_1 = "إضافة قطعة ثم إرجاعها يعطي كمية مسحوبة 0 وتكلفة 0 وناتج صافي 0";
+    const act7_1 = `qty=${result.partsQuantity} cost=${result.purchaseCost} profit=${result.netProfit} parts=${result.parts.length}`;
+    const diff7_1 = pass7_1 ? undefined : `القيم غير متطابقة: ${JSON.stringify(result)}`;
+    assertTest(7.1, "إضافة قطع غيار وإرجاعها لا تؤثر على المحاسبة بنهاية المطاف", exp7_1, act7_1, pass7_1, diff7_1);
+  } catch (e: any) {
+    assertTest(7.1, "اختبار انكماش قطع الغيار بعد الإرجاع", "النتيجة الصافية = 0", `خطأ: ${e?.message}`, false);
+  }
+
+  // =========================================================================
+  // Test 7.2: Unrelated purchase must not cancel repair withdrawal
+  // =========================================================================
+  try {
+    const repairOrder = {
+      id: 'TEST-REPAIR-002',
+      orderNumber: 'R-002',
+      receivedDate: '2026-08-02T00:00:00Z',
+      customerName: 'Test Repair',
+      workOwnershipType: 'CUSTOMER_SHARED',
+      devices: []
+    } as any;
+
+    const movements = [
+      {
+        id: 'M-OUT-002',
+        productId: 'P-002',
+        movementType: 'REPAIR_USAGE',
+        quantityChange: -1,
+        previousQuantity: 5,
+        newQuantity: 4,
+        costPriceSnapshot: 100,
+        sellingPriceSnapshot: 0,
+        referenceId: repairOrder.id,
+        repairOrderId: repairOrder.id,
+        notes: 'deviceId:D-2',
+        createdAt: '2026-08-02T00:00:00Z'
+      },
+      {
+        id: 'M-PUR-001',
+        productId: 'P-002',
+        movementType: 'PURCHASE',
+        quantityChange: 3,
+        previousQuantity: 4,
+        newQuantity: 7,
+        costPriceSnapshot: 100,
+        sellingPriceSnapshot: 0,
+        referenceId: 'PURCHASE-001',
+        notes: 'Unrelated stock purchase',
+        createdAt: '2026-08-02T01:00:00Z'
+      }
+    ];
+
+    const result = calculateOrderAccountingV2(repairOrder, [], movements, []);
+    const pass7_2 =
+      result.partsQuantity === 1 &&
+      result.purchaseCost === 100 &&
+      result.netProfit === -100 &&
+      result.parts.length === 1;
+
+    const exp7_2 = "شراء غير مرتبط لا يلغي سحب الصيانة؛ يجب أن يبقى السحب 1 بسعر 100";
+    const act7_2 = `qty=${result.partsQuantity} cost=${result.purchaseCost} profit=${result.netProfit} parts=${result.parts.length}`;
+    const diff7_2 = pass7_2 ? undefined : `القيم غير متطابقة: ${JSON.stringify(result)}`;
+    assertTest(7.2, "شراء غير مرتبط لا يلغي سحب الصيانة", exp7_2, act7_2, pass7_2, diff7_2);
+  } catch (e: any) {
+    assertTest(7.2, "شراء غير مرتبط يجب ألا يلغي السحب", "الكمية المسحوبة تبقى 1", `خطأ: ${e?.message}`, false);
+  }
+
+  // =========================================================================
+  // Test 7.3: Partial return reverses only matching withdrawal
+  // =========================================================================
+  try {
+    const repairOrder = {
+      id: 'TEST-REPAIR-003',
+      orderNumber: 'R-003',
+      receivedDate: '2026-08-02T00:00:00Z',
+      customerName: 'Test Repair',
+      workOwnershipType: 'CUSTOMER_SHARED',
+      devices: []
+    } as any;
+
+    const movements = [
+      {
+        id: 'M-OUT-003-A',
+        productId: 'P-003',
+        movementType: 'REPAIR_USAGE',
+        quantityChange: -1,
+        previousQuantity: 5,
+        newQuantity: 4,
+        costPriceSnapshot: 100,
+        sellingPriceSnapshot: 0,
+        referenceId: repairOrder.id,
+        repairOrderId: repairOrder.id,
+        notes: 'deviceId:D-3 usageId:U-1',
+        createdAt: '2026-08-02T00:00:00Z'
+      },
+      {
+        id: 'M-OUT-003-B',
+        productId: 'P-003',
+        movementType: 'REPAIR_USAGE',
+        quantityChange: -1,
+        previousQuantity: 4,
+        newQuantity: 3,
+        costPriceSnapshot: 100,
+        sellingPriceSnapshot: 0,
+        referenceId: repairOrder.id,
+        repairOrderId: repairOrder.id,
+        notes: 'deviceId:D-3 usageId:U-2',
+        createdAt: '2026-08-02T00:05:00Z'
+      },
+      {
+        id: 'M-IN-003',
+        productId: 'P-003',
+        movementType: 'REPAIR_USAGE_RETURN',
+        quantityChange: 1,
+        previousQuantity: 3,
+        newQuantity: 4,
+        costPriceSnapshot: 100,
+        sellingPriceSnapshot: 0,
+        referenceId: repairOrder.id,
+        repairOrderId: repairOrder.id,
+        notes: 'deviceId:D-3 usageId:U-1',
+        createdAt: '2026-08-02T01:00:00Z'
+      }
+    ];
+
+    const result = calculateOrderAccountingV2(repairOrder, [], movements, []);
+    const pass7_3 =
+      result.partsQuantity === 1 &&
+      result.purchaseCost === 100 &&
+      result.netProfit === -100 &&
+      result.parts.length === 1;
+
+    const exp7_3 = "إرجاع جزء من سحبين يعكس واحداً فقط ويترك سحباً واحداً نشطاً";
+    const act7_3 = `qty=${result.partsQuantity} cost=${result.purchaseCost} profit=${result.netProfit} parts=${result.parts.length}`;
+    const diff7_3 = pass7_3 ? undefined : `القيم غير متطابقة: ${JSON.stringify(result)}`;
+    assertTest(7.3, "إرجاع جزئي يعكس فقط السحب المطابق", exp7_3, act7_3, pass7_3, diff7_3);
+  } catch (e: any) {
+    assertTest(7.3, "اختبار الإرجاع الجزئي المطابق", "يبقى سحب واحد نشط", `خطأ: ${e?.message}`, false);
+  }
+
+  // =========================================================================
   // Test 8: Invoice Edit & Re-calculation (تعديل الفاتورة وإعادة الحساب)
   // =========================================================================
   try {

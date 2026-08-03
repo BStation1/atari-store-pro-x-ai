@@ -101,11 +101,157 @@ function isActiveUsage(usage: RepairPartUsage): boolean {
   return usage.accountingStatus !== 'RETURNED' && usage.accountingStatus !== 'REVERSED';
 }
 
+function getMovementField(movement: any, ...fields: string[]): string {
+  for (const field of fields) {
+    const value = movement[field];
+    if (value !== undefined && value !== null) {
+      const text = String(value).trim();
+      if (text) return text;
+    }
+  }
+  return '';
+}
+
+function parseDeviceIdFromNotes(notes: any): string {
+  if (!notes || typeof notes !== 'string') return '';
+  const match = String(notes).match(/deviceId:([^\s,;]+)/i);
+  return match ? match[1] : '';
+}
+
 function isOutgoingMovement(movement: any): boolean {
   const type = upper(movement.movementType ?? movement.movement_type);
   const qty = Number(movement.quantityChange ?? movement.quantity_change ?? 0);
-  if (['RETURN', 'IN', 'DELETION_RESTORE', 'PURCHASE'].includes(type)) return false;
   return ['REPAIR_USAGE', 'PARTNER_WITHDRAWAL', 'OUT', 'SALE'].includes(type) || qty < 0;
+}
+
+function isExplicitReturnMovement(movement: any): boolean {
+  const type = upper(movement.movementType ?? movement.movement_type);
+  return ['REPAIR_USAGE_RETURN', 'PARTNER_WITHDRAWAL_RETURN'].includes(type);
+}
+
+function isGenericReturnMovement(movement: any): boolean {
+  const type = upper(movement.movementType ?? movement.movement_type);
+  return ['RETURN', 'DELETION_RESTORE'].includes(type);
+}
+
+function isReturnCandidate(movement: any): boolean {
+  return isExplicitReturnMovement(movement) || isGenericReturnMovement(movement);
+}
+
+function movementCreatedAt(movement: any): number {
+  const date = new Date(movement.createdAt ?? movement.created_at ?? '').getTime();
+  return Number.isFinite(date) && date > 0 ? date : 0;
+}
+
+function isExplicitReverseLink(returnMovement: any, withdrawalMovement: any): boolean {
+  const returnLink = getMovementField(
+    returnMovement,
+    'reversalOf',
+    'reversal_of',
+    'relatedMovementId',
+    'related_movement_id',
+    'usageId',
+    'usage_id'
+  );
+  const withdrawalId = getMovementField(withdrawalMovement, 'id', 'movementId', 'movement_id');
+  if (returnLink && withdrawalId && returnLink === withdrawalId) return true;
+
+  const returnReference = getMovementField(returnMovement, 'referenceId', 'reference_id');
+  if (returnReference && withdrawalId && returnReference === withdrawalId) return true;
+
+  const withdrawalReference = getMovementField(withdrawalMovement, 'referenceId', 'reference_id');
+  const returnId = getMovementField(returnMovement, 'id', 'movementId', 'movement_id');
+  if (withdrawalReference && returnId && withdrawalReference === returnId) return true;
+
+  const returnUsageId = getMovementField(returnMovement, 'usageId', 'usage_id');
+  const withdrawalUsageId = getMovementField(withdrawalMovement, 'usageId', 'usage_id');
+  if (returnUsageId && withdrawalUsageId && returnUsageId === withdrawalUsageId) return true;
+
+  const returnDevice = parseDeviceIdFromNotes(returnMovement.notes ?? returnMovement.notes);
+  const withdrawalDevice = parseDeviceIdFromNotes(withdrawalMovement.notes ?? withdrawalMovement.notes);
+  if (returnDevice && withdrawalDevice && returnDevice === withdrawalDevice) return true;
+
+  return false;
+}
+
+function sameRepairOrderAndProduct(movementA: any, movementB: any): boolean {
+  const orderA = getMovementField(movementA, 'repairOrderId', 'repair_order_id', 'referenceId', 'reference_id');
+  const orderB = getMovementField(movementB, 'repairOrderId', 'repair_order_id', 'referenceId', 'reference_id');
+  const productA = getMovementField(movementA, 'productId', 'product_id', 'inventoryItemId', 'inventory_item_id', 'sku');
+  const productB = getMovementField(movementB, 'productId', 'product_id', 'inventoryItemId', 'inventory_item_id', 'sku');
+  return orderA && orderA === orderB && productA && productA === productB;
+}
+
+function strictFallbackMatch(returnMovement: any, withdrawalMovement: any): boolean {
+  if (!sameRepairOrderAndProduct(returnMovement, withdrawalMovement)) return false;
+  if (movementCreatedAt(returnMovement) <= movementCreatedAt(withdrawalMovement)) return false;
+  const returnDevice = parseDeviceIdFromNotes(returnMovement.notes ?? returnMovement.notes);
+  const withdrawalDevice = parseDeviceIdFromNotes(withdrawalMovement.notes ?? withdrawalMovement.notes);
+  const returnUsageId = getMovementField(returnMovement, 'usageId', 'usage_id');
+  const withdrawalUsageId = getMovementField(withdrawalMovement, 'usageId', 'usage_id');
+  if (returnDevice && withdrawalDevice) return returnDevice === withdrawalDevice;
+  if (returnUsageId && withdrawalUsageId) return returnUsageId === withdrawalUsageId;
+  return isExplicitReturnMovement(returnMovement);
+}
+
+function netActiveOutgoingMovements(movements: InventoryMovement[], order: RepairOrder) {
+  const relevantMovements = (movements || []).filter(movement => movementMatchesOrder(movement, order));
+
+  const withdrawals = relevantMovements
+    .filter(isOutgoingMovement)
+    .map((movement: any) => ({
+      ...movement,
+      quantity: movementCost(movement).quantity,
+      totalCost: movementCost(movement).totalCost
+    }));
+
+  const returns = relevantMovements
+    .filter(isReturnCandidate)
+    .map((movement: any) => ({
+      ...movement,
+      quantity: movementCost(movement).quantity,
+      totalCost: movementCost(movement).totalCost
+    }));
+
+  returns.forEach((returnMovement) => {
+    let matchedWithdrawal = withdrawals.find(withdrawal =>
+      withdrawal.quantity > 0 &&
+      isExplicitReverseLink(returnMovement, withdrawal) &&
+      movementCreatedAt(returnMovement) >= movementCreatedAt(withdrawal)
+    );
+
+    if (!matchedWithdrawal && isExplicitReturnMovement(returnMovement)) {
+      matchedWithdrawal = withdrawals.find(withdrawal =>
+        withdrawal.quantity > 0 &&
+        strictFallbackMatch(returnMovement, withdrawal)
+      );
+    }
+
+    if (!matchedWithdrawal && isGenericReturnMovement(returnMovement)) {
+      matchedWithdrawal = withdrawals.find(withdrawal =>
+        withdrawal.quantity > 0 &&
+        isExplicitReverseLink(returnMovement, withdrawal)
+      );
+    }
+
+    if (matchedWithdrawal) {
+      const reversedQty = Math.min(returnMovement.quantity, matchedWithdrawal.quantity);
+      const unitCost = matchedWithdrawal.quantity > 0 ? matchedWithdrawal.totalCost / matchedWithdrawal.quantity : 0;
+      matchedWithdrawal.quantity -= reversedQty;
+      matchedWithdrawal.totalCost -= money(reversedQty * unitCost);
+    }
+  });
+
+  return withdrawals
+    .filter(withdrawal => withdrawal.quantity > 0)
+    .map((withdrawal: any, index: number) => ({
+      id: clean(withdrawal.id) || `movement-net-${order.id}-${index}`,
+      partName: productNameFromMovement(withdrawal),
+      quantity: withdrawal.quantity,
+      unitPurchaseCost: withdrawal.quantity > 0 ? money(withdrawal.totalCost / withdrawal.quantity) : 0,
+      totalPurchaseCost: money(withdrawal.totalCost),
+      source: 'INVENTORY_MOVEMENT' as const
+    }));
 }
 
 function movementMatchesOrder(movement: any, order: RepairOrder): boolean {
@@ -323,28 +469,13 @@ export function resolveOrderPartsAccounting(
     console.log('========================');
   };
 
-  const linkedMovements = (movements || []).filter(
-    movement => isOutgoingMovement(movement) && movementMatchesOrder(movement, order)
-  );
+  const netLinkedMovements = netActiveOutgoingMovements(movements || [], order);
 
-  // linkedMovements count will be included in the final trace
-
-  if (linkedMovements.length > 0) {
-    const parts = linkedMovements.map((movement: any, index) => {
-      const cost = movementCost(movement);
-      return {
-        id: clean(movement.id) || `movement-${order.id}-${index}`,
-        partName: productNameFromMovement(movement),
-        quantity: cost.quantity,
-        unitPurchaseCost: cost.unitCost,
-        totalPurchaseCost: cost.totalCost,
-        source: 'INVENTORY_MOVEMENT' as const
-      };
-    });
+  if (netLinkedMovements.length > 0) {
     const result = {
-      parts,
-      purchaseCost: money(parts.reduce((sum, part) => sum + part.totalPurchaseCost, 0)),
-      partsQuantity: parts.reduce((sum, part) => sum + part.quantity, 0),
+      parts: netLinkedMovements,
+      purchaseCost: money(netLinkedMovements.reduce((sum, part) => sum + part.totalPurchaseCost, 0)),
+      partsQuantity: netLinkedMovements.reduce((sum, part) => sum + part.quantity, 0),
       costSource: 'INVENTORY_MOVEMENTS' as const,
       purchaseCostStatus: 'RECORDED' as const,
       isAccountingIncomplete: false
