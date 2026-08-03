@@ -1,7 +1,7 @@
 import { Product, RepairOrder, RepairPartUsage, SelectedRepairItem, WorkOwnershipType } from '../types';
 import { db } from './db';
 import { ensureProductUuidInSupabase, updateProductQuantityInSupabase, addInventoryMovementToSupabase } from './supabaseProducts';
-import { addRepairPartUsageToSupabase, updateRepairPartUsageInSupabase } from './supabasePartUsages';
+import { addRepairPartUsageToSupabase, fetchOrMigrateRepairPartUsages, updateRepairPartUsageInSupabase } from './supabasePartUsages';
 import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabase } from './supabaseRepairOrders';
 import { getUsageSellingUnitPrice, calculateSuggestedPriceForFaults } from './repairOrderCalculations';
 import { usageMatchesOrder, usageMatchesDevice } from './accountingEngineV2';
@@ -66,8 +66,14 @@ export async function executeAddPartUsageTransaction(
     productUuid = resolvedProdUuid;
     repairOrderUuid = resolvedOrderUuid;
 
-    // Check existing active usage for same product on this order & device
-    const allUsages = [...partUsages];
+    // Refresh immediately before deciding whether to reuse a usage. The order
+    // screen may still hold a pre-removal snapshot, especially after another
+    // tab/device returned the part. Reusing that stale row can increment a
+    // RETURNED usage and resurrect deleted invoice lines.
+    const canonicalUsageResult = await fetchOrMigrateRepairPartUsages();
+    const allUsages = canonicalUsageResult.success
+      ? [...canonicalUsageResult.partUsages]
+      : [...partUsages];
     const existingUsage = allUsages.find(
       pu => productMatchesRepairUsage(product, pu) &&
             pu.accountingStatus !== 'RETURNED' &&
@@ -167,7 +173,19 @@ export async function executeAddPartUsageTransaction(
       deviceIndex: deviceIdx
     };
 
-    const existingItems = currentDevice.selectedRepairItems || [];
+    const activeUsageIdsForDevice = new Set(
+      updatedUsageList
+        .filter(
+          pu => usageMatchesOrder(pu, selectedOrder) &&
+                pu.accountingStatus !== 'RETURNED' &&
+                pu.accountingStatus !== 'REVERSED' &&
+                usageMatchesDevice(pu, currentDevice, deviceIdx, selectedOrder.devices.length)
+        )
+        .map(pu => pu.id)
+    );
+    const existingItems = (currentDevice.selectedRepairItems || []).filter(
+      item => activeUsageIdsForDevice.has(item.usageId || item.id)
+    );
     const existingItemIdx = existingItems.findIndex(
       i => i.usageId === createdUsage!.id || i.id === createdUsage!.id || (i.productId && (i.productId === product.id || i.productId === productUuid))
     );

@@ -61,7 +61,10 @@ export async function fetchOrMigrateRepairPartUsages(): Promise<{
       });
     });
     localUsages.forEach(u => {
-      if (!mergedMap.has(u.id)) {
+      // A UUID that disappeared from a successful remote fetch was deleted
+      // intentionally (RETURNED/REVERSED cleanup). Do not resurrect it from a
+      // stale browser cache. Only legacy local-only IDs are retained.
+      if (!mergedMap.has(u.id) && !isUuid(u.id)) {
         mergedMap.set(u.id, u);
       }
     });
