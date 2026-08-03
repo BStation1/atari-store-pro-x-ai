@@ -160,51 +160,34 @@ export async function executeAddPartUsageTransaction(
       throw new Error("فشل خصم الكمية من المخزون بقاعدة البيانات");
     }
 
-    // Step 4: Add persisted part to device.selectedRepairItems using REAL persisted usage id
-    const itemToPut: SelectedRepairItem = {
-      id: createdUsage.id,
-      usageId: createdUsage.id,
-      productId: product.id,
-      name: product.nameAr || product.name,
-      quantity: createdUsage.quantity,
-      costPrice: unitPurchaseCost,
-      repairPrice: unitSellingPrice,
-      salePrice: unitSellingPrice,
-      deviceId: currentDevice.id,
-      deviceIndex: deviceIdx
-    };
-
-    const activeUsageIdsForDevice = new Set(
-      updatedUsageList
-        .filter(
-          pu => usageMatchesOrder(pu, selectedOrder) &&
-                pu.accountingStatus !== 'RETURNED' &&
-                pu.accountingStatus !== 'REVERSED' &&
-                usageMatchesDevice(pu, currentDevice, deviceIdx, selectedOrder.devices.length)
-        )
-        .map(pu => pu.id)
-    );
-    const existingItems = (currentDevice.selectedRepairItems || []).filter(
-      item => activeUsageIdsForDevice.has(item.usageId || item.id)
-    );
-    const existingItemIdx = existingItems.findIndex(
-      i => i.usageId === createdUsage!.id || i.id === createdUsage!.id || (i.productId && (i.productId === product.id || i.productId === productUuid))
-    );
-
-    let nextSelectedRepairItems: SelectedRepairItem[];
-    if (existingItemIdx >= 0) {
-      nextSelectedRepairItems = existingItems.map((item, idx) => idx === existingItemIdx ? itemToPut : item);
-    } else {
-      nextSelectedRepairItems = [...existingItems, itemToPut];
-    }
-
-    // Recalculate partsCost and order totals
+    // Step 4: Rebuild the complete device snapshot from canonical active
+    // usages. Never append to the React snapshot because two quick additions
+    // may have started from the same old order object.
     const activeUsagesForDevice = updatedUsageList.filter(
       pu => usageMatchesOrder(pu, selectedOrder) &&
             pu.accountingStatus !== 'RETURNED' &&
             pu.accountingStatus !== 'REVERSED' &&
             usageMatchesDevice(pu, currentDevice, deviceIdx, selectedOrder.devices.length)
     );
+
+    const nextSelectedRepairItems: SelectedRepairItem[] = activeUsagesForDevice.map(pu => {
+      const matchedProduct = products.find(candidate => productMatchesRepairUsage(candidate, pu));
+      const sellPrice = getUsageSellingUnitPrice(pu, products);
+      return {
+        id: pu.id,
+        usageId: pu.id,
+        productId: matchedProduct?.id || pu.inventoryItemId,
+        name: pu.partName,
+        quantity: pu.quantity,
+        costPrice: pu.unitCost,
+        repairPrice: sellPrice,
+        salePrice: sellPrice,
+        deviceId: currentDevice.id,
+        deviceIndex: deviceIdx
+      };
+    });
+
+    // Recalculate partsCost and order totals
 
     const newPartsCost = activeUsagesForDevice.reduce((sum, pu) => {
       const sellP = getUsageSellingUnitPrice(pu, products);

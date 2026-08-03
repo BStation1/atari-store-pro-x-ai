@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useDialog } from "../context/DialogContext";
 import {
   Wrench,
@@ -126,6 +126,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
   const [selectedOrder, setSelectedOrder] = useState<RepairOrder | null>(
     initialOrderId ? orders.find(o => o.id === initialOrderId) || null : null
   );
+  const partAddLockRef = useRef(false);
 
   useEffect(() => {
     if (selectedOrder && partUsagesLoaded) {
@@ -650,7 +651,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
     if (!selectedOrder) return;
 
-    if (busyProductIds.has(productId)) {
+    if (partAddLockRef.current || busyProductIds.size > 0) {
       console.log(`[AddPart] Product ${productId} is busy. Ignoring click.`);
       return;
     }
@@ -664,6 +665,10 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       return;
     }
 
+    // Different products could previously be added concurrently, causing the
+    // last order save to overwrite the other line. Lock the whole order part
+    // operation synchronously, before React state has time to re-render.
+    partAddLockRef.current = true;
     setBusyProductIds(prev => new Set(prev).add(productId));
 
     try {
@@ -695,6 +700,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
         variant: "error"
       });
     } finally {
+      partAddLockRef.current = false;
       setBusyProductIds(prev => {
         const next = new Set(prev);
         next.delete(productId);
