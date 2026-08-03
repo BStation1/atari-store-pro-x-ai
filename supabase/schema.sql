@@ -498,6 +498,9 @@ CREATE INDEX IF NOT EXISTS idx_products_sku ON public.products(sku);
 CREATE INDEX IF NOT EXISTS idx_products_barcode ON public.products(barcode);
 CREATE INDEX IF NOT EXISTS idx_products_category ON public.products(category_id);
 CREATE INDEX IF NOT EXISTS idx_inventory_movements_prod ON public.inventory_movements(product_id);
+CREATE UNIQUE INDEX IF NOT EXISTS inventory_movements_one_opening_balance_per_product
+ON public.inventory_movements(product_id)
+WHERE reference_id = 'OPENING_BALANCE';
 CREATE INDEX IF NOT EXISTS idx_customers_phone ON public.customers(phone);
 CREATE INDEX IF NOT EXISTS idx_invoices_number ON public.invoices(invoice_number);
 CREATE INDEX IF NOT EXISTS idx_invoices_customer ON public.invoices(customer_id);

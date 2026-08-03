@@ -54,6 +54,16 @@ const USERS_STORAGE_KEY = "atari_erp_users_v2";
 const SESSIONS_STORAGE_KEY = "atari_erp_sessions_v2";
 const LOGIN_ATTEMPTS_STORAGE_KEY = "atari_login_attempts_v2";
 
+function normalizeProfileRole(role: unknown): UserRole {
+  const normalized = String(role || "RECEPTION").toUpperCase();
+  if (normalized === "OWNER" || normalized === "ADMIN") return "OWNER";
+  if (normalized === "ENGINEER") return "TECHNICIAN";
+  if (normalized === "RECEPTION") return "RECEPTIONIST";
+  return normalized in DEFAULT_ROLE_PERMISSIONS
+    ? normalized as UserRole
+    : "RECEPTIONIST";
+}
+
 // Simple secure string hash for demonstration client environment
 export function hashPassword(plain: string): string {
   let hash = 0;
@@ -168,8 +178,7 @@ export const authStore = {
         const now = new Date().toISOString();
 
         profiles.forEach((p: any) => {
-          const pRole = String(p.role || "RECEPTION").toUpperCase();
-          const normRoleId: UserRole = (pRole === "OWNER" || pRole === "ADMIN") ? "OWNER" : (pRole as UserRole);
+          const normRoleId = normalizeProfileRole(p.role);
           const existingIdx = existingUsers.findIndex(u => u.id === p.id || u.email.toLowerCase() === (p.email || "").toLowerCase());
 
           const syncedUser: AuthUser = {
@@ -448,8 +457,15 @@ export const authStore = {
       }
 
       // Map profile to AuthUser
-      const roleUpper = String(profile.role || "RECEPTION").toUpperCase();
-      const roleId: UserRole = (roleUpper === "OWNER" || roleUpper === "ADMIN") ? "OWNER" : (roleUpper as UserRole);
+      const roleId = normalizeProfileRole(profile.role);
+      const profilePermissions = Array.isArray(profile.custom_permissions)
+        ? profile.custom_permissions.filter((permission: unknown): permission is string => typeof permission === "string")
+        : [];
+      const effectivePermissions = roleId === "OWNER"
+        ? ALL_PERMISSIONS
+        : profilePermissions.length > 0
+          ? profilePermissions
+          : (DEFAULT_ROLE_PERMISSIONS[roleId] || []);
 
       const activeUser: AuthUser = {
         id: session.user.id,
@@ -460,7 +476,7 @@ export const authStore = {
         phone: profile.phone || "",
         roleId: roleId,
         role: roleId.toLowerCase(),
-        permissions: ALL_PERMISSIONS,
+        permissions: effectivePermissions,
         isActive: true,
         createdAt: profile.created_at || new Date().toISOString(),
         updatedAt: profile.updated_at || new Date().toISOString(),

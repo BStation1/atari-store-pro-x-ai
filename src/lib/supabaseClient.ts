@@ -9,14 +9,14 @@ const supabaseUrl =
   metaEnv.VITE_SUPABASE_PROJECT_URL ||
   procEnv.VITE_SUPABASE_URL ||
   procEnv.VITE_SUPABASE_PROJECT_URL ||
-  'https://sitypxfezcsyusivbufc.supabase.co';
+  '';
 
 const supabaseKey =
   metaEnv.VITE_SUPABASE_PUBLISHABLE_KEY ||
   metaEnv.VITE_SUPABASE_ANON_KEY ||
   procEnv.VITE_SUPABASE_PUBLISHABLE_KEY ||
   procEnv.VITE_SUPABASE_ANON_KEY ||
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNpdHlweGZlemNzeXVzaXZidWZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDA1MzQ1NjUsImV4cCI6MjA1NjExMDU2NX0.1S48M1Yx-VnThnSp01Xp4p9wW1_Lp9q2M3N4O5P6Q7R';
+  '';
 
 export const isSupabaseConfigured = Boolean(
   supabaseUrl &&

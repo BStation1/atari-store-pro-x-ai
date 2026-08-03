@@ -235,12 +235,14 @@ export async function fetchOrMigrateProducts(): Promise<{
             .from('inventory_movements')
             .select('id')
             .eq('product_id', p.id)
-            .or('reference_id.eq.OPENING_BALANCE,notes.ilike.%OPENING_BALANCE%')
+            .eq('reference_id', 'OPENING_BALANCE')
             .limit(1);
 
           if (!mData || mData.length === 0) {
-            // Create opening balance record
-            await supabase.from('inventory_movements').insert([
+            // The database has a partial unique index on product_id for
+            // OPENING_BALANCE rows. Concurrent tabs may both reach this
+            // insert, so a 23505 response is an expected idempotency result.
+            const { error: openingBalanceError } = await supabase.from('inventory_movements').insert([
               {
                 product_id: p.id,
                 movement_type: 'ADJUSTMENT',
@@ -253,7 +255,11 @@ export async function fetchOrMigrateProducts(): Promise<{
                 notes: 'رصيد افتتاحي - OPENING_BALANCE',
               },
             ]);
-            createdMovements++;
+            if (!openingBalanceError) {
+              createdMovements++;
+            } else if (openingBalanceError.code !== '23505') {
+              console.warn('⚠️ Could not create OPENING_BALANCE movement:', openingBalanceError.message);
+            }
           }
         }
       }
@@ -346,22 +352,23 @@ export async function addProductToSupabase(
       newProduct = mapRowToProduct(data);
 
       if (newProduct.quantity > 0) {
-        try {
-          await supabase.from('inventory_movements').insert([
-            {
-              product_id: newProduct.id,
-              movement_type: 'ADJUSTMENT',
-              quantity_change: newProduct.quantity,
-              previous_quantity: 0,
-              new_quantity: newProduct.quantity,
-              cost_price_snapshot: newProduct.purchasePrice,
-              selling_price_snapshot: newProduct.sellPrice,
-              reference_id: 'OPENING_BALANCE',
-              notes: 'إضافة منتج جديد - رصيد افتتاحي',
-              created_by_user_id: userId || null,
-            },
-          ]);
-        } catch (_) {}
+        const { error: openingBalanceError } = await supabase.from('inventory_movements').insert([
+          {
+            product_id: newProduct.id,
+            movement_type: 'ADJUSTMENT',
+            quantity_change: newProduct.quantity,
+            previous_quantity: 0,
+            new_quantity: newProduct.quantity,
+            cost_price_snapshot: newProduct.purchasePrice,
+            selling_price_snapshot: newProduct.sellPrice,
+            reference_id: 'OPENING_BALANCE',
+            notes: 'إضافة منتج جديد - رصيد افتتاحي',
+            created_by_user_id: userId || null,
+          },
+        ]);
+        if (openingBalanceError && openingBalanceError.code !== '23505') {
+          console.warn('⚠️ Could not create product OPENING_BALANCE movement:', openingBalanceError.message);
+        }
       }
     }
   } catch (err: any) {
