@@ -161,7 +161,10 @@ export async function addRepairPartUsageToSupabase(
 
     if (error) {
       console.warn("⚠️ Notice inserting repair_part_usages into Supabase:", error.message);
+      throw new Error(`تعذر إنشاء سجل قطعة الغيار: ${error.message}`);
     }
+
+    if (!insertedRow?.id) throw new Error('لم تُرجع قاعدة البيانات معرّف سجل قطعة الغيار');
 
     return db.addRepairPartUsage({
       ...partUsage,
@@ -170,18 +173,15 @@ export async function addRepairPartUsageToSupabase(
     } as any);
   } catch (err) {
     console.warn("⚠️ Exception inserting repair_part_usages into Supabase:", err);
-    return db.addRepairPartUsage(partUsage);
+    throw err;
   }
 }
 
-export async function updateRepairPartUsageInSupabase(id: string, updates: Partial<RepairPartUsage>): Promise<boolean> {
-  const all = db.getRepairPartUsages();
-  const index = all.findIndex(pu => pu.id === id);
-  if (index !== -1) {
-    all[index] = { ...all[index], ...updates };
-    db.saveRepairPartUsages(all);
-  }
-
+export async function updateRepairPartUsageInSupabase(
+  id: string,
+  updates: Partial<RepairPartUsage>,
+  usageSnapshot?: RepairPartUsage
+): Promise<boolean> {
   if (isSupabaseConfigured) {
     try {
       const rowUpdates: any = {};
@@ -193,13 +193,39 @@ export async function updateRepairPartUsageInSupabase(id: string, updates: Parti
       if (updates.sellingPrice !== undefined) rowUpdates.selling_price_snapshot = updates.sellingPrice;
       if (updates.sellingTotal !== undefined) rowUpdates.selling_total = updates.sellingTotal;
 
-      const { error } = await supabase.from('repair_part_usages').update(rowUpdates).eq('id', id);
+      let query = supabase.from('repair_part_usages').update(rowUpdates);
+      if (isUuid(id)) {
+        query = query.eq('id', id);
+      } else if (usageSnapshot && isUuid(usageSnapshot.repairOrderId)) {
+        query = query
+          .eq('repair_order_id', usageSnapshot.repairOrderId)
+          .eq('sku', usageSnapshot.sku)
+          .not('accounting_status', 'in', '(RETURNED,REVERSED)');
+      } else {
+        console.warn('⚠️ Cannot safely resolve remote repair_part_usage:', id);
+        return false;
+      }
+
+      const { data, error } = await query.select('id');
       if (error) {
         console.warn("⚠️ Notice updating repair_part_usages in Supabase:", error.message);
+        return false;
+      }
+      if (!data || data.length !== 1) {
+        console.warn('⚠️ Repair part usage update affected an unsafe row count:', data?.length || 0);
+        return false;
       }
     } catch (err) {
       console.warn("⚠️ Exception updating repair_part_usages in Supabase:", err);
+      return false;
     }
+  }
+
+  const all = db.getRepairPartUsages();
+  const index = all.findIndex(pu => pu.id === id);
+  if (index !== -1) {
+    all[index] = { ...all[index], ...updates };
+    db.saveRepairPartUsages(all);
   }
   return true;
 }

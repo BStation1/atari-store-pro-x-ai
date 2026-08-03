@@ -56,6 +56,7 @@ import { addRepairPartUsageToSupabase, updateRepairPartUsageInSupabase } from ".
 import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabase } from "../lib/supabaseRepairOrders";
 import { executeRemovePartUsageTransaction } from "../lib/repairPartRemovalService";
 import { executeAddPartUsageTransaction } from "../lib/repairPartAddService";
+import { findProductForRepairUsage } from "../lib/productIdentity";
 import { formatDateSafe } from "../utils/dateFormat";
 import { usageMatchesOrder, usageMatchesDevice, syncOrderSelectedRepairItemsFromUsages, getActiveRepairUsagesForDevice, getActiveRepairUsagesForOrder } from "../lib/accountingEngineV2";
 import { sendRepairNotificationWorkflow } from "../lib/whatsapp";
@@ -732,7 +733,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
       // UI updates ONLY AFTER all three persistence operations succeed
       if (res.updatedProducts) {
-        const prod = res.updatedProducts.find(p => p.id === usage.inventoryItemId);
+        const prod = findProductForRepairUsage(res.updatedProducts, usage);
         if (prod) setProductLocal(prod);
       }
       if (res.updatedPartUsages) {
@@ -1731,9 +1732,9 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                   deviceLinkedUsages.map((pu) => {
                                     const unitSellPrice = getUsageSellingUnitPrice(pu, products);
                                     const lineTotal = pu.quantity * unitSellPrice;
-                                    const matchedProd = products.find(p => p.id === pu.inventoryItemId);
+                                    const matchedProd = findProductForRepairUsage(products, pu);
                                     const stockAvail = matchedProd ? matchedProd.quantity : 0;
-                                    const isBusy = busyProductIds.has(pu.inventoryItemId);
+                                    const isBusy = busyProductIds.has(pu.inventoryItemId) || Boolean(matchedProd && busyProductIds.has(matchedProd.id));
 
                                     return (
                                       <tr key={pu.id} className="hover:bg-[#181b2a] transition-colors">
@@ -1771,7 +1772,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                             <button
                                               type="button"
                                               disabled={stockAvail <= 0 || isBusy}
-                                              onClick={() => handleAddPartToDevice(devIdx, pu.inventoryItemId, 1)}
+                                              onClick={() => matchedProd && handleAddPartToDevice(devIdx, matchedProd.id, 1)}
                                               className="w-7 h-7 flex items-center justify-center bg-indigo-600 hover:bg-indigo-500 text-white rounded-md font-bold text-base transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                                               title={stockAvail <= 0 ? "المخزون نفذ" : "إضافة قطعة (+)"}
                                             >

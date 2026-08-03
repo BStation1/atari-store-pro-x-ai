@@ -1,8 +1,9 @@
 import { RepairPartUsage, Product, QUICK_FAULTS_LIST } from '../types';
+import { findProductForRepairUsage } from './productIdentity';
 
 export function getUsageSellingUnitPrice(pu: RepairPartUsage, productsList: Product[]): number {
   if (pu.sellingPrice && pu.sellingPrice > 0) return pu.sellingPrice;
-  const prod = productsList.find(p => p.id === pu.inventoryItemId);
+  const prod = findProductForRepairUsage(productsList, pu);
   if (prod && prod.sellPrice > 0) return prod.sellPrice;
   return pu.unitCost || 0;
 }

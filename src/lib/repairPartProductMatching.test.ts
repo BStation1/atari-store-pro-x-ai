@@ -1,5 +1,5 @@
 import { Product, RepairPartUsage, WorkOwnershipType } from '../types';
-import { findProductForRepairUsage } from './repairPartRemovalService';
+import { findProductForRepairUsage, productMatchesRepairUsage } from './productIdentity';
 
 function assert(condition: boolean, message: string) {
   if (!condition) throw new Error(`Assertion failed: ${message}`);
@@ -38,6 +38,7 @@ export function runRepairPartProductMatchingTests() {
   };
 
   assert(findProductForRepairUsage([product], baseUsage)?.id === product.id, 'matches remote UUID to local product');
+  assert(productMatchesRepairUsage(product, baseUsage), 'add flow reuses usage stored with remote UUID');
   assert(
     findProductForRepairUsage([product], { ...baseUsage, inventoryItemId: 'OLD-ID' })?.id === product.id,
     'falls back to SKU when ids differ'

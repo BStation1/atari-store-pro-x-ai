@@ -7,6 +7,7 @@ import { getUsageSellingUnitPrice, calculateSuggestedPriceForFaults } from './re
 import { usageMatchesOrder, usageMatchesDevice } from './accountingEngineV2';
 import { addAuditLogRecordHelper, addTimelineEventHelper } from './repairLogging';
 import { getDeviceDisplayName } from './customerDisplayHelper';
+import { productMatchesRepairUsage } from './productIdentity';
 
 export interface ExecuteAddPartUsageOptions {
   product: Product;
@@ -68,7 +69,7 @@ export async function executeAddPartUsageTransaction(
     // Check existing active usage for same product on this order & device
     const allUsages = [...partUsages];
     const existingUsage = allUsages.find(
-      pu => pu.inventoryItemId === product.id &&
+      pu => productMatchesRepairUsage(product, pu) &&
             pu.accountingStatus !== 'RETURNED' &&
             pu.accountingStatus !== 'REVERSED' &&
             usageMatchesOrder(pu, selectedOrder) &&
@@ -89,7 +90,7 @@ export async function executeAddPartUsageTransaction(
         sellingTotal: newUsageSellingTotal
       };
 
-      const ok = await updateRepairPartUsageInSupabase(existingUsage.id, usageUpdate);
+      const ok = await updateRepairPartUsageInSupabase(existingUsage.id, usageUpdate, existingUsage);
       if (!ok) {
         throw new Error("فشل تحديث سجل قطعة الغيار بفي قاعدة البيانات");
       }
@@ -277,7 +278,7 @@ export async function executeAddPartUsageTransaction(
     // Rollback created usage if new
     if (isNewUsageCreated && createdUsage?.id) {
       try {
-        await updateRepairPartUsageInSupabase(createdUsage.id, { accountingStatus: 'REVERSED' });
+        await updateRepairPartUsageInSupabase(createdUsage.id, { accountingStatus: 'REVERSED' }, createdUsage);
       } catch (rbErr) {
         console.warn("⚠️ Rollback usage failed:", rbErr);
       }

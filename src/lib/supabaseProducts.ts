@@ -903,9 +903,8 @@ export async function updateProductQuantityInSupabase(
  * Adds an inventory movement to Supabase and updates local storage backup.
  */
 export async function addInventoryMovementToSupabase(movement: any): Promise<boolean> {
-  db.addInventoryMovement(movement);
-
   if (!isSupabaseConfigured) {
+    db.addInventoryMovement(movement);
     return true;
   }
 
@@ -921,6 +920,10 @@ export async function addInventoryMovementToSupabase(movement: any): Promise<boo
     } catch (err) {
       console.warn("⚠️ Error resolving product UUID for inventory movement:", err);
     }
+  }
+  if (!isUuid(realProdUuid)) {
+    console.warn('⚠️ Could not resolve product UUID for inventory movement:', movement.productId);
+    return false;
   }
 
   // Map movement_type to valid enum: ('SALE', 'PURCHASE', 'RETURN', 'REPAIR_USAGE', 'ADJUSTMENT', 'DELETION_RESTORE')
@@ -952,17 +955,23 @@ export async function addInventoryMovementToSupabase(movement: any): Promise<boo
   }
 
   try {
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('inventory_movements')
-      .insert([row]);
+      .insert([row])
+      .select('id')
+      .single();
 
     if (error) {
       console.warn("⚠️ Notice inserting inventory_movements into Supabase:", error.message);
+      return false;
     }
+    if (!data?.id) return false;
   } catch (err) {
     console.warn("⚠️ Exception inserting inventory_movements into Supabase:", err);
+    return false;
   }
 
+  db.addInventoryMovement(movement);
   return true;
 }
 
