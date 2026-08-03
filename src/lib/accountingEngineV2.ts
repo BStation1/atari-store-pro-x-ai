@@ -119,7 +119,16 @@ function movementMatchesOrder(movement: any, order: RepairOrder): boolean {
 }
 
 export function usageMatchesOrder(usage: RepairPartUsage, order: RepairOrder): boolean {
-  return valueMatchesOrder(usage.repairOrderId, order);
+  if (!usage || !order) return false;
+  const anyUsage = usage as any;
+  return [
+    usage.repairOrderId,
+    anyUsage.repair_order_id,
+    anyUsage.orderId,
+    anyUsage.order_id,
+    anyUsage.orderNumber,
+    anyUsage.order_number
+  ].some(val => valueMatchesOrder(val, order));
 }
 
 export function usageMatchesDevice(
@@ -128,18 +137,93 @@ export function usageMatchesDevice(
   deviceIdx: number,
   totalDevices: number
 ): boolean {
-  if (totalDevices === 1) return true;
+  if (!usage || !device) return false;
+  const anyUsage = usage as any;
+
+  // Match by deviceId first
+  const deviceId = clean(device.id);
+  const usageDeviceId = clean(anyUsage.deviceId || anyUsage.device_id);
+  if (deviceId && usageDeviceId && deviceId === usageDeviceId) {
+    return true;
+  }
+
+  // Match by notes
   const notes = usage.notes || '';
-  if (device.id && notes.includes(`deviceId:${device.id}`)) {
+  if (deviceId && notes.includes(`deviceId:${deviceId}`)) {
     return true;
   }
   if (notes.includes(`deviceId:${deviceIdx}`)) {
     return true;
   }
-  if (!notes.includes('deviceId:') && deviceIdx === 0) {
+
+  // Match by deviceIndex
+  const usageDevIndex = anyUsage.deviceIndex ?? anyUsage.device_index;
+  if (usageDevIndex !== undefined && usageDevIndex !== null && Number(usageDevIndex) === deviceIdx) {
+    return true;
+  }
+
+  if (totalDevices === 1) return true;
+
+  if (!notes.includes('deviceId:') && !usageDeviceId && (usageDevIndex === undefined || usageDevIndex === null) && deviceIdx === 0) {
     return true;
   }
   return false;
+}
+
+export function getActiveRepairUsagesForOrder(
+  order: RepairOrder,
+  usages: RepairPartUsage[]
+): RepairPartUsage[] {
+  if (!order || !usages || !Array.isArray(usages) || usages.length === 0) return [];
+  return usages.filter(pu => {
+    if (!pu) return false;
+    const status = upper((pu as any).accountingStatus || (pu as any).status);
+    if (status === 'RETURNED' || status === 'REVERSED' || status === 'CANCELLED') return false;
+    return usageMatchesOrder(pu, order);
+  });
+}
+
+export function getActiveRepairUsagesForDevice(
+  order: RepairOrder,
+  device: RepairDevice,
+  deviceIndex: number,
+  usages: RepairPartUsage[]
+): RepairPartUsage[] {
+  if (!order || !device || !usages || !Array.isArray(usages) || usages.length === 0) return [];
+  const activeUsages = getActiveRepairUsagesForOrder(order, usages);
+  const totalDevices = order.devices?.length || 1;
+  return activeUsages.filter(pu => usageMatchesDevice(pu, device, deviceIndex, totalDevices));
+}
+
+export interface ReceiptPartLine {
+  id: string;
+  partName: string;
+  quantity: number;
+  sellingPrice: number;
+  totalPrice: number;
+  deviceId?: string;
+  deviceIndex?: number;
+}
+
+export function buildRepairPartReceiptLines(
+  order: RepairOrder,
+  usages: RepairPartUsage[]
+): ReceiptPartLine[] {
+  if (!order || !usages) return [];
+  const activeUsages = getActiveRepairUsagesForOrder(order, usages);
+  return activeUsages.map((pu, idx) => {
+    const qty = Number(pu.quantity) || 1;
+    const price = Number(pu.sellingPrice ?? (pu as any).salePrice ?? pu.unitCost ?? 0);
+    return {
+      id: pu.id || `receipt-part-${idx}`,
+      partName: pu.partName || (pu as any).name || (pu as any).part_name || 'قطعة غيار',
+      quantity: qty,
+      sellingPrice: price,
+      totalPrice: qty * price,
+      deviceId: (pu as any).deviceId || (pu as any).device_id,
+      deviceIndex: (pu as any).deviceIndex ?? (pu as any).device_index
+    };
+  });
 }
 
 export function syncOrderSelectedRepairItemsFromUsages(

@@ -18,7 +18,7 @@ import {
   getDeviceDisplayName
 } from "../lib/customerDisplayHelper";
 import { useRepairPartUsages } from "../hooks/useData";
-import { syncOrderSelectedRepairItemsFromUsages } from "../lib/accountingEngineV2";
+import { syncOrderSelectedRepairItemsFromUsages, getActiveRepairUsagesForDevice } from "../lib/accountingEngineV2";
 
 interface PrintReceiptModalProps {
   isOpen: boolean;
@@ -285,21 +285,33 @@ export default function PrintReceiptModal({
               </thead>
               <tbody>
                 {syncedOrder &&
-                  syncedOrder.devices.map(dev => (
-                    <tr key={dev.id} className="border-b border-gray-100">
-                      <td className="py-1">
-                        <span className="font-bold">{getDeviceDisplayName(dev)}</span>
-                        <div className="text-[9px] text-gray-700 leading-snug">العطل: {dev.issue}</div>
-                        {dev.selectedRepairItems && dev.selectedRepairItems.length > 0 && (
-                          <div className="text-[9px] text-indigo-900 mt-0.5">
-                            قطع الغيار: {dev.selectedRepairItems.map(i => `${i.name} (x${i.quantity} بسعر ${i.repairPrice} ج.م)`).join("، ")}
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-1 text-center font-bold">١</td>
-                      <td className="py-1 text-left font-bold">{(dev.finalRepairPrice ?? dev.estimatedCost) || 0} ج.م</td>
-                    </tr>
-                  ))}
+                  syncedOrder.devices.map((dev, devIdx) => {
+                    const deviceUsages = (partUsagesLoaded && order)
+                      ? getActiveRepairUsagesForDevice(order, dev, devIdx, partUsages)
+                      : [];
+
+                    const partLines = deviceUsages.length > 0
+                      ? deviceUsages.map(pu => `${pu.partName} (x${pu.quantity} بسعر ${pu.sellingPrice ?? (pu as any).salePrice ?? 0} ج.م)`)
+                      : (dev.selectedRepairItems && dev.selectedRepairItems.length > 0)
+                        ? dev.selectedRepairItems.map(i => `${i.name} (x${i.quantity} بسعر ${i.repairPrice ?? i.salePrice ?? 0} ج.م)`)
+                        : [];
+
+                    return (
+                      <tr key={dev.id || devIdx} className="border-b border-gray-100">
+                        <td className="py-1">
+                          <span className="font-bold">{getDeviceDisplayName(dev)}</span>
+                          <div className="text-[9px] text-gray-700 leading-snug">العطل: {dev.issue}</div>
+                          {partLines.length > 0 && (
+                            <div className="text-[9px] text-indigo-900 mt-0.5">
+                              قطع الغيار: {partLines.join("، ")}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-1 text-center font-bold">١</td>
+                        <td className="py-1 text-left font-bold">{(dev.finalRepairPrice ?? dev.estimatedCost) || 0} ج.م</td>
+                      </tr>
+                    );
+                  })}
                 {invoice &&
                   invoice.items.map((item, idx) => (
                     <tr key={idx} className="border-b border-gray-100">

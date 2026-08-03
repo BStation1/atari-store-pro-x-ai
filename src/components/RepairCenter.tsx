@@ -56,7 +56,7 @@ import { addRepairPartUsageToSupabase, updateRepairPartUsageInSupabase } from ".
 import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabase } from "../lib/supabaseRepairOrders";
 import { executeRemovePartUsageTransaction } from "../lib/repairPartRemovalService";
 import { executeAddPartUsageTransaction } from "../lib/repairPartAddService";
-import { usageMatchesOrder, usageMatchesDevice, syncOrderSelectedRepairItemsFromUsages } from "../lib/accountingEngineV2";
+import { usageMatchesOrder, usageMatchesDevice, syncOrderSelectedRepairItemsFromUsages, getActiveRepairUsagesForDevice } from "../lib/accountingEngineV2";
 import { sendRepairNotificationWorkflow } from "../lib/whatsapp";
 import { 
   addTimelineEventHelper, 
@@ -1362,13 +1362,24 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                 const currentDevice = selectedOrder.devices[0] || { type: 'PlayStation', model: 'PS5', issue: '' };
                 const devIdx = 0;
 
-                // Linked part usages for current device
-                const deviceLinkedUsages = partUsages.filter(
-                  pu => usageMatchesOrder(pu, selectedOrder) &&
-                        pu.accountingStatus !== 'RETURNED' &&
-                        pu.accountingStatus !== 'REVERSED' &&
-                        usageMatchesDevice(pu, currentDevice, devIdx, selectedOrder.devices.length)
-                );
+                // Linked part usages for current device (canonical usages dataset when loaded, snapshot fallback when unhydrated)
+                const deviceLinkedUsages: RepairPartUsage[] = partUsagesLoaded
+                  ? getActiveRepairUsagesForDevice(selectedOrder, currentDevice, devIdx, partUsages)
+                  : (currentDevice.selectedRepairItems || []).map((item, idx) => ({
+                      id: item.id || item.usageId || `fallback-${idx}`,
+                      repairOrderId: selectedOrder.id,
+                      inventoryItemId: item.productId || item.id || '',
+                      partName: item.name,
+                      quantity: item.quantity || 1,
+                      unitCost: item.costPrice || 0,
+                      totalCost: (item.costPrice || 0) * (item.quantity || 1),
+                      sellingPrice: item.repairPrice ?? item.salePrice ?? 0,
+                      sellingTotal: (item.repairPrice ?? item.salePrice ?? 0) * (item.quantity || 1),
+                      ownershipType: selectedOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED,
+                      responsiblePartnerId: 'SHOP',
+                      accountingStatus: 'CONSUMED',
+                      createdAt: selectedOrder.createdAt || new Date().toISOString()
+                    }));
 
                 // Total selling price of all linked used parts
                 const partsTotalSelling = deviceLinkedUsages.reduce((sum, pu) => {
