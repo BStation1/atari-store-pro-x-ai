@@ -117,7 +117,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
   const { products, updateProduct, setProductLocal } = useProducts();
   const { settings } = useSettings();
   const { invoices, addInvoice } = useInvoices();
-  const { partUsages, persistLocalUsages, upsertPartUsageLocal, replacePartUsageIdLocal } = useRepairPartUsages();
+  const { partUsages, partUsagesLoaded, persistLocalUsages, upsertPartUsageLocal, replacePartUsageIdLocal } = useRepairPartUsages();
 
   const [activeTab, setActiveTab] = useState<string>(initialStatusFilter || "active_all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -126,17 +126,18 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
   );
 
   useEffect(() => {
-    if (selectedOrder) {
+    if (selectedOrder && partUsagesLoaded) {
       const synced = syncOrderSelectedRepairItemsFromUsages(
         selectedOrder,
         partUsages,
-        (pu) => getUsageSellingUnitPrice(pu, products)
+        (pu) => getUsageSellingUnitPrice(pu, products),
+        { usagesLoaded: partUsagesLoaded, allowClear: true }
       );
       if (synced !== selectedOrder) {
         setSelectedOrder(synced);
       }
     }
-  }, [partUsages, products, selectedOrder?.id]);
+  }, [partUsages, partUsagesLoaded, products, selectedOrder?.id]);
 
   // Sub-Navigation Tabs inside Order Workspace
   const [workspaceTab, setWorkspaceTab] = useState<"workshop" | "timeline" | "audit">("workshop");
@@ -835,7 +836,8 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     const syncedBaseOrder = syncOrderSelectedRepairItemsFromUsages(
       selectedOrder,
       activeUsages,
-      (pu) => getUsageSellingUnitPrice(pu, products)
+      (pu) => getUsageSellingUnitPrice(pu, products),
+      { usagesLoaded: partUsagesLoaded, allowClear: false }
     );
 
     // Order Completion Validation for Parts Cost

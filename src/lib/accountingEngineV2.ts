@@ -145,9 +145,20 @@ export function usageMatchesDevice(
 export function syncOrderSelectedRepairItemsFromUsages(
   order: RepairOrder,
   usages: RepairPartUsage[],
-  getSellingPriceFn?: (pu: RepairPartUsage) => number
+  getSellingPriceFn?: (pu: RepairPartUsage) => number,
+  options?: {
+    usagesLoaded?: boolean;
+    allowClear?: boolean;
+  }
 ): RepairOrder {
   if (!order || !order.devices || order.devices.length === 0) return order;
+
+  const usagesLoaded = options?.usagesLoaded ?? true;
+  if (!usagesLoaded) {
+    return order;
+  }
+
+  const allowClear = options?.allowClear ?? true;
 
   const activeUsages = (usages || []).filter(
     pu => usageMatchesOrder(pu, order) &&
@@ -157,9 +168,14 @@ export function syncOrderSelectedRepairItemsFromUsages(
 
   let changed = false;
   const updatedDevices = order.devices.map((device, devIdx) => {
+    const existingItems = device.selectedRepairItems || [];
     const deviceUsages = activeUsages.filter(pu =>
       usageMatchesDevice(pu, device, devIdx, order.devices.length)
     );
+
+    if (deviceUsages.length === 0 && existingItems.length > 0 && !allowClear) {
+      return device;
+    }
 
     const rebuiltItems: SelectedRepairItem[] = deviceUsages.map(pu => {
       const sellP = getSellingPriceFn ? getSellingPriceFn(pu) : (pu.sellingPrice || pu.unitCost || 0);
@@ -181,8 +197,6 @@ export function syncOrderSelectedRepairItemsFromUsages(
       const sellP = getSellingPriceFn ? getSellingPriceFn(pu) : (pu.sellingPrice || pu.unitCost || 0);
       return sum + (pu.quantity * sellP);
     }, 0);
-
-    const existingItems = device.selectedRepairItems || [];
 
     const isStale =
       rebuiltItems.length !== existingItems.length ||

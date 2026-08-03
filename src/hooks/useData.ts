@@ -1173,19 +1173,27 @@ export function usePartnerTransactions() {
 export function useRepairPartUsages() {
   const trigger = useDbTrigger(['atari_repair_part_usages']);
   const [partUsages, setPartUsages] = useState<RepairPartUsage[]>(() => db.getRepairPartUsages());
+  const [partUsagesLoaded, setPartUsagesLoaded] = useState<boolean>(false);
 
   useEffect(() => {
     let active = true;
     fetchOrMigrateRepairPartUsages().then(res => {
-      if (active) setPartUsages(res.partUsages);
+      if (active) {
+        setPartUsages(res.partUsages);
+        setPartUsagesLoaded(true);
+      }
     }).catch(() => {
-      if (active) setPartUsages(db.getRepairPartUsages());
+      if (active) {
+        setPartUsages(db.getRepairPartUsages());
+        setPartUsagesLoaded(true);
+      }
     });
     return () => { active = false; };
   }, [trigger]);
 
   const persistLocalUsages = (next: RepairPartUsage[]) => {
     setPartUsages(next);
+    setPartUsagesLoaded(true);
     db.saveRepairPartUsages(next);
   };
 
@@ -1198,6 +1206,7 @@ export function useRepairPartUsages() {
       db.saveRepairPartUsages(next);
       return next;
     });
+    setPartUsagesLoaded(true);
   };
 
   const replacePartUsageIdLocal = (temporaryId: string, persisted: RepairPartUsage) => {
@@ -1206,6 +1215,7 @@ export function useRepairPartUsages() {
       db.saveRepairPartUsages(next);
       return next;
     });
+    setPartUsagesLoaded(true);
   };
 
   const addPartUsage = (part: Omit<RepairPartUsage, "id" | "createdAt">) => {
@@ -1219,6 +1229,7 @@ export function useRepairPartUsages() {
 
   return {
     partUsages,
+    partUsagesLoaded,
     addPartUsage,
     persistLocalUsages,
     upsertPartUsageLocal,

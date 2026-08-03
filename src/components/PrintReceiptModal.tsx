@@ -37,7 +37,7 @@ export default function PrintReceiptModal({
   customer,
   settings
 }: PrintReceiptModalProps) {
-  const { partUsages } = useRepairPartUsages();
+  const { partUsages, partUsagesLoaded } = useRepairPartUsages();
   const printAreaRef = useRef<HTMLDivElement>(null);
 
   if (!isOpen) return null;
@@ -45,7 +45,7 @@ export default function PrintReceiptModal({
   const activeUsages = (partUsages || []).filter(
     pu => pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
   );
-  const syncedOrder = order ? syncOrderSelectedRepairItemsFromUsages(order, activeUsages, pu => pu.sellingPrice || 0) : undefined;
+  const syncedOrder = order ? syncOrderSelectedRepairItemsFromUsages(order, activeUsages, pu => pu.sellingPrice || 0, { usagesLoaded: partUsagesLoaded, allowClear: false }) : undefined;
 
   // Calculate totals
   const discount = invoice ? invoice.discount : 0;
