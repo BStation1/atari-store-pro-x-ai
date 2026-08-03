@@ -631,12 +631,27 @@ export const authStore = {
 
 // Listen to Supabase Auth state changes automatically for real-time session verification
 if (typeof window !== "undefined") {
-  supabase.auth.onAuthStateChange(async (event, session) => {
-    if (event === "SIGNED_OUT" || !session) {
-      authStore.clearSession();
-    } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || session?.user) {
-      await authStore.validateAndSyncSession();
+  let authSyncTimer: number | undefined;
+
+  supabase.auth.onAuthStateChange((event, session) => {
+    // Supabase warns against making async Supabase calls from inside this
+    // callback because it can deadlock the client. Defer the complete sync so
+    // getSession() and the profiles query run after the callback has returned.
+    if (authSyncTimer !== undefined) {
+      window.clearTimeout(authSyncTimer);
     }
+
+    authSyncTimer = window.setTimeout(() => {
+      authSyncTimer = undefined;
+
+      if (event === "SIGNED_OUT" || !session) {
+        authStore.clearSession();
+        return;
+      }
+
+      if (event === "INITIAL_SESSION" || event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || event === "USER_UPDATED") {
+        void authStore.validateAndSyncSession();
+      }
+    }, 0);
   });
 }
-

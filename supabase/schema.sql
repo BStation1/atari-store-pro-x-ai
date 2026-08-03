@@ -781,8 +781,10 @@ CREATE POLICY "Authenticated users view profiles" ON public.profiles FOR SELECT 
 CREATE POLICY "Authenticated users manage profiles" ON public.profiles FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
 -- 7.2 STORE SETTINGS
-CREATE POLICY "Anyone can view store settings" ON public.store_settings FOR SELECT TO public USING (true);
-CREATE POLICY "Authenticated users edit store settings" ON public.store_settings FOR ALL TO authenticated USING (true) WITH CHECK (true);
+CREATE POLICY "Authenticated users view store settings" ON public.store_settings FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Owners insert store settings" ON public.store_settings FOR INSERT TO authenticated WITH CHECK (public.is_owner());
+CREATE POLICY "Owners update store settings" ON public.store_settings FOR UPDATE TO authenticated USING (public.is_owner()) WITH CHECK (public.is_owner());
+CREATE POLICY "Owners delete store settings" ON public.store_settings FOR DELETE TO authenticated USING (public.is_owner());
 
 -- 7.3 OPERATIONAL CATALOGS & PRODUCTS
 CREATE POLICY "Authenticated users manage categories" ON public.categories FOR ALL TO authenticated USING (true) WITH CHECK (true);
