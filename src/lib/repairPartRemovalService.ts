@@ -29,6 +29,30 @@ export interface RemovePartUsageResult {
   returnMovementRow?: any;
 }
 
+/**
+ * Repair usages may store the remote Supabase UUID while the UI still holds a
+ * local product id. Match all stable identifiers so a full removal can always
+ * restore the correct stock item.
+ */
+export function findProductForRepairUsage(
+  products: Product[],
+  usage: RepairPartUsage
+): Product | undefined {
+  const usageItemId = String(usage.inventoryItemId || '').trim();
+  const usageSku = String(usage.sku || '').trim().toLowerCase();
+
+  return products.find(product => {
+    const productId = String(product.id || '').trim();
+    const productUuid = String((product as Product & { uuid?: string }).uuid || '').trim();
+    const productSku = String(product.sku || '').trim().toLowerCase();
+
+    return (
+      (usageItemId !== '' && (productId === usageItemId || productUuid === usageItemId)) ||
+      (usageSku !== '' && productSku === usageSku)
+    );
+  });
+}
+
 export async function executeRemovePartUsageTransaction(
   options: ExecuteRemovePartUsageOptions
 ): Promise<RemovePartUsageResult> {
@@ -55,7 +79,13 @@ export async function executeRemovePartUsageTransaction(
     };
   }
 
-  const product = products.find(p => p.id === usage.inventoryItemId);
+  const product = findProductForRepairUsage(products, usage);
+  if (!product) {
+    return {
+      success: false,
+      error: `تعذر العثور على قطعة المخزون المرتبطة (${usage.sku || usage.partName}). لم يتم حذفها حتى لا تضيع كمية المخزون.`
+    };
+  }
   const qtyToReturn = Math.min(usage.quantity, Math.max(1, removeQty === -1 ? usage.quantity : removeQty));
   const isFullRemove = usage.quantity <= qtyToReturn || removeQty === -1;
   const actualReturnedQty = isFullRemove ? usage.quantity : qtyToReturn;
@@ -74,7 +104,7 @@ export async function executeRemovePartUsageTransaction(
 
   const returnMovementPayload = {
     id: `MOV-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
-    productId: usage.inventoryItemId,
+    productId: product.id,
     productNameSnapshot: usage.partName,
     movementType: 'RETURN' as const,
     usageType: 'REPAIR_USAGE_RETURN' as const,
@@ -94,16 +124,14 @@ export async function executeRemovePartUsageTransaction(
   // STEP A: Restore product stock
   let stockUpdateResult: any = { ok: true };
   let stockOk = true;
-  if (product) {
-    stockOk = await updateProductQuantityInSupabase(product.id, newProductQuantity);
-    stockUpdateResult = { ok: stockOk, newQuantity: newProductQuantity };
-    if (!stockOk) {
-      return {
-        success: false,
-        error: 'فشل تحديث مخزون المنتج في Supabase.',
-        stockUpdateResult
-      };
-    }
+  stockOk = await updateProductQuantityInSupabase(product.id, newProductQuantity, product);
+  stockUpdateResult = { ok: stockOk, newQuantity: newProductQuantity };
+  if (!stockOk) {
+    return {
+      success: false,
+      error: 'فشل إرجاع الكمية إلى المخزون في Supabase. لم يتم حذف القطعة من أمر الصيانة.',
+      stockUpdateResult
+    };
   }
 
   // STEP B: Mark usage RETURNED or update quantity
@@ -145,9 +173,7 @@ export async function executeRemovePartUsageTransaction(
 
   // ALL THREE SUCCEEDED -> NOW RECALCULATE LOCAL STATE & PERSIST ORDER
   let updatedProducts = products;
-  if (product) {
-    updatedProducts = products.map(p => p.id === product.id ? { ...p, quantity: newProductQuantity } : p);
-  }
+  updatedProducts = products.map(p => p.id === product.id ? { ...p, quantity: newProductQuantity } : p);
 
   let updatedPartUsages: RepairPartUsage[] = [];
   if (isFullRemove) {
@@ -215,9 +241,7 @@ export async function executeRemovePartUsageTransaction(
   }
 
   // Sync to local storage db
-  if (product) {
-    db.saveProducts(updatedProducts);
-  }
+  db.saveProducts(updatedProducts);
   db.saveRepairPartUsages(updatedPartUsages);
   db.saveRepairOrders(
     db.getRepairOrders().map(o => o.id === updatedOrder.id ? updatedOrder : o)

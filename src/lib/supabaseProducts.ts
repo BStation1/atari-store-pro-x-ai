@@ -842,42 +842,60 @@ export async function ensureProductUuidInSupabase(product: Product): Promise<str
   }
 }
 
-export async function updateProductQuantityInSupabase(productId: string, newQuantity: number): Promise<boolean> {
-  const allProds = db.getProducts();
-  const index = allProds.findIndex(p => p.id === productId || (p as any).uuid === productId);
-  if (index !== -1) {
-    allProds[index] = { ...allProds[index], quantity: newQuantity };
-    db.saveProducts(allProds);
-  }
-
-  if (!isSupabaseConfigured) {
-    return true;
-  }
-
+export async function updateProductQuantityInSupabase(
+  productId: string,
+  newQuantity: number,
+  productSnapshot?: Product
+): Promise<boolean> {
   try {
     let realUuid = productId;
-    if (!isUuid(realUuid)) {
-      const fetched = await ensureProductUuidInSupabase({ id: productId } as any);
+    if (isSupabaseConfigured && !isUuid(realUuid)) {
+      const fetched = await ensureProductUuidInSupabase(productSnapshot || ({ id: productId } as Product));
       if (fetched) realUuid = fetched;
     }
 
-    if (isUuid(realUuid)) {
-      const { error } = await supabase
+    if (isSupabaseConfigured) {
+      if (!isUuid(realUuid)) {
+        console.warn('⚠️ Could not resolve product UUID for stock update:', productId);
+        return false;
+      }
+
+      const { data, error } = await supabase
         .from('products')
         .update({
           quantity: newQuantity,
           updated_at: new Date().toISOString()
         })
-        .eq('id', realUuid);
+        .eq('id', realUuid)
+        .select('id, quantity')
+        .maybeSingle();
 
       if (error) {
         console.warn("⚠️ Notice updating product quantity in Supabase:", error.message);
+        return false;
+      }
+      if (!data || Number(data.quantity) !== Number(newQuantity)) {
+        console.warn('⚠️ Supabase stock update did not return the expected row:', productId);
+        return false;
       }
     }
+
+    const allProds = db.getProducts();
+    const index = allProds.findIndex(p =>
+      p.id === productId ||
+      (p as any).uuid === productId ||
+      p.id === realUuid ||
+      (p as any).uuid === realUuid
+    );
+    if (index !== -1) {
+      allProds[index] = { ...allProds[index], quantity: newQuantity };
+      db.saveProducts(allProds);
+    }
+
     return true;
   } catch (err) {
     console.warn("⚠️ Exception updating product quantity in Supabase:", err);
-    return true;
+    return false;
   }
 }
 
