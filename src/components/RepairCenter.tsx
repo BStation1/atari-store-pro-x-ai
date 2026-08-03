@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 30946)
+Total output lines: 2435
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -52,7 +55,7 @@ import CancelWarrantyModal from "./CancelWarrantyModal";
 import { canDeliverDevice, canReopenDeliveredOrder, canCancelWarranty } from "../lib/authPermissions";
 import { db } from "../lib/data";
 import { addInventoryMovementToSupabase, ensureProductUuidInSupabase, updateProductQuantityInSupabase } from "../lib/supabaseProducts";
-import { addRepairPartUsageToSupabase, updateRepairPartUsageInSupabase } from "../lib/supabasePartUsages";
+import { addRepairPartUsageToSupabase, fetchRepairPartUsagesForOrderId, isUuid, updateRepairPartUsageInSupabase } from "../lib/supabasePartUsages";
 import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabase } from "../lib/supabaseRepairOrders";
 import { executeRemovePartUsageTransaction } from "../lib/repairPartRemovalService";
 import { executeAddPartUsageTransaction } from "../lib/repairPartAddService";
@@ -703,10 +706,40 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     }
   };
 
-  const handleRemovePartUsage = async (usageId: string, deviceIdx: number, removeQty: number = 1) => {
+  const handleRemovePartUsage = async (requestedUsage: RepairPartUsage, deviceIdx: number, removeQty: number = 1) => {
     if (!selectedOrder) return;
-    const usage = partUsages.find(pu => pu.id === usageId);
-    if (!usage) return;
+
+    let effectivePartUsages = partUsages;
+    let usage = effectivePartUsages.find(pu => pu.id === requestedUsage.id);
+
+    // The order snapshot can render before the canonical usages hook finishes.
+    // Resolve this order on demand so the first remove click is never ignored.
+    if (!usage) {
+      const anyOrder = selectedOrder as any;
+      let remoteOrderId = [selectedOrder.databaseId, selectedOrder.uuid, anyOrder.database_id, selectedOrder.id]
+        .find(value => isUuid(String(value || '')));
+      if (!remoteOrderId) {
+        remoteOrderId = await ensureRepairOrderUuidInSupabase(selectedOrder);
+      }
+
+      if (remoteOrderId) {
+        const scoped = await fetchRepairPartUsagesForOrderId(String(remoteOrderId));
+        if (scoped.success) {
+          const usagesOutsideOrder = partUsages.filter(pu => !usageMatchesOrder(pu, selectedOrder));
+          effectivePartUsages = [...usagesOutsideOrder, ...scoped.partUsages];
+          usage = scoped.partUsages.find(pu =>
+            pu.id === requestedUsage.id ||
+            (requestedUsage.inventoryItemId && pu.inventoryItemId === requestedUsage.inventoryItemId)
+          );
+          persistLocalUsages(effectivePartUsages);
+        }
+      }
+    }
+
+    if (!usage) {
+      dialog.alert({ message: "تعذر تحميل سجل قطعة الغيار. حاول فتح الطلب مرة أخرى.", variant: "error" });
+      return;
+    }
 
     if (usage.accountingStatus === 'RETURNED') return;
     if (busyProductIds.has(usage.inventoryItemId)) return;
@@ -715,12 +748,12 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
     try {
       const res = await executeRemovePartUsageTransaction({
-        usageId,
+        usageId: usage.id,
         deviceIdx,
         removeQty,
         selectedOrder,
         products,
-        partUsages
+        partUsages: effectivePartUsages
       });
 
       if (!res.success) {
@@ -1376,68 +1409,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                       unitCost: item.costPrice || 0,
                       totalCost: (item.costPrice || 0) * (item.quantity || 1),
                       sellingPrice: item.repairPrice ?? item.salePrice ?? 0,
-                      sellingTotal: (item.repairPrice ?? item.salePrice ?? 0) * (item.quantity || 1),
-                      ownershipType: selectedOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED,
-                      responsiblePartnerId: 'SHOP',
-                      accountingStatus: 'CONSUMED',
-                      createdAt: selectedOrder.receivedDate || new Date().toISOString()
-                    }));
-
-                const matchedOrderUsages = getActiveRepairUsagesForOrder(selectedOrder, partUsages);
-                console.log("REPAIR_UI_RUNTIME=", {
-                  orderId: selectedOrder.id,
-                  orderNumber: selectedOrder.orderNumber,
-                  partUsagesLoaded,
-                  allPartUsagesCount: partUsages.length,
-                  matchedOrderUsages: matchedOrderUsages.map(pu => ({
-                    id: pu.id,
-                    repairOrderId: pu.repairOrderId || (pu as any).repair_order_id,
-                    deviceId: (pu as any).deviceId || (pu as any).device_id,
-                    deviceIndex: (pu as any).deviceIndex ?? (pu as any).device_index,
-                    inventoryItemId: pu.inventoryItemId,
-                    partName: pu.partName,
-                    quantity: pu.quantity,
-                    sellingPrice: pu.sellingPrice,
-                    accountingStatus: pu.accountingStatus
-                  })),
-                  matchedDeviceUsages: deviceLinkedUsages.map(pu => ({
-                    id: pu.id,
-                    repairOrderId: pu.repairOrderId || (pu as any).repair_order_id,
-                    deviceId: (pu as any).deviceId || (pu as any).device_id,
-                    deviceIndex: (pu as any).deviceIndex ?? (pu as any).device_index,
-                    inventoryItemId: pu.inventoryItemId,
-                    partName: pu.partName,
-                    quantity: pu.quantity,
-                    sellingPrice: pu.sellingPrice,
-                    accountingStatus: pu.accountingStatus
-                  })),
-                  selectedRepairItemsSnapshot: currentDevice.selectedRepairItems || []
-                });
-
-                // Total selling price of all linked used parts
-                const partsTotalSelling = deviceLinkedUsages.reduce((sum, pu) => {
-                  const sellP = getUsageSellingUnitPrice(pu, products);
-                  return sum + (pu.quantity * sellP);
-                }, 0);
-
-                // Reported faults / complaint
-                const reportedFaults = currentDevice.reportedFaults || (currentDevice.issue ? currentDevice.issue.split(" - ").map(s => s.trim()) : []);
-
-                // Labor Price calculation:
-                const faultsLaborCost = currentDevice.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(reportedFaults);
-                const grandTotal = (currentDevice.finalRepairPrice ?? currentDevice.estimatedCost) || (partsTotalSelling + faultsLaborCost);
-                const calculatedLabor = Math.max(0, grandTotal - partsTotalSelling);
-
-                // Instant Search filtering (compatible parts with search text matching name, nameAr, SKU, or barcode)
-                const query = partSearch.trim().toLowerCase();
-                const availableInventory = products.filter(p => !p.isArchived);
-                const compatibleInventory = availableInventory.filter(p => isProductCompatibleWithDevice(p, currentDevice.type, currentDevice.model));
-                const baseListToSearch = (compatibleInventory.length > 0 ? compatibleInventory : availableInventory);
-
-                const matchedSearchResults = baseListToSearch.filter(p => {
-                  if (!query) return true;
-                  const nameMatch = p.name.toLowerCase().includes(query) || (p.nameAr && p.nameAr.toLowerCase().includes(query));
-                  const skuMatch = p.sku ? p.sku.toLowerCase().includes(query) : false;
+                      selling…946 tokens truncated…                 const skuMatch = p.sku ? p.sku.toLowerCase().includes(query) : false;
                   const barcodeMatch = p.barcode ? p.barcode.toLowerCase().includes(query) : false;
                   const catMatch = p.category ? p.category.toLowerCase().includes(query) : false;
                   return nameMatch || skuMatch || barcodeMatch || catMatch;
@@ -1758,7 +1730,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                             <button
                                               type="button"
                                               disabled={isBusy}
-                                              onClick={() => handleRemovePartUsage(pu.id, devIdx, 1)}
+                                              onClick={() => handleRemovePartUsage(pu, devIdx, 1)}
                                               className="w-7 h-7 flex items-center justify-center bg-gray-800 hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-md font-bold text-base transition cursor-pointer"
                                               title="خصم قطعة (-)"
                                             >
@@ -1789,7 +1761,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                           <button
                                             type="button"
                                             disabled={isBusy}
-                                            onClick={() => handleRemovePartUsage(pu.id, devIdx, -1)}
+                                            onClick={() => handleRemovePartUsage(pu, devIdx, -1)}
                                             className="p-1.5 bg-rose-500/10 hover:bg-rose-600 disabled:opacity-30 disabled:cursor-not-allowed text-rose-400 hover:text-white rounded-lg transition cursor-pointer"
                                             title="حذف القطعة"
                                           >

@@ -86,6 +86,56 @@ export function isUuid(id?: string): boolean {
   return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(id);
 }
 
+/**
+ * Fetch only the usages belonging to one repair order. Interactive add/remove
+ * actions must not wait for the full historical usages table to download.
+ */
+export async function fetchRepairPartUsagesForOrderId(
+  repairOrderId: string
+): Promise<{ success: boolean; partUsages: RepairPartUsage[]; error?: string }> {
+  const localMatches = db.getRepairPartUsages().filter(usage => usage.repairOrderId === repairOrderId);
+
+  if (!isSupabaseConfigured || !isUuid(repairOrderId)) {
+    return { success: true, partUsages: localMatches };
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('repair_part_usages')
+      .select('*')
+      .eq('repair_order_id', repairOrderId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      return { success: false, error: error.message, partUsages: localMatches };
+    }
+
+    const partUsages: RepairPartUsage[] = (data || []).map((r: any) => ({
+      id: String(r.id),
+      repairOrderId: String(r.repair_order_id || repairOrderId),
+      inventoryItemId: String(r.inventory_item_id || ''),
+      partName: String(r.part_name_snapshot || r.part_name || ''),
+      sku: String(r.sku || ''),
+      quantity: Number(r.quantity || 0),
+      unitCost: Number(r.cost_price_snapshot ?? r.unit_cost ?? 0),
+      totalCost: Number(r.total_cost ?? 0),
+      sellingPrice: Number(r.selling_price_snapshot ?? r.selling_unit_price_snapshot ?? 0),
+      sellingTotal: Number(r.selling_total ?? (Number(r.quantity || 0) * Number(r.selling_price_snapshot || 0))),
+      ownershipType: (r.ownership_type || 'CUSTOMER_SHARED') as any,
+      responsiblePartnerId: String(r.responsible_partner_id || 'SHOP'),
+      accountingStatus: (r.accounting_status || 'CONSUMED') as any,
+      createdAt: r.created_at || new Date().toISOString(),
+      employeeName: r.employee_name,
+      warehouse: r.warehouse,
+      notes: r.notes
+    }));
+
+    return { success: true, partUsages };
+  } catch (err: any) {
+    return { success: false, error: err?.message, partUsages: localMatches };
+  }
+}
+
 function isMissingColumnError(error: any): boolean {
   return error?.code === 'PGRST204' || /column .*schema cache|could not find .* column/i.test(String(error?.message || ''));
 }

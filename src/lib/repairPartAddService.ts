@@ -1,7 +1,7 @@
 import { Product, RepairOrder, RepairPartUsage, SelectedRepairItem, WorkOwnershipType } from '../types';
 import { db } from './db';
 import { ensureProductUuidInSupabase, updateProductQuantityInSupabase, addInventoryMovementToSupabase } from './supabaseProducts';
-import { addRepairPartUsageToSupabase, fetchOrMigrateRepairPartUsages, updateRepairPartUsageInSupabase } from './supabasePartUsages';
+import { addRepairPartUsageToSupabase, fetchRepairPartUsagesForOrderId, updateRepairPartUsageInSupabase } from './supabasePartUsages';
 import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabase } from './supabaseRepairOrders';
 import { getUsageSellingUnitPrice, calculateSuggestedPriceForFaults } from './repairOrderCalculations';
 import { usageMatchesOrder, usageMatchesDevice } from './accountingEngineV2';
@@ -70,9 +70,10 @@ export async function executeAddPartUsageTransaction(
     // screen may still hold a pre-removal snapshot, especially after another
     // tab/device returned the part. Reusing that stale row can increment a
     // RETURNED usage and resurrect deleted invoice lines.
-    const canonicalUsageResult = await fetchOrMigrateRepairPartUsages();
+    const canonicalUsageResult = await fetchRepairPartUsagesForOrderId(repairOrderUuid);
+    const usagesOutsideOrder = partUsages.filter(pu => !usageMatchesOrder(pu, selectedOrder));
     const allUsages = canonicalUsageResult.success
-      ? [...canonicalUsageResult.partUsages]
+      ? [...usagesOutsideOrder, ...canonicalUsageResult.partUsages]
       : [...partUsages];
     const existingUsage = allUsages.find(
       pu => productMatchesRepairUsage(product, pu) &&
