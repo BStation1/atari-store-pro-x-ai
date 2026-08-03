@@ -55,6 +55,7 @@ import { addInventoryMovementToSupabase, ensureProductUuidInSupabase, updateProd
 import { addRepairPartUsageToSupabase, updateRepairPartUsageInSupabase } from "../lib/supabasePartUsages";
 import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabase } from "../lib/supabaseRepairOrders";
 import { executeRemovePartUsageTransaction } from "../lib/repairPartRemovalService";
+import { executeAddPartUsageTransaction } from "../lib/repairPartAddService";
 import { usageMatchesOrder, usageMatchesDevice, syncOrderSelectedRepairItemsFromUsages } from "../lib/accountingEngineV2";
 import { sendRepairNotificationWorkflow } from "../lib/whatsapp";
 import { 
@@ -660,271 +661,43 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       return;
     }
 
-    const updatedDevices = [...selectedOrder.devices];
-    const currentDevice = updatedDevices[deviceIdx];
-    if (!currentDevice) return;
-
     setBusyProductIds(prev => new Set(prev).add(productId));
 
-    const unitSellingPrice = Number(product.sellPrice || product.price || product.purchasePrice) || 0;
-    const unitPurchaseCost = Number(product.purchasePrice || product.costPrice) || 0;
-    const totalCost = unitPurchaseCost * qty;
+    try {
+      const res = await executeAddPartUsageTransaction({
+        product,
+        deviceIdx,
+        qty,
+        selectedOrder,
+        products,
+        partUsages,
+        currentUserForAction
+      });
 
-    const ownership = selectedOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
-    let owner: 'SHOP' | 'AHMED' | 'ABDO' = 'SHOP';
-    if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) owner = 'AHMED';
-    else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) owner = 'ABDO';
-
-    // 1. Synchronous Optimistic Update
-    const newQty = product.quantity - qty;
-    setProductLocal({
-      ...product,
-      quantity: newQty
-    });
-
-    const allUsages = partUsages;
-    const existingUsage = allUsages.find(
-      pu => usageMatchesOrder(pu, selectedOrder) &&
-            (pu.inventoryItemId === product.id || ((product as any).uuid && pu.inventoryItemId === (product as any).uuid)) &&
-            pu.accountingStatus !== 'RETURNED' &&
-            pu.accountingStatus !== 'REVERSED' &&
-            usageMatchesDevice(pu, currentDevice, deviceIdx, selectedOrder.devices.length)
-    );
-
-    let updatedUsageList = [...allUsages];
-    let usageRecordToSave: RepairPartUsage;
-
-    if (existingUsage) {
-      const newUsageQty = existingUsage.quantity + qty;
-      const newUsageTotalCost = newUsageQty * unitPurchaseCost;
-      const newUsageSellingTotal = newUsageQty * unitSellingPrice;
-      usageRecordToSave = {
-        ...existingUsage,
-        quantity: newUsageQty,
-        unitCost: unitPurchaseCost,
-        totalCost: newUsageTotalCost,
-        sellingPrice: unitSellingPrice,
-        sellingTotal: newUsageSellingTotal
-      };
-      updatedUsageList = allUsages.map(pu => pu.id === existingUsage.id ? usageRecordToSave : pu);
-    } else {
-      const tempId = `PU-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
-      usageRecordToSave = {
-        id: tempId,
-        repairOrderId: selectedOrder.id,
-        inventoryItemId: product.id,
-        partName: product.nameAr || product.name,
-        sku: product.sku || product.id,
-        quantity: qty,
-        unitCost: unitPurchaseCost,
-        totalCost: totalCost,
-        sellingPrice: unitSellingPrice,
-        sellingTotal: unitSellingPrice * qty,
-        ownershipType: ownership,
-        responsiblePartnerId: owner === 'AHMED' ? 'P-001' : owner === 'ABDO' ? 'P-002' : 'SHOP',
-        accountingStatus: 'CONSUMED',
-        notes: `deviceId:${currentDevice.id || deviceIdx}`,
-        createdAt: new Date().toISOString()
-      };
-      updatedUsageList.push(usageRecordToSave);
-    }
-
-    persistLocalUsages(updatedUsageList);
-
-    // Recalculate device partsCost and grand total
-    const activeUsagesForDevice = updatedUsageList.filter(
-      pu => usageMatchesOrder(pu, selectedOrder) &&
-            pu.accountingStatus !== 'RETURNED' &&
-            pu.accountingStatus !== 'REVERSED' &&
-            usageMatchesDevice(pu, currentDevice, deviceIdx, selectedOrder.devices.length)
-    );
-
-    const newPartsCost = activeUsagesForDevice.reduce((sum, pu) => {
-      const sellP = getUsageSellingUnitPrice(pu, products);
-      return sum + (pu.quantity * sellP);
-    }, 0);
-
-    const itemToPut: SelectedRepairItem = {
-      id: usageRecordToSave.id,
-      usageId: usageRecordToSave.id,
-      productId: product.id,
-      name: product.nameAr || product.name,
-      quantity: usageRecordToSave.quantity,
-      costPrice: unitPurchaseCost,
-      repairPrice: unitSellingPrice,
-      salePrice: unitSellingPrice,
-      deviceId: currentDevice.id,
-      deviceIndex: deviceIdx
-    };
-
-    const existingItems = currentDevice.selectedRepairItems || [];
-    const existingItemIdx = existingItems.findIndex(
-      i => i.usageId === usageRecordToSave.id || i.id === usageRecordToSave.id || (i.productId && (i.productId === product.id || i.productId === (product as any).uuid))
-    );
-
-    let nextSelectedRepairItems: SelectedRepairItem[];
-    if (existingItemIdx >= 0) {
-      nextSelectedRepairItems = existingItems.map((item, idx) => idx === existingItemIdx ? itemToPut : item);
-    } else {
-      nextSelectedRepairItems = [...existingItems, itemToPut];
-    }
-
-    const tags = currentDevice.selectedQuickFaults || (currentDevice.issue ? currentDevice.issue.split(" - ").map(s => s.trim()) : []);
-    const faultsCost = currentDevice.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(tags);
-    const newAutoPrice = faultsCost + newPartsCost;
-
-    if (currentDevice.isPriceManuallyEdited) {
-      updatedDevices[deviceIdx] = {
-        ...currentDevice,
-        selectedRepairItems: nextSelectedRepairItems,
-        partsCost: newPartsCost,
-        priceOverrideAcknowledged: false
-      };
-    } else {
-      updatedDevices[deviceIdx] = {
-        ...currentDevice,
-        selectedRepairItems: nextSelectedRepairItems,
-        partsCost: newPartsCost,
-        finalRepairPrice: newAutoPrice,
-        estimatedCost: newAutoPrice
-      };
-    }
-
-    const totalFinal = updatedDevices.reduce((sum, d) => sum + (d.finalRepairPrice ?? d.estimatedCost ?? 0), 0);
-
-    let updatedOrder: RepairOrder = {
-      ...selectedOrder,
-      devices: updatedDevices,
-      totalEstimatedCost: totalFinal,
-      finalRepairPrice: totalFinal
-    };
-
-    updatedOrder = addAuditLogRecordHelper(
-      updatedOrder,
-      "ADD_PART",
-      `قطع غيار جهاز ${currentDevice.type}`,
-      null,
-      `${product.name} (سعر البيع: ${unitSellingPrice} ج.م | كمية: ${qty})`,
-      "صرف قطعة غيار من المخزون وتوثيق حركة السحب",
-      currentUserForAction,
-      currentDevice.id
-    );
-
-    updatedOrder = addTimelineEventHelper(
-      updatedOrder,
-      "PART_ADDED",
-      `صرف قطعة غيار من المخزون: ${product.name} (كمية ${qty} بسعر بيع ${unitSellingPrice} ج.م)`,
-      currentUserForAction,
-      currentDevice.id
-    );
-
-    setSelectedOrder(updatedOrder);
-    setRepairOrderLocal(updatedOrder);
-
-    const tLocal = performance.now();
-    console.log(`⏱️ [AddPart] Local state & UI updated in ${(tLocal - t0).toFixed(2)}ms`);
-
-    // 2. Background Persistence to Supabase (Non-blocking)
-    (async () => {
-      const tMutStart = performance.now();
-      console.log(`⏱️ [AddPart] Background Supabase mutation started at ${(tMutStart - t0).toFixed(2)}ms`);
-
-      try {
-        const [productUuid, repairOrderUuid] = await Promise.all([
-          ensureProductUuidInSupabase(product).then(value => value || product.id),
-          ensureRepairOrderUuidInSupabase(selectedOrder).then(value => value || selectedOrder.id)
-        ]);
-
-        const quantityPromise = updateProductQuantityInSupabase(productUuid, newQty);
-        const movementPromise = addInventoryMovementToSupabase({
-          productId: productUuid,
-          productNameSnapshot: product.nameAr || product.name,
-          movementType: 'REPAIR_USAGE',
-          quantityChange: -qty,
-          previousQuantity: product.quantity,
-          newQuantity: newQty,
-          costPriceSnapshot: unitPurchaseCost,
-          sellingPriceSnapshot: unitSellingPrice,
-          totalCost: totalCost,
-          referenceId: selectedOrder.id,
-          repairOrderId: repairOrderUuid,
-          owner: owner,
-          notes: `صرف قطعة غيار صيانة: ${product.nameAr || product.name} للجهاز (${getDeviceDisplayName(currentDevice)})`,
-          createdAt: new Date().toISOString()
-        });
-
-        let usagePromise: Promise<any>;
-        if (existingUsage) {
-          usagePromise = updateRepairPartUsageInSupabase(existingUsage.id, {
-            quantity: usageRecordToSave.quantity,
-            unitCost: unitPurchaseCost,
-            totalCost: usageRecordToSave.totalCost,
-            sellingPrice: unitSellingPrice,
-            sellingTotal: usageRecordToSave.sellingTotal
-          });
-        } else {
-          usagePromise = addRepairPartUsageToSupabase({
-            repairOrderId: repairOrderUuid,
-            inventoryItemId: productUuid,
-            partName: product.nameAr || product.name,
-            sku: product.sku || product.id,
-            quantity: qty,
-            unitCost: unitPurchaseCost,
-            totalCost: totalCost,
-            sellingPrice: unitSellingPrice,
-            sellingTotal: unitSellingPrice * qty,
-            ownershipType: ownership,
-            responsiblePartnerId: owner === 'AHMED' ? 'P-001' : owner === 'ABDO' ? 'P-002' : 'SHOP',
-            accountingStatus: 'CONSUMED',
-            notes: `deviceId:${currentDevice.id || deviceIdx}`
-          });
-        }
-
-        const [, , persistedUsage] = await Promise.all([
-          quantityPromise,
-          movementPromise,
-          usagePromise,
-          updateRepairOrderInSupabase(updatedOrder)
-        ]);
-
-        if (!existingUsage && persistedUsage?.id && persistedUsage.id !== usageRecordToSave.id) {
-          replacePartUsageIdLocal(usageRecordToSave.id, {
-            ...usageRecordToSave,
-            ...persistedUsage,
-            repairOrderId: selectedOrder.id
-          });
-        }
-
-        const tMutEnd = performance.now();
-        console.log(`⏱️ [AddPart] Background Supabase mutation completed in ${(tMutEnd - tMutStart).toFixed(2)}ms (Total since click: ${(tMutEnd - t0).toFixed(2)}ms)`);
-
-      } catch (mutationError: any) {
-        console.error("❌ [AddPart] Background mutation failed, rolling back:", mutationError);
-        // Rollback optimistic update
-        setProductLocal({ ...product, quantity: product.quantity });
-        const currentUsages = partUsages;
-        const rollbackUsages = currentUsages.filter(u => u.id !== usageRecordToSave.id);
-        if (existingUsage) {
-          persistLocalUsages(currentUsages.map(u => u.id === existingUsage.id ? existingUsage : u));
-        } else {
-          persistLocalUsages(rollbackUsages);
-        }
-        setSelectedOrder(selectedOrder);
-        setRepairOrderLocal(selectedOrder);
-
-
+      if (res.success && res.updatedOrder && res.updatedProducts && res.updatedPartUsages) {
+        setSelectedOrder(res.updatedOrder);
+        setRepairOrderLocal(res.updatedOrder);
+        setProductLocal(res.updatedProducts.find(p => p.id === product.id) || product);
+        persistLocalUsages(res.updatedPartUsages);
+        console.log(`⏱️ [AddPart] Atomic add part transaction completed in ${(performance.now() - t0).toFixed(2)}ms`);
+      } else {
         dialog.alert({
-          message: "حدث خطأ أثناء حفظ قطعة الغيار بالخادم، تم إلغاء العملية وتحديث المخزون.",
+          message: res.error || "حدث خطأ أثناء إضافة قطعة الغيار وحفظها بالخادم.",
           variant: "error"
         });
-      } finally {
-        setBusyProductIds(prev => {
-          const next = new Set(prev);
-          next.delete(productId);
-          return next;
-        });
       }
-    })();
+    } catch (err: any) {
+      dialog.alert({
+        message: err?.message || "حدث خطأ غير متوقع أثناء إضافة قطعة الغيار.",
+        variant: "error"
+      });
+    } finally {
+      setBusyProductIds(prev => {
+        const next = new Set(prev);
+        next.delete(productId);
+        return next;
+      });
+    }
   };
 
   const handleRemovePartUsage = async (usageId: string, deviceIdx: number, removeQty: number = 1) => {
@@ -1055,13 +828,21 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     const isDelivered = status === RepairStatus.Delivered;
     const isReady = status === RepairStatus.Ready;
 
+    // Merge/sync with canonical active part usages to preserve selectedRepairItems, partsCost, and procedures
+    const activeUsages = partUsages.filter(
+      pu => pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
+    );
+    const syncedBaseOrder = syncOrderSelectedRepairItemsFromUsages(
+      selectedOrder,
+      activeUsages,
+      (pu) => getUsageSellingUnitPrice(pu, products)
+    );
+
     // Order Completion Validation for Parts Cost
     if (isReady || isDelivered) {
-      const totalOrderPartsCost = selectedOrder.devices.reduce((sum, d) => sum + (Number(d.partsCost) || 0), 0);
+      const totalOrderPartsCost = syncedBaseOrder.devices.reduce((sum, d) => sum + (Number(d.partsCost) || 0), 0);
       if (totalOrderPartsCost > 0) {
-        const linkedUsages = partUsages.filter(
-          pu => usageMatchesOrder(pu, selectedOrder) && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
-        );
+        const linkedUsages = activeUsages.filter(pu => usageMatchesOrder(pu, syncedBaseOrder));
         if (linkedUsages.length === 0) {
           dialog.alert({
             message: "لا يمكن إكمال أمر الصيانة لأن تكلفة قطع الغيار غير مرتبطة بقطع فعلية من المخزن.",
@@ -1073,7 +854,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     }
 
     // Update both main order status and all unfinished devices status
-    const updatedDevices = selectedOrder.devices.map(dev => {
+    const updatedDevices = syncedBaseOrder.devices.map(dev => {
       if (status === RepairStatus.Delivered || status === RepairStatus.Cancelled || status === RepairStatus.Ready) {
         return { ...dev, status };
       }
@@ -1081,11 +862,11 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     });
 
     let updatedOrder: RepairOrder = {
-      ...selectedOrder,
+      ...syncedBaseOrder,
       status,
       devices: updatedDevices,
-      isPaid: isDelivered ? true : selectedOrder.isPaid,
-      completionDate: isReady || isDelivered ? new Date().toISOString() : selectedOrder.completionDate
+      isPaid: isDelivered ? true : syncedBaseOrder.isPaid,
+      completionDate: isReady || isDelivered ? new Date().toISOString() : syncedBaseOrder.completionDate
     };
 
     // Audit and Timeline logging

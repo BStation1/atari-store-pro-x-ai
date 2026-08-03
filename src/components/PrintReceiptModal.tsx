@@ -17,6 +17,8 @@ import {
   getCustomerPhoneHelper,
   getDeviceDisplayName
 } from "../lib/customerDisplayHelper";
+import { useRepairPartUsages } from "../hooks/useData";
+import { syncOrderSelectedRepairItemsFromUsages } from "../lib/accountingEngineV2";
 
 interface PrintReceiptModalProps {
   isOpen: boolean;
@@ -35,14 +37,20 @@ export default function PrintReceiptModal({
   customer,
   settings
 }: PrintReceiptModalProps) {
+  const { partUsages } = useRepairPartUsages();
   const printAreaRef = useRef<HTMLDivElement>(null);
 
   if (!isOpen) return null;
 
+  const activeUsages = (partUsages || []).filter(
+    pu => pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
+  );
+  const syncedOrder = order ? syncOrderSelectedRepairItemsFromUsages(order, activeUsages, pu => pu.sellingPrice || 0) : undefined;
+
   // Calculate totals
   const discount = invoice ? invoice.discount : 0;
-  const total = invoice ? invoice.totalAmount : (order ? order.totalEstimatedCost : 0);
-  const paid = invoice ? invoice.paidAmount : (order ? order.advancePayment : 0);
+  const total = invoice ? invoice.totalAmount : (syncedOrder ? syncedOrder.totalEstimatedCost : 0);
+  const paid = invoice ? invoice.paidAmount : (syncedOrder ? syncedOrder.advancePayment : 0);
   const remaining = total - paid;
 
   const handlePrint = () => {
@@ -276,12 +284,17 @@ export default function PrintReceiptModal({
                 </tr>
               </thead>
               <tbody>
-                {order &&
-                  order.devices.map(dev => (
+                {syncedOrder &&
+                  syncedOrder.devices.map(dev => (
                     <tr key={dev.id} className="border-b border-gray-100">
                       <td className="py-1">
                         <span className="font-bold">{getDeviceDisplayName(dev)}</span>
                         <div className="text-[9px] text-gray-700 leading-snug">العطل: {dev.issue}</div>
+                        {dev.selectedRepairItems && dev.selectedRepairItems.length > 0 && (
+                          <div className="text-[9px] text-indigo-900 mt-0.5">
+                            قطع الغيار: {dev.selectedRepairItems.map(i => `${i.name} (x${i.quantity} بسعر ${i.repairPrice} ج.م)`).join("، ")}
+                          </div>
+                        )}
                       </td>
                       <td className="py-1 text-center font-bold">١</td>
                       <td className="py-1 text-left font-bold">{(dev.finalRepairPrice ?? dev.estimatedCost) || 0} ج.م</td>
