@@ -73,6 +73,10 @@ export function isUuid(id?: string): boolean {
   return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(id);
 }
 
+function isMissingColumnError(error: any): boolean {
+  return error?.code === 'PGRST204' || /column .*schema cache|could not find .* column/i.test(String(error?.message || ''));
+}
+
 export async function addRepairPartUsageToSupabase(
   partUsage: Omit<RepairPartUsage, "id" | "createdAt"> & { id?: string; createdAt?: string }
 ): Promise<RepairPartUsage> {
@@ -153,11 +157,33 @@ export async function addRepairPartUsageToSupabase(
   }
 
   try {
-    const { data: insertedRow, error } = await supabase
+    let { data: insertedRow, error } = await supabase
       .from('repair_part_usages')
       .insert([row])
       .select()
       .single();
+
+    // Older production databases only have the original compact table shape.
+    // Keep the app operational until the additive schema migration is applied.
+    if (error && isMissingColumnError(error)) {
+      const legacyRow = {
+        repair_order_id: row.repair_order_id,
+        inventory_item_id: row.inventory_item_id,
+        part_name_snapshot: row.part_name_snapshot,
+        quantity: row.quantity,
+        cost_price_snapshot: row.cost_price_snapshot,
+        selling_price_snapshot: row.selling_price_snapshot,
+        stock_ownership_snapshot: row.stock_ownership_snapshot,
+        created_at: row.created_at
+      };
+      const retry = await supabase
+        .from('repair_part_usages')
+        .insert([legacyRow])
+        .select()
+        .single();
+      insertedRow = retry.data;
+      error = retry.error;
+    }
 
     if (error) {
       console.warn("⚠️ Notice inserting repair_part_usages into Supabase:", error.message);
@@ -193,20 +219,43 @@ export async function updateRepairPartUsageInSupabase(
       if (updates.sellingPrice !== undefined) rowUpdates.selling_price_snapshot = updates.sellingPrice;
       if (updates.sellingTotal !== undefined) rowUpdates.selling_total = updates.sellingTotal;
 
-      let query = supabase.from('repair_part_usages').update(rowUpdates);
-      if (isUuid(id)) {
-        query = query.eq('id', id);
-      } else if (usageSnapshot && isUuid(usageSnapshot.repairOrderId)) {
-        query = query
-          .eq('repair_order_id', usageSnapshot.repairOrderId)
-          .eq('sku', usageSnapshot.sku)
-          .not('accounting_status', 'in', '(RETURNED,REVERSED)');
-      } else {
+      const applyIdentity = (query: any) => {
+        if (isUuid(id)) return query.eq('id', id);
+        if (usageSnapshot && isUuid(usageSnapshot.repairOrderId)) {
+          return query
+            .eq('repair_order_id', usageSnapshot.repairOrderId)
+            .eq('inventory_item_id', usageSnapshot.inventoryItemId);
+        }
+        return null;
+      };
+
+      let query = applyIdentity(supabase.from('repair_part_usages').update(rowUpdates));
+      if (!query) {
         console.warn('⚠️ Cannot safely resolve remote repair_part_usage:', id);
         return false;
       }
+      let { data, error } = await query.select('id');
 
-      const { data, error } = await query.select('id');
+      if (error && isMissingColumnError(error)) {
+        if (updates.accountingStatus === 'RETURNED' || updates.accountingStatus === 'REVERSED') {
+          const deleteQuery = applyIdentity(supabase.from('repair_part_usages').delete());
+          if (!deleteQuery) return false;
+          const retry = await deleteQuery.select('id');
+          data = retry.data;
+          error = retry.error;
+        } else {
+          const legacyUpdates: any = {};
+          if (updates.quantity !== undefined) legacyUpdates.quantity = updates.quantity;
+          if (updates.unitCost !== undefined) legacyUpdates.cost_price_snapshot = updates.unitCost;
+          if (updates.sellingPrice !== undefined) legacyUpdates.selling_price_snapshot = updates.sellingPrice;
+          if (Object.keys(legacyUpdates).length === 0) return false;
+          const retryQuery = applyIdentity(supabase.from('repair_part_usages').update(legacyUpdates));
+          if (!retryQuery) return false;
+          const retry = await retryQuery.select('id');
+          data = retry.data;
+          error = retry.error;
+        }
+      }
       if (error) {
         console.warn("⚠️ Notice updating repair_part_usages in Supabase:", error.message);
         return false;
