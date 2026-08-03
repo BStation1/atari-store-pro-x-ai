@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 30946)
-Total output lines: 2435
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -1409,7 +1406,68 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                       unitCost: item.costPrice || 0,
                       totalCost: (item.costPrice || 0) * (item.quantity || 1),
                       sellingPrice: item.repairPrice ?? item.salePrice ?? 0,
-                      selling…946 tokens truncated…                 const skuMatch = p.sku ? p.sku.toLowerCase().includes(query) : false;
+                      sellingTotal: (item.repairPrice ?? item.salePrice ?? 0) * (item.quantity || 1),
+                      ownershipType: selectedOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED,
+                      responsiblePartnerId: 'SHOP',
+                      accountingStatus: 'CONSUMED',
+                      createdAt: selectedOrder.receivedDate || new Date().toISOString()
+                    }));
+
+                const matchedOrderUsages = getActiveRepairUsagesForOrder(selectedOrder, partUsages);
+                console.log("REPAIR_UI_RUNTIME=", {
+                  orderId: selectedOrder.id,
+                  orderNumber: selectedOrder.orderNumber,
+                  partUsagesLoaded,
+                  allPartUsagesCount: partUsages.length,
+                  matchedOrderUsages: matchedOrderUsages.map(pu => ({
+                    id: pu.id,
+                    repairOrderId: pu.repairOrderId || (pu as any).repair_order_id,
+                    deviceId: (pu as any).deviceId || (pu as any).device_id,
+                    deviceIndex: (pu as any).deviceIndex ?? (pu as any).device_index,
+                    inventoryItemId: pu.inventoryItemId,
+                    partName: pu.partName,
+                    quantity: pu.quantity,
+                    sellingPrice: pu.sellingPrice,
+                    accountingStatus: pu.accountingStatus
+                  })),
+                  matchedDeviceUsages: deviceLinkedUsages.map(pu => ({
+                    id: pu.id,
+                    repairOrderId: pu.repairOrderId || (pu as any).repair_order_id,
+                    deviceId: (pu as any).deviceId || (pu as any).device_id,
+                    deviceIndex: (pu as any).deviceIndex ?? (pu as any).device_index,
+                    inventoryItemId: pu.inventoryItemId,
+                    partName: pu.partName,
+                    quantity: pu.quantity,
+                    sellingPrice: pu.sellingPrice,
+                    accountingStatus: pu.accountingStatus
+                  })),
+                  selectedRepairItemsSnapshot: currentDevice.selectedRepairItems || []
+                });
+
+                // Total selling price of all linked used parts
+                const partsTotalSelling = deviceLinkedUsages.reduce((sum, pu) => {
+                  const sellP = getUsageSellingUnitPrice(pu, products);
+                  return sum + (pu.quantity * sellP);
+                }, 0);
+
+                // Reported faults / complaint
+                const reportedFaults = currentDevice.reportedFaults || (currentDevice.issue ? currentDevice.issue.split(" - ").map(s => s.trim()) : []);
+
+                // Labor Price calculation:
+                const faultsLaborCost = currentDevice.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(reportedFaults);
+                const grandTotal = (currentDevice.finalRepairPrice ?? currentDevice.estimatedCost) || (partsTotalSelling + faultsLaborCost);
+                const calculatedLabor = Math.max(0, grandTotal - partsTotalSelling);
+
+                // Instant Search filtering (compatible parts with search text matching name, nameAr, SKU, or barcode)
+                const query = partSearch.trim().toLowerCase();
+                const availableInventory = products.filter(p => !p.isArchived);
+                const compatibleInventory = availableInventory.filter(p => isProductCompatibleWithDevice(p, currentDevice.type, currentDevice.model));
+                const baseListToSearch = (compatibleInventory.length > 0 ? compatibleInventory : availableInventory);
+
+                const matchedSearchResults = baseListToSearch.filter(p => {
+                  if (!query) return true;
+                  const nameMatch = p.name.toLowerCase().includes(query) || (p.nameAr && p.nameAr.toLowerCase().includes(query));
+                  const skuMatch = p.sku ? p.sku.toLowerCase().includes(query) : false;
                   const barcodeMatch = p.barcode ? p.barcode.toLowerCase().includes(query) : false;
                   const catMatch = p.category ? p.category.toLowerCase().includes(query) : false;
                   return nameMatch || skuMatch || barcodeMatch || catMatch;
