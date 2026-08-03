@@ -565,6 +565,79 @@ export async function runAccountingTestSuite(): Promise<AccountingTestSuiteResul
   }
 
   // =========================================================================
+  // Test 7.5: Regression - remove then re-add (A removed, then B added) should count only B
+  // =========================================================================
+  try {
+    const repairOrder = {
+      id: 'TEST-REPAIR-005',
+      orderNumber: 'R-005',
+      receivedDate: '2026-08-02T00:00:00Z',
+      customerName: 'Test Repair 5',
+      workOwnershipType: 'CUSTOMER_SHARED',
+      devices: []
+    } as any;
+
+    const movements = [
+      // Add part A
+      {
+        id: 'M-OUT-005-A',
+        productId: 'P-005-A',
+        movementType: 'REPAIR_USAGE',
+        quantityChange: -1,
+        previousQuantity: 5,
+        newQuantity: 4,
+        costPriceSnapshot: 200,
+        sellingPriceSnapshot: 0,
+        referenceId: repairOrder.id,
+        repairOrderId: repairOrder.id,
+        notes: 'deviceId:D-5 usageId:U-A',
+        createdAt: '2026-08-02T00:00:00Z'
+      },
+      // Remove part A (should reference M-OUT-005-A)
+      {
+        id: 'M-IN-005-A-RETURN',
+        productId: 'P-005-A',
+        movementType: 'REPAIR_USAGE_RETURN',
+        quantityChange: 1,
+        previousQuantity: 4,
+        newQuantity: 5,
+        costPriceSnapshot: 200,
+        sellingPriceSnapshot: 0,
+        referenceId: repairOrder.id,
+        repairOrderId: repairOrder.id,
+        reversalOf: 'M-OUT-005-A',
+        relatedMovementId: 'M-OUT-005-A',
+        notes: 'deviceId:D-5 usageId:U-A',
+        createdAt: '2026-08-02T00:05:00Z'
+      },
+      // Add part B
+      {
+        id: 'M-OUT-005-B',
+        productId: 'P-005-B',
+        movementType: 'REPAIR_USAGE',
+        quantityChange: -1,
+        previousQuantity: 3,
+        newQuantity: 2,
+        costPriceSnapshot: 150,
+        sellingPriceSnapshot: 0,
+        referenceId: repairOrder.id,
+        repairOrderId: repairOrder.id,
+        notes: 'deviceId:D-5 usageId:U-B',
+        createdAt: '2026-08-02T00:10:00Z'
+      }
+    ];
+
+    const result = calculateOrderAccountingV2(repairOrder, [], movements, []);
+    const pass7_5 = result.purchaseCost === 150 && result.partsQuantity === 1 && result.parts.length === 1 && result.parts[0].totalPurchaseCost === 150;
+    const exp7_5 = 'بعد حذف A وإضافة B يجب أن تُحسب تكلفة B فقط (150)';
+    const act7_5 = `qty=${result.partsQuantity} cost=${result.purchaseCost} parts=${result.parts.length} firstCost=${result.parts[0]?.totalPurchaseCost}`;
+    const diff7_5 = pass7_5 ? undefined : `القيم غير متطابقة: ${JSON.stringify(result)}`;
+    assertTest(7.5, 'إضافة A → حذف A → إضافة B يجب أن تُحسب B فقط', exp7_5, act7_5, pass7_5, diff7_5);
+  } catch (e: any) {
+    assertTest(7.5, 'اختبار إعادة الإضافة بعد الإرجاع', 'التكلفة = 150', `خطأ: ${e?.message}`, false);
+  }
+
+  // =========================================================================
   // Test 8: Invoice Edit & Re-calculation (تعديل الفاتورة وإعادة الحساب)
   // =========================================================================
   try {

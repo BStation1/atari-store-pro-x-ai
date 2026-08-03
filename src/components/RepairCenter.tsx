@@ -51,7 +51,7 @@ import ReopenOrderModal from "./ReopenOrderModal";
 import CancelWarrantyModal from "./CancelWarrantyModal";
 import { canDeliverDevice, canReopenDeliveredOrder, canCancelWarranty } from "../lib/authPermissions";
 import { db } from "../lib/data";
-import { addInventoryMovementToSupabase, ensureProductUuidInSupabase, updateProductQuantityInSupabase } from "../lib/supabaseProducts";
+import { addInventoryMovementToSupabase, ensureProductUuidInSupabase, updateProductQuantityInSupabase, getInventoryMovements } from "../lib/supabaseProducts";
 import { addRepairPartUsageToSupabase, updateRepairPartUsageInSupabase } from "../lib/supabasePartUsages";
 import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabase } from "../lib/supabaseRepairOrders";
 import { sendRepairNotificationWorkflow } from "../lib/whatsapp";
@@ -1016,14 +1016,54 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
         if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) owner = 'AHMED';
         else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) owner = 'ABDO';
 
+        // Try to find the original outgoing movement for this usage so the return links to the movement id
+        let originalMovementId = usage.id; // fallback (legacy behaviour)
+        try {
+          const movs = await getInventoryMovements(usage.inventoryItemId);
+          if (movs && movs.length > 0) {
+            // prefer explicit outgoing movement that carried this usageId
+            const matchedByUsage = movs.find(m => {
+              const mUsageId = (m as any).usageId || (m as any).usage_id || (m as any).usageId;
+              const notes = (m as any).notes || '';
+              const mt = String((m as any).movementType || (m as any).movement_type || '').toUpperCase();
+              const isOutgoing = mt === 'REPAIR_USAGE' || mt === 'OUT' || Number((m as any).quantityChange || (m as any).quantity_change || 0) < 0;
+              if (!isOutgoing) return false;
+              if (mUsageId && String(mUsageId) === String(usage.id)) return true;
+              if (notes && notes.includes(`usageId:${usage.id}`)) return true;
+              return false;
+            });
+
+            if (matchedByUsage && (matchedByUsage as any).id) {
+              originalMovementId = String((matchedByUsage as any).id);
+            } else {
+              // fallback: find most recent outgoing movement for same repair order & product
+              const cand = movs
+                .filter(m => {
+                  const mt = String((m as any).movementType || (m as any).movement_type || '').toUpperCase();
+                  const isOutgoing = mt === 'REPAIR_USAGE' || mt === 'OUT' || Number((m as any).quantityChange || (m as any).quantity_change || 0) < 0;
+                  const ref = (m as any).referenceId || (m as any).reference_id || '';
+                  return isOutgoing && String(ref) === String(selectedOrder.id);
+                })
+                .sort((a, b) => {
+                  const ta = new Date((a as any).createdAt || (a as any).created_at || 0).getTime();
+                  const tb = new Date((b as any).createdAt || (b as any).created_at || 0).getTime();
+                  return tb - ta;
+                })[0];
+              if (cand && (cand as any).id) originalMovementId = String((cand as any).id);
+            }
+          }
+        } catch (e) {
+          console.warn('Could not resolve original outgoing movement for usage', usage.id, e);
+        }
+
         const movementPromise = addInventoryMovementToSupabase({
           id: `MOV-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
           productId: usage.inventoryItemId,
           productNameSnapshot: usage.partName,
           movementType: 'REPAIR_USAGE_RETURN',
           usageId: usage.id,
-          reversalOf: usage.id,
-          relatedMovementId: usage.id,
+          reversalOf: originalMovementId,
+          relatedMovementId: originalMovementId,
           quantityChange: actualReturnedQty,
           previousQuantity: product ? product.quantity : 0,
           newQuantity: product ? product.quantity + actualReturnedQty : actualReturnedQty,
