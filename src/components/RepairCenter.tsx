@@ -801,6 +801,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
         const quantityPromise = updateProductQuantityInSupabase(productUuid, newQty);
         const movementPromise = addInventoryMovementToSupabase({
+          id: usageRecordToSave.id,
           productId: productUuid,
           productNameSnapshot: product.nameAr || product.name,
           movementType: 'REPAIR_USAGE',
@@ -813,7 +814,8 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
           referenceId: selectedOrder.id,
           repairOrderId: repairOrderUuid,
           owner: owner,
-          notes: `صرف قطعة غيار صيانة: ${product.nameAr || product.name} للجهاز (${getDeviceDisplayName(currentDevice)})`,
+          usageId: usageRecordToSave.id,
+          notes: `صرف قطعة غيار صيانة: ${product.nameAr || product.name} للجهاز (${getDeviceDisplayName(currentDevice)}) deviceId:${currentDevice.id || deviceIdx} usageId:${usageRecordToSave.id}`,
           createdAt: new Date().toISOString()
         });
 
@@ -1018,8 +1020,10 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
           id: `MOV-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
           productId: usage.inventoryItemId,
           productNameSnapshot: usage.partName,
-          movementType: 'IN',
-          usageType: 'REPAIR_USAGE_RETURN',
+          movementType: 'REPAIR_USAGE_RETURN',
+          usageId: usage.id,
+          reversalOf: usage.id,
+          relatedMovementId: usage.id,
           quantityChange: actualReturnedQty,
           previousQuantity: product ? product.quantity : 0,
           newQuantity: product ? product.quantity + actualReturnedQty : actualReturnedQty,
@@ -1029,7 +1033,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
           referenceId: selectedOrder.id,
           repairOrderId: selectedOrder.id,
           owner: owner,
-          notes: `إرجاع قطعة غيار صيانة للمخزن: ${usage.partName}`,
+          notes: `إرجاع قطعة غيار صيانة للمخزن: ${usage.partName} deviceId:${currentDevice?.id || deviceIdx} usageId:${usage.id}`,
           createdAt: new Date().toISOString()
         });
 
