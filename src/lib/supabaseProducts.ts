@@ -765,7 +765,9 @@ export async function getInventoryMovements(productId?: string): Promise<Invento
     console.log('FETCH_INVENTORY_MOVEMENTS_START=' + JSON.stringify({ productId, supabaseConfigured: isSupabaseConfigured }));
 
     if (productId && !isUuid(productId)) {
-      return localMovs.filter(m => m.productId === productId);
+      const localFiltered = localMovs.filter(m => m.productId === productId);
+      console.log('FETCH_INVENTORY_MOVEMENTS_LOCAL_ONLY=', localFiltered.map(m => ({ id: m.id, movementType: m.movementType, referenceId: m.referenceId, productId: m.productId, quantityChange: m.quantityChange, notes: m.notes, createdAt: m.createdAt })));
+      return localFiltered;
     }
 
     let query = supabase.from('inventory_movements').select('*').order('created_at', { ascending: false });
@@ -779,6 +781,10 @@ export async function getInventoryMovements(productId?: string): Promise<Invento
     if (error) {
       console.warn('⚠️ [getInventoryMovements] Supabase notice (using local movements):', error.message || error);
       return productId ? localMovs.filter(m => m.productId === productId) : localMovs;
+    }
+
+    if (productId && data) {
+      console.log('FETCH_INVENTORY_MOVEMENTS_SUPABASE_ROWS=', (data as any[]).map(row => ({ id: row.id, movement_type: row.movement_type, reference_id: row.reference_id, product_id: row.product_id, quantity_change: row.quantity_change, notes: row.notes, created_at: row.created_at })));
     }
 
     const mapped: InventoryMovement[] = (data || []).map((m: any) => ({
@@ -951,12 +957,15 @@ export async function addInventoryMovementToSupabase(movement: any): Promise<boo
   }
 
   try {
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('inventory_movements')
-      .insert([row]);
+      .insert([row])
+      .select();
 
     if (error) {
       console.warn("⚠️ Notice inserting inventory_movements into Supabase:", error.message);
+    } else {
+      console.log('PERSISTED_INVENTORY_MOVEMENT_ROW=', (data || []).map((row: any) => ({ id: row.id, movement_type: row.movement_type, reference_id: row.reference_id, product_id: row.product_id, quantity_change: row.quantity_change, notes: row.notes, created_at: row.created_at })));
     }
   } catch (err) {
     console.warn("⚠️ Exception inserting inventory_movements into Supabase:", err);

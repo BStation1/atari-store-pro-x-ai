@@ -118,6 +118,12 @@ function parseDeviceIdFromNotes(notes: any): string {
   return match ? match[1] : '';
 }
 
+function parseUsageIdFromNotes(notes: any): string {
+  if (!notes || typeof notes !== 'string') return '';
+  const match = String(notes).match(/usageId:([^\s,;]+)/i);
+  return match ? match[1] : '';
+}
+
 function isOutgoingMovement(movement: any): boolean {
   const type = upper(movement.movementType ?? movement.movement_type);
   const qty = Number(movement.quantityChange ?? movement.quantity_change ?? 0);
@@ -163,8 +169,8 @@ function isExplicitReverseLink(returnMovement: any, withdrawalMovement: any): bo
   const returnId = getMovementField(returnMovement, 'id', 'movementId', 'movement_id');
   if (withdrawalReference && returnId && withdrawalReference === returnId) return true;
 
-  const returnUsageId = getMovementField(returnMovement, 'usageId', 'usage_id');
-  const withdrawalUsageId = getMovementField(withdrawalMovement, 'usageId', 'usage_id');
+  const returnUsageId = getMovementField(returnMovement, 'usageId', 'usage_id') || parseUsageIdFromNotes(returnMovement.notes ?? returnMovement.notes);
+  const withdrawalUsageId = getMovementField(withdrawalMovement, 'usageId', 'usage_id') || parseUsageIdFromNotes(withdrawalMovement.notes ?? withdrawalMovement.notes);
   if (returnUsageId && withdrawalUsageId && returnUsageId === withdrawalUsageId) return true;
 
   const returnDevice = parseDeviceIdFromNotes(returnMovement.notes ?? returnMovement.notes);
@@ -233,6 +239,16 @@ function netActiveOutgoingMovements(movements: InventoryMovement[], order: Repai
         isExplicitReverseLink(returnMovement, withdrawal)
       );
     }
+
+    console.log('ACCOUNTING_MATCHER=', {
+      returnId: getMovementField(returnMovement, 'id', 'movementId', 'movement_id'),
+      returnType: getMovementField(returnMovement, 'movementType', 'movement_type'),
+      matchedWithdrawalId: matchedWithdrawal ? getMovementField(matchedWithdrawal, 'id', 'movementId', 'movement_id') : null,
+      matchedWithdrawalType: matchedWithdrawal ? getMovementField(matchedWithdrawal, 'movementType', 'movement_type') : null,
+      reason: matchedWithdrawal ? 'matched' : 'no_match',
+      returnNotes: returnMovement.notes,
+      withdrawalNotes: matchedWithdrawal ? matchedWithdrawal.notes : null
+    });
 
     if (matchedWithdrawal) {
       const reversedQty = Math.min(returnMovement.quantity, matchedWithdrawal.quantity);
