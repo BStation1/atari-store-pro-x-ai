@@ -21,6 +21,7 @@ import {
   usePartnerTransactions
 } from "../../hooks/useData";
 import { WorkOwnershipType } from "../../types";
+import { usageMatchesOrder } from "../../lib/accountingEngineV2";
 
 interface PartnerStatementProps {
   onOpenReversalModal?: (transactionId: string) => void;
@@ -73,7 +74,7 @@ export default function PartnerStatement({ onOpenReversalModal }: PartnerStateme
     const rev = o.totalEstimatedCost || 0;
     const other = o.otherDirectCosts || 0;
     let parts = 0;
-    const orderParts = partUsages.filter(pu => pu.repairOrderId === o.id);
+    const orderParts = partUsages.filter(pu => usageMatchesOrder(pu, o));
     if (orderParts.length > 0) {
       parts = orderParts.reduce((acc, p) => acc + (p.totalCost || 0), 0);
     } else {

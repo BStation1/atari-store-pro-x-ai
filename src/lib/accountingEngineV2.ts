@@ -2,7 +2,9 @@ import type {
   Invoice,
   InventoryMovement,
   RepairOrder,
-  RepairPartUsage
+  RepairPartUsage,
+  RepairDevice,
+  SelectedRepairItem
 } from '../types';
 
 export type AccountingParty = 'SHOP' | 'AHMED' | 'ABDO';
@@ -69,19 +71,16 @@ const money = (value: unknown): number => {
 const clean = (value: unknown): string => String(value ?? '').trim();
 const upper = (value: unknown): string => clean(value).toUpperCase();
 
-let lastMovementsAvailable = false;
-let lastUsagesAvailable = false;
-
-function orderIdentitySet(order: RepairOrder): Set<string> {
+export function orderIdentitySet(order: RepairOrder): Set<string> {
   const anyOrder = order as any;
   return new Set(
-    [order.id, anyOrder.orderNumber, anyOrder.order_number, anyOrder.uuid, anyOrder.databaseId]
+    [order.id, anyOrder.orderNumber, anyOrder.order_number, order.uuid, order.databaseId, anyOrder.uuid, anyOrder.databaseId]
       .map(clean)
       .filter(Boolean)
   );
 }
 
-function valueMatchesOrder(value: unknown, order: RepairOrder): boolean {
+export function valueMatchesOrder(value: unknown, order: RepairOrder): boolean {
   const target = clean(value);
   return Boolean(target) && orderIdentitySet(order).has(target);
 }
@@ -101,175 +100,11 @@ function isActiveUsage(usage: RepairPartUsage): boolean {
   return usage.accountingStatus !== 'RETURNED' && usage.accountingStatus !== 'REVERSED';
 }
 
-function getMovementField(movement: any, ...fields: string[]): string {
-  for (const field of fields) {
-    const value = movement[field];
-    if (value !== undefined && value !== null) {
-      const text = String(value).trim();
-      if (text) return text;
-    }
-  }
-  return '';
-}
-
-function parseDeviceIdFromNotes(notes: any): string {
-  if (!notes || typeof notes !== 'string') return '';
-  const match = String(notes).match(/deviceId:([^\s,;]+)/i);
-  return match ? match[1] : '';
-}
-
-function parseUsageIdFromNotes(notes: any): string {
-  if (!notes || typeof notes !== 'string') return '';
-  const match = String(notes).match(/usageId:([^\s,;]+)/i);
-  return match ? match[1] : '';
-}
-
 function isOutgoingMovement(movement: any): boolean {
   const type = upper(movement.movementType ?? movement.movement_type);
   const qty = Number(movement.quantityChange ?? movement.quantity_change ?? 0);
+  if (['RETURN', 'IN', 'DELETION_RESTORE', 'PURCHASE'].includes(type)) return false;
   return ['REPAIR_USAGE', 'PARTNER_WITHDRAWAL', 'OUT', 'SALE'].includes(type) || qty < 0;
-}
-
-function isExplicitReturnMovement(movement: any): boolean {
-  const type = upper(movement.movementType ?? movement.movement_type);
-  return ['REPAIR_USAGE_RETURN', 'PARTNER_WITHDRAWAL_RETURN'].includes(type);
-}
-
-function isGenericReturnMovement(movement: any): boolean {
-  const type = upper(movement.movementType ?? movement.movement_type);
-  return ['RETURN', 'DELETION_RESTORE'].includes(type);
-}
-
-function isReturnCandidate(movement: any): boolean {
-  return isExplicitReturnMovement(movement) || isGenericReturnMovement(movement);
-}
-
-function movementCreatedAt(movement: any): number {
-  const date = new Date(movement.createdAt ?? movement.created_at ?? '').getTime();
-  return Number.isFinite(date) && date > 0 ? date : 0;
-}
-
-function isExplicitReverseLink(returnMovement: any, withdrawalMovement: any): boolean {
-  const returnLink = getMovementField(
-    returnMovement,
-    'reversalOf',
-    'reversal_of',
-    'relatedMovementId',
-    'related_movement_id',
-    'usageId',
-    'usage_id'
-  );
-  const withdrawalId = getMovementField(withdrawalMovement, 'id', 'movementId', 'movement_id');
-  if (returnLink && withdrawalId && returnLink === withdrawalId) return true;
-
-  const returnReference = getMovementField(returnMovement, 'referenceId', 'reference_id');
-  if (returnReference && withdrawalId && returnReference === withdrawalId) return true;
-
-  const withdrawalReference = getMovementField(withdrawalMovement, 'referenceId', 'reference_id');
-  const returnId = getMovementField(returnMovement, 'id', 'movementId', 'movement_id');
-  if (withdrawalReference && returnId && withdrawalReference === returnId) return true;
-
-  const returnUsageId = getMovementField(returnMovement, 'usageId', 'usage_id') || parseUsageIdFromNotes(returnMovement.notes ?? returnMovement.notes);
-  const withdrawalUsageId = getMovementField(withdrawalMovement, 'usageId', 'usage_id') || parseUsageIdFromNotes(withdrawalMovement.notes ?? withdrawalMovement.notes);
-  if (returnUsageId && withdrawalUsageId && returnUsageId === withdrawalUsageId) return true;
-
-  const returnDevice = parseDeviceIdFromNotes(returnMovement.notes ?? returnMovement.notes);
-  const withdrawalDevice = parseDeviceIdFromNotes(withdrawalMovement.notes ?? withdrawalMovement.notes);
-  if (returnDevice && withdrawalDevice && returnDevice === withdrawalDevice) return true;
-
-  return false;
-}
-
-function sameRepairOrderAndProduct(movementA: any, movementB: any): boolean {
-  const orderA = getMovementField(movementA, 'repairOrderId', 'repair_order_id', 'referenceId', 'reference_id');
-  const orderB = getMovementField(movementB, 'repairOrderId', 'repair_order_id', 'referenceId', 'reference_id');
-  const productA = getMovementField(movementA, 'productId', 'product_id', 'inventoryItemId', 'inventory_item_id', 'sku');
-  const productB = getMovementField(movementB, 'productId', 'product_id', 'inventoryItemId', 'inventory_item_id', 'sku');
-  return orderA && orderA === orderB && productA && productA === productB;
-}
-
-function strictFallbackMatch(returnMovement: any, withdrawalMovement: any): boolean {
-  if (!sameRepairOrderAndProduct(returnMovement, withdrawalMovement)) return false;
-  if (movementCreatedAt(returnMovement) <= movementCreatedAt(withdrawalMovement)) return false;
-  const returnDevice = parseDeviceIdFromNotes(returnMovement.notes ?? returnMovement.notes);
-  const withdrawalDevice = parseDeviceIdFromNotes(withdrawalMovement.notes ?? withdrawalMovement.notes);
-  const returnUsageId = getMovementField(returnMovement, 'usageId', 'usage_id');
-  const withdrawalUsageId = getMovementField(withdrawalMovement, 'usageId', 'usage_id');
-  if (returnDevice && withdrawalDevice) return returnDevice === withdrawalDevice;
-  if (returnUsageId && withdrawalUsageId) return returnUsageId === withdrawalUsageId;
-  return isExplicitReturnMovement(returnMovement);
-}
-
-function netActiveOutgoingMovements(movements: InventoryMovement[], order: RepairOrder) {
-  const relevantMovements = (movements || []).filter(movement => movementMatchesOrder(movement, order));
-
-  const withdrawals = relevantMovements
-    .filter(isOutgoingMovement)
-    .map((movement: any) => ({
-      ...movement,
-      quantity: movementCost(movement).quantity,
-      totalCost: movementCost(movement).totalCost
-    }));
-
-  const returns = relevantMovements
-    .filter(isReturnCandidate)
-    .map((movement: any) => ({
-      ...movement,
-      quantity: movementCost(movement).quantity,
-      totalCost: movementCost(movement).totalCost
-    }));
-
-  returns.forEach((returnMovement) => {
-    let matchedWithdrawal = withdrawals.find(withdrawal =>
-      withdrawal.quantity > 0 &&
-      isExplicitReverseLink(returnMovement, withdrawal) &&
-      movementCreatedAt(returnMovement) >= movementCreatedAt(withdrawal)
-    );
-
-    if (!matchedWithdrawal && isExplicitReturnMovement(returnMovement)) {
-      matchedWithdrawal = withdrawals.find(withdrawal =>
-        withdrawal.quantity > 0 &&
-        strictFallbackMatch(returnMovement, withdrawal)
-      );
-    }
-
-    if (!matchedWithdrawal && isGenericReturnMovement(returnMovement)) {
-      matchedWithdrawal = withdrawals.find(withdrawal =>
-        withdrawal.quantity > 0 &&
-        isExplicitReverseLink(returnMovement, withdrawal)
-      );
-    }
-
-    console.log('ACCOUNTING_MATCHER=', {
-      returnId: getMovementField(returnMovement, 'id', 'movementId', 'movement_id'),
-      returnType: getMovementField(returnMovement, 'movementType', 'movement_type'),
-      matchedWithdrawalId: matchedWithdrawal ? getMovementField(matchedWithdrawal, 'id', 'movementId', 'movement_id') : null,
-      matchedWithdrawalType: matchedWithdrawal ? getMovementField(matchedWithdrawal, 'movementType', 'movement_type') : null,
-      reason: matchedWithdrawal ? 'matched' : 'no_match',
-      returnNotes: returnMovement.notes,
-      withdrawalNotes: matchedWithdrawal ? matchedWithdrawal.notes : null
-    });
-
-    if (matchedWithdrawal) {
-      const reversedQty = Math.min(returnMovement.quantity, matchedWithdrawal.quantity);
-      const unitCost = matchedWithdrawal.quantity > 0 ? matchedWithdrawal.totalCost / matchedWithdrawal.quantity : 0;
-      matchedWithdrawal.quantity -= reversedQty;
-      matchedWithdrawal.totalCost -= money(reversedQty * unitCost);
-    }
-  });
-  // Build final active withdrawals list after applying all matched reversals.
-  const activeWithdrawals = withdrawals
-    .filter(withdrawal => withdrawal.quantity > 0)
-    .map((withdrawal: any, index: number) => ({
-      id: clean(withdrawal.id) || `movement-net-${order.id}-${index}`,
-      partName: productNameFromMovement(withdrawal),
-      quantity: withdrawal.quantity,
-      unitPurchaseCost: withdrawal.quantity > 0 ? money(withdrawal.totalCost / withdrawal.quantity) : 0,
-      totalPurchaseCost: money(withdrawal.totalCost),
-      source: 'INVENTORY_MOVEMENT' as const
-    }));
-
-  return activeWithdrawals;
 }
 
 function movementMatchesOrder(movement: any, order: RepairOrder): boolean {
@@ -283,8 +118,109 @@ function movementMatchesOrder(movement: any, order: RepairOrder): boolean {
   ].some(value => valueMatchesOrder(value, order));
 }
 
-function usageMatchesOrder(usage: RepairPartUsage, order: RepairOrder): boolean {
+export function usageMatchesOrder(usage: RepairPartUsage, order: RepairOrder): boolean {
   return valueMatchesOrder(usage.repairOrderId, order);
+}
+
+export function usageMatchesDevice(
+  usage: RepairPartUsage,
+  device: RepairDevice,
+  deviceIdx: number,
+  totalDevices: number
+): boolean {
+  if (totalDevices === 1) return true;
+  const notes = usage.notes || '';
+  if (device.id && notes.includes(`deviceId:${device.id}`)) {
+    return true;
+  }
+  if (notes.includes(`deviceId:${deviceIdx}`)) {
+    return true;
+  }
+  if (!notes.includes('deviceId:') && deviceIdx === 0) {
+    return true;
+  }
+  return false;
+}
+
+export function syncOrderSelectedRepairItemsFromUsages(
+  order: RepairOrder,
+  usages: RepairPartUsage[],
+  getSellingPriceFn?: (pu: RepairPartUsage) => number
+): RepairOrder {
+  if (!order || !order.devices || order.devices.length === 0) return order;
+
+  const activeUsages = (usages || []).filter(
+    pu => usageMatchesOrder(pu, order) &&
+          pu.accountingStatus !== 'RETURNED' &&
+          pu.accountingStatus !== 'REVERSED'
+  );
+
+  let changed = false;
+  const updatedDevices = order.devices.map((device, devIdx) => {
+    const deviceUsages = activeUsages.filter(pu =>
+      usageMatchesDevice(pu, device, devIdx, order.devices.length)
+    );
+
+    const rebuiltItems: SelectedRepairItem[] = deviceUsages.map(pu => {
+      const sellP = getSellingPriceFn ? getSellingPriceFn(pu) : (pu.sellingPrice || pu.unitCost || 0);
+      return {
+        id: pu.id,
+        usageId: pu.id,
+        productId: pu.inventoryItemId,
+        name: pu.partName,
+        quantity: pu.quantity,
+        costPrice: pu.unitCost,
+        repairPrice: sellP,
+        salePrice: sellP,
+        deviceId: device.id,
+        deviceIndex: devIdx
+      };
+    });
+
+    const calcPartsCost = deviceUsages.reduce((sum, pu) => {
+      const sellP = getSellingPriceFn ? getSellingPriceFn(pu) : (pu.sellingPrice || pu.unitCost || 0);
+      return sum + (pu.quantity * sellP);
+    }, 0);
+
+    const existingItems = device.selectedRepairItems || [];
+
+    const isStale =
+      rebuiltItems.length !== existingItems.length ||
+      Number(device.partsCost || 0) !== calcPartsCost ||
+      rebuiltItems.some((item, i) => {
+        const ext = existingItems[i];
+        if (!ext) return true;
+        return (
+          ext.usageId !== item.usageId ||
+          ext.id !== item.id ||
+          ext.quantity !== item.quantity ||
+          ext.repairPrice !== item.repairPrice ||
+          ext.costPrice !== item.costPrice
+        );
+      });
+
+    if (isStale) {
+      changed = true;
+      return {
+        ...device,
+        selectedRepairItems: rebuiltItems,
+        partsCost: calcPartsCost
+      };
+    }
+
+    return device;
+  });
+
+  if (!changed) return order;
+
+  const totalFinal = updatedDevices.reduce((sum, d) => sum + (d.finalRepairPrice ?? d.estimatedCost ?? 0), 0);
+
+  return {
+    ...order,
+    devices: updatedDevices,
+    totalEstimatedCost: totalFinal,
+    finalRepairPrice: totalFinal
+  };
 }
 
 export function normalizeAccountingParty(raw: unknown): AccountingParty {
@@ -352,30 +288,30 @@ function positiveNumber(...values: unknown[]): number | null {
 }
 
 function explicitItemQuantity(item: any): number {
-  const qty = Number(item?.quantity ?? item?.qty ?? item?.partsQuantity ?? item?.parts_quantity ?? item?.itemQuantity ?? item?.item_quantity);
-  if (Number.isFinite(qty) && qty > 0) return qty;
-  // default to 1 only when a valid purchase-cost field exists
-  const hasCost = explicitItemPurchaseUnitCost(item) !== null;
-  return hasCost ? 1 : 0;
+  return Math.max(1, Number(item?.quantity ?? item?.qty ?? item?.partsQuantity ?? item?.parts_quantity ?? 1) || 1);
 }
 
 function explicitItemPurchaseUnitCost(item: any): number | null {
-  // Only resolve from approved fields per requirements
   return positiveNumber(
     item?.costPrice,
     item?.purchaseCost,
     item?.purchase_cost,
+    item?.unitCost,
+    item?.unit_cost,
+    item?.purchaseUnitCost,
     item?.purchase_unit_cost_snapshot,
-    item?.partsPurchaseCost
+    item?.defaultCostPrice
   );
 }
 
 function explicitDevicePurchaseCost(device: any): number | null {
-  // Only resolve device-level purchase cost from approved fields
   return positiveNumber(
     device?.partsPurchaseCost,
     device?.purchaseCost,
     device?.purchase_cost,
+    device?.parts_purchase_cost,
+    device?.partsCostPrice,
+    device?.parts_cost_price,
     device?.purchase_unit_cost_snapshot
   );
 }
@@ -388,8 +324,7 @@ function legacyDeviceDetails(order: RepairOrder): AccountingPartDetail[] {
       ...(Array.isArray(device.selectedRepairItems) ? device.selectedRepairItems : []),
       ...(Array.isArray(device.repairItems) ? device.repairItems : []),
       ...(Array.isArray(device.items) ? device.items : []),
-      ...(Array.isArray(device.parts) ? device.parts : []),
-      ...(Array.isArray(device.technicalProcedures) ? device.technicalProcedures : [])
+      ...(Array.isArray(device.parts) ? device.parts : [])
     ];
 
     const explicitItems = rawItems
@@ -397,7 +332,6 @@ function legacyDeviceDetails(order: RepairOrder): AccountingPartDetail[] {
         const unitCost = explicitItemPurchaseUnitCost(item);
         if (!unitCost) return null;
         const quantity = explicitItemQuantity(item);
-        if (!Number.isFinite(quantity) || quantity <= 0) return null;
         return {
           id: clean(item?.id) || `legacy-item-${order.id}-${deviceIndex}-${itemIndex}`,
           partName: clean(item?.name ?? item?.nameAr ?? item?.label ?? item?.sku) || 'قطعة غيار قديمة',
@@ -435,9 +369,9 @@ function legacyDeviceDetails(order: RepairOrder): AccountingPartDetail[] {
 
 function hasPartEvidence(order: RepairOrder): boolean {
   return (order.devices || []).some((device: any) => {
-    const arrays = [device.selectedRepairItems, device.repairItems, device.items, device.parts, device.technicalProcedures];
+    const arrays = [device.selectedRepairItems, device.repairItems, device.items, device.parts];
     const hasItems = arrays.some(items => Array.isArray(items) && items.length > 0);
-    return hasItems || explicitDevicePurchaseCost(device) !== null;
+    return hasItems || Number(device.partsCost || 0) > 0 || explicitDevicePurchaseCost(device) !== null;
   });
 }
 
@@ -446,64 +380,7 @@ export function resolveOrderPartsAccounting(
   movements: InventoryMovement[],
   usages: RepairPartUsage[]
 ): Pick<OrderAccountingV2, 'purchaseCost' | 'partsQuantity' | 'parts' | 'costSource' | 'purchaseCostStatus' | 'isAccountingIncomplete'> {
-  const traceOrderId = (order as any)?.id;
-  const traceOrderNumber = (order as any)?.orderNumber ?? (order as any)?.order_number;
-
-  // Temporary: JSON logging for order ATR-10001
-  if (traceOrderId === 'ATR-10001' || traceOrderNumber === 'ATR-10001') {
-    console.log(
-      'ORDER_PAYLOAD_JSON=' +
-      JSON.stringify({
-        order,
-        orderKeys: Object.keys(order || {}),
-        devices: order?.devices || [],
-        deviceKeys: (order?.devices || []).map(d => Object.keys(d || {}))
-      })
-    );
-  }
-
-  const printTrace = (props: { purchaseCost: unknown; purchaseCostStatus: unknown; costSource: unknown }) => {
-    const legacyParts = legacyDeviceDetails(order);
-    const linkedMovementsCount = ((movements || []).filter(m => isOutgoingMovement(m) && movementMatchesOrder(m, order))).length;
-    const linkedUsagesCount = ((usages || []).filter(u => isActiveUsage(u) && usageMatchesOrder(u, order))).length;
-    console.log('========================');
-    console.log(`ORDER: ${traceOrderNumber}`);
-    console.log('orderId:');
-    console.log(JSON.stringify(traceOrderId, null, 2));
-    console.log('hasPartEvidence:');
-    console.log(JSON.stringify(hasPartEvidence(order), null, 2));
-    console.log('linkedMovements:');
-    console.log(JSON.stringify(linkedMovementsCount, null, 2));
-    console.log('linkedUsages:');
-    console.log(JSON.stringify(linkedUsagesCount, null, 2));
-    console.log('legacyParts:');
-    console.log(JSON.stringify(legacyParts, null, 2));
-    console.log('purchaseCost:');
-    console.log(JSON.stringify(props.purchaseCost, null, 2));
-    console.log('purchaseCostStatus:');
-    console.log(JSON.stringify(props.purchaseCostStatus, null, 2));
-    console.log('costSource:');
-    console.log(JSON.stringify(props.costSource, null, 2));
-    console.log('========================');
-  };
-
-  const netLinkedMovements = netActiveOutgoingMovements(movements || [], order);
-
-  if (netLinkedMovements.length > 0) {
-    const result = {
-      parts: netLinkedMovements,
-      purchaseCost: money(netLinkedMovements.reduce((sum, part) => sum + part.totalPurchaseCost, 0)),
-      partsQuantity: netLinkedMovements.reduce((sum, part) => sum + part.quantity, 0),
-      costSource: 'INVENTORY_MOVEMENTS' as const,
-      purchaseCostStatus: 'RECORDED' as const,
-      isAccountingIncomplete: false
-    };
-    printTrace({ purchaseCost: result.purchaseCost, purchaseCostStatus: result.purchaseCostStatus, costSource: result.costSource });
-    return result;
-  }
-
   const linkedUsages = (usages || []).filter(usage => isActiveUsage(usage) && usageMatchesOrder(usage, order));
-  // linkedUsages count will be included in the final trace
   if (linkedUsages.length > 0) {
     const parts = linkedUsages.map((usage, index) => {
       const quantity = Math.max(0, Number(usage.quantity) || 0);
@@ -518,50 +395,66 @@ export function resolveOrderPartsAccounting(
         source: 'REPAIR_PART_USAGE' as const
       };
     });
-    const result = {
+    return {
       parts,
       purchaseCost: money(parts.reduce((sum, part) => sum + part.totalPurchaseCost, 0)),
       partsQuantity: parts.reduce((sum, part) => sum + part.quantity, 0),
-      costSource: 'REPAIR_PART_USAGES' as const,
-      purchaseCostStatus: 'RECORDED' as const,
+      costSource: 'REPAIR_PART_USAGES',
+      purchaseCostStatus: 'RECORDED',
       isAccountingIncomplete: false
     };
-    printTrace({ purchaseCost: result.purchaseCost, purchaseCostStatus: result.purchaseCostStatus, costSource: result.costSource });
-    return result;
+  }
+
+  const linkedMovements = (movements || []).filter(
+    movement => isOutgoingMovement(movement) && movementMatchesOrder(movement, order)
+  );
+
+  if (linkedMovements.length > 0) {
+    const parts = linkedMovements.map((movement: any, index) => {
+      const cost = movementCost(movement);
+      return {
+        id: clean(movement.id) || `movement-${order.id}-${index}`,
+        partName: productNameFromMovement(movement),
+        quantity: cost.quantity,
+        unitPurchaseCost: cost.unitCost,
+        totalPurchaseCost: cost.totalCost,
+        source: 'INVENTORY_MOVEMENT' as const
+      };
+    });
+    return {
+      parts,
+      purchaseCost: money(parts.reduce((sum, part) => sum + part.totalPurchaseCost, 0)),
+      partsQuantity: parts.reduce((sum, part) => sum + part.quantity, 0),
+      costSource: 'INVENTORY_MOVEMENTS',
+      purchaseCostStatus: 'RECORDED',
+      isAccountingIncomplete: false
+    };
   }
 
   const parts = legacyDeviceDetails(order);
   if (parts.length > 0) {
     const source = parts.some(part => part.source === 'LEGACY_ITEM') ? 'LEGACY_ITEMS' : 'LEGACY_DEVICE';
-    const result = {
+    return {
       parts,
       purchaseCost: money(parts.reduce((sum, part) => sum + part.totalPurchaseCost, 0)),
       partsQuantity: parts.reduce((sum, part) => sum + part.quantity, 0),
-      costSource: source as const,
-      purchaseCostStatus: 'RECORDED' as const,
+      costSource: source,
+      purchaseCostStatus: 'RECORDED',
       isAccountingIncomplete: false
     };
-    printTrace({ purchaseCost: result.purchaseCost, purchaseCostStatus: result.purchaseCostStatus, costSource: result.costSource });
-    return result;
   }
 
-  const purchaseCostBeforeFallback = money(parts.reduce((sum, part) => sum + part.totalPurchaseCost, 0));
-  const hasEvidence = hasPartEvidence(order);
-  if (hasEvidence) {
-    const result = {
-      parts: [], purchaseCost: 0, partsQuantity: 0, costSource: 'NONE' as const,
-      purchaseCostStatus: 'UNKNOWN_LEGACY_COST' as const, isAccountingIncomplete: true
+  if (hasPartEvidence(order)) {
+    return {
+      parts: [], purchaseCost: 0, partsQuantity: 0, costSource: 'NONE',
+      purchaseCostStatus: 'UNKNOWN_LEGACY_COST', isAccountingIncomplete: true
     };
-    printTrace({ purchaseCost: purchaseCostBeforeFallback, purchaseCostStatus: result.purchaseCostStatus, costSource: result.costSource });
-    return result;
   }
 
-  const finalResult = {
-    parts: [], purchaseCost: 0, partsQuantity: 0, costSource: 'NONE' as const,
-    purchaseCostStatus: 'NO_PARTS' as const, isAccountingIncomplete: false
+  return {
+    parts: [], purchaseCost: 0, partsQuantity: 0, costSource: 'NONE',
+    purchaseCostStatus: 'NO_PARTS', isAccountingIncomplete: false
   };
-  printTrace({ purchaseCost: finalResult.purchaseCost, purchaseCostStatus: finalResult.purchaseCostStatus, costSource: finalResult.costSource });
-  return finalResult;
 }
 
 export function calculateOrderAccountingV2(
@@ -602,7 +495,7 @@ export function calculateOrderAccountingV2(
     netProfit,
     ahmedShare,
     abdoShare,
-    amountDueFromAbdo: party === 'ABDO' ? money(purchaseCost + ahmedShare) : 0,
+    amountDueFromAbdo: party === 'ABDO' ? ahmedShare : 0,
     partsQuantity: partsAccounting.partsQuantity,
     parts: partsAccounting.parts,
     costSource: partsAccounting.costSource,
@@ -638,22 +531,6 @@ export function buildAccountingSummaryV2(input: {
   movements?: InventoryMovement[];
   usages?: RepairPartUsage[];
 }): AccountingSummaryV2 {
-  const currentMovementsAvailable = Array.isArray(input.movements);
-  const currentUsagesAvailable = Array.isArray(input.usages);
-  const recomputedAfterLoad = (!lastMovementsAvailable && currentMovementsAvailable) || (!lastUsagesAvailable && currentUsagesAvailable);
-  lastMovementsAvailable = currentMovementsAvailable;
-  lastUsagesAvailable = currentUsagesAvailable;
-
-  console.log(
-    'ACCOUNTING_SUMMARY_TRACE=' +
-    JSON.stringify({
-      ordersLength: (input.orders || []).length,
-      inventoryMovementsLength: (input.movements || []).length ?? 0,
-      repairPartUsagesLength: (input.usages || []).length ?? 0,
-      recomputedAfterLoad
-    })
-  );
-
   return calculateAccountingSummaryV2((input.orders || []).map(order =>
     calculateOrderAccountingV2(order, input.invoices || [], input.movements || [], input.usages || [])
   ));

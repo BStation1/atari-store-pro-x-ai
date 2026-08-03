@@ -96,6 +96,10 @@ export interface SelectedRepairItem {
   repairPrice: number;
   productId?: string;
   isCustom?: boolean;
+  usageId?: string;
+  salePrice?: number;
+  deviceId?: string;
+  deviceIndex?: number;
 }
 
 export interface RepairTemplateItem {
@@ -253,6 +257,10 @@ export interface DeliveryReopenLog {
 
 export interface RepairOrder {
   id: string; // e.g., ATR-10000
+  uuid?: string;
+  databaseId?: string;
+  order_number?: string;
+  orderNumber?: string;
   customerId?: string;
   customerName?: string;
   customerPhone?: string;
@@ -354,7 +362,7 @@ export interface Product {
 export interface InventoryMovement {
   id: string;
   productId: string;
-  movementType: 'SALE' | 'PURCHASE' | 'RETURN' | 'REPAIR_USAGE' | 'ADJUSTMENT' | 'DELETION_RESTORE' | 'PARTNER_WITHDRAWAL' | 'PARTNER_WITHDRAWAL_RETURN' | 'REPAIR_USAGE_RETURN';
+  movementType: 'SALE' | 'PURCHASE' | 'RETURN' | 'REPAIR_USAGE' | 'ADJUSTMENT' | 'DELETION_RESTORE' | 'PARTNER_WITHDRAWAL';
   quantityChange: number;
   previousQuantity: number;
   newQuantity: number;

@@ -23,12 +23,11 @@ import {
 } from 'lucide-react';
 import { RepairOrder, WorkOwnershipType, Invoice } from '../../types';
 import { formatDateISO, roundMoney } from '../../lib/finalReportsEngine';
-import { buildAccountingSummaryV2, calculateOrderAccountingV2 } from '../../lib/accountingEngineV2';
+import { calculateOrderAccountingV2 } from '../../lib/accountingEngineV2';
 import { useRepairPartUsages, useInvoices, useProducts, useInventoryMovements } from '../../hooks/useData';
 
 interface ProfitsSummaryProps {
   orders: RepairOrder[];
-  ordersLoading?: boolean;
   currencySymbol?: string;
 }
 
@@ -56,13 +55,12 @@ export interface AggregatedItem {
 
 export default function ProfitsSummary({
   orders,
-  ordersLoading = false,
   currencySymbol = 'ج.م.'
 }: ProfitsSummaryProps) {
-  const { partUsages, loading: partUsagesLoading } = useRepairPartUsages();
-  const { invoices, loading: invoicesLoading } = useInvoices();
+  const { partUsages } = useRepairPartUsages();
+  const { invoices } = useInvoices();
   const { products } = useProducts();
-  const { movements: rawMovements, loading: movementsLoading } = useInventoryMovements();
+  const { movements: rawMovements } = useInventoryMovements();
 
   // Current Date Helper Values
   const now = new Date();
@@ -151,11 +149,10 @@ export default function ProfitsSummary({
     calculateOrderAccountingV2(order, invoices, rawMovements || [], partUsages)
   );
 
-  const filteredEngineRows = engineRows
+  const rows = engineRows
     .filter((row) => isDateInFilterRange(row.date))
-    .filter((row) => partyFilter === 'ALL' || row.party === partyFilter);
-
-  const rows = filteredEngineRows.map((row) => ({
+    .filter((row) => partyFilter === 'ALL' || row.party === partyFilter)
+    .map((row) => ({
       id: row.orderId,
       orderNum: row.orderNumber,
       customer: row.customerName,
@@ -183,24 +180,10 @@ export default function ProfitsSummary({
       party: row.party
     }));
 
-  const filteredSummary = buildAccountingSummaryV2({
-    orders: filteredEngineRows.map((row) => row.sourceOrder),
-    invoices,
-    movements: rawMovements || [],
-    usages: partUsages
-  });
-
-  const totalWithdrawnQty = roundMoney(filteredSummary.totalPartsQuantity);
-  const totalWithdrawnCost = roundMoney(filteredSummary.totalPurchaseCost);
-
-  const totalOrdersCount = filteredSummary.totalOrders;
-  const totalInvoices = roundMoney(filteredSummary.totalRevenue);
-  const totalPartsCost = roundMoney(filteredSummary.totalPurchaseCost);
-  const totalNetProfit = roundMoney(filteredSummary.totalNetProfit);
-  const totalAhmedShare = roundMoney(filteredSummary.totalAhmedShare);
-  const totalAbdoShare = roundMoney(filteredSummary.totalAbdoShare);
-
-  const allWithdrawalTransactions: WithdrawnItemDetail[] = filteredEngineRows.flatMap((row) => {
+  // The withdrawn-goods cards and table use the exact same resolved part rows
+  // used by Accounting Engine V2. This prevents card/table disagreement.
+  const allWithdrawalTransactions: WithdrawnItemDetail[] = engineRows.flatMap((row) => {
+    if (!isDateInFilterRange(row.date)) return [];
     return row.parts.map((part) => ({
       id: part.id,
       partName: part.partName,
@@ -264,24 +247,35 @@ export default function ProfitsSummary({
   // Sort aggregated items by total quantity descending
   aggregatedItemsList.sort((a, b) => b.totalQuantity - a.totalQuantity);
 
+  // Withdrawn Inventory Aggregations
+  const totalWithdrawnQty = withdrawnItemsList.reduce((sum, i) => sum + i.quantity, 0);
+  const totalWithdrawnCost = roundMoney(withdrawnItemsList.reduce((sum, i) => sum + i.totalCost, 0));
+
+  // Overall KPI Summaries for displayed dataset
+  const totalOrdersCount = rows.length;
+  const totalInvoices = roundMoney(rows.reduce((sum, r) => sum + r.totalInvoice, 0));
+  const totalPartsCost = roundMoney(rows.reduce((sum, r) => sum + r.partsCost, 0));
+  const totalNetProfit = roundMoney(rows.reduce((sum, r) => sum + r.netProfit, 0));
+  const totalAhmedShare = roundMoney(rows.reduce((sum, r) => sum + r.ahmedShare, 0));
+  const totalAbdoShare = roundMoney(rows.reduce((sum, r) => sum + r.abdoShare, 0));
+
   // Abdo settlement is also sourced from the same engine rows.
-  const abdoOrders = engineRows
+  const abdoWorkRows = engineRows
     .filter((row) => row.party === 'ABDO' && isDateInFilterRange(row.date))
-    .map((row) => row.sourceOrder);
+    .map((row) => ({
+      totalInvoice: row.revenue,
+      partsCost: row.purchaseCost,
+      netProfit: row.netProfit,
+      ahmed25Share: row.ahmedShare,
+      abdo75Share: row.abdoShare
+    }));
 
-  const abdoSummary = buildAccountingSummaryV2({
-    orders: abdoOrders,
-    invoices,
-    movements: rawMovements || [],
-    usages: partUsages
-  });
-
-  const abdoTotalInvoices = roundMoney(abdoSummary.totalRevenue);
-  const abdoTotalPartsCost = roundMoney(abdoSummary.totalPurchaseCost);
-  const abdoTotalNetProfit = roundMoney(abdoSummary.totalNetProfit);
-  const abdoAhmed25Share = roundMoney(abdoSummary.totalAhmedShare);
-  const abdoAbdo75Profit = roundMoney(abdoSummary.totalAbdoShare);
-  const abdoTotalOwedByAbdo = roundMoney(abdoSummary.totalAmountDueFromAbdo);
+  const abdoTotalInvoices = roundMoney(abdoWorkRows.reduce((sum, r) => sum + r.totalInvoice, 0));
+  const abdoTotalPartsCost = roundMoney(abdoWorkRows.reduce((sum, r) => sum + r.partsCost, 0));
+  const abdoTotalNetProfit = roundMoney(abdoWorkRows.reduce((sum, r) => sum + r.netProfit, 0));
+  const abdoAhmed25Share = roundMoney(abdoWorkRows.reduce((sum, r) => sum + r.ahmed25Share, 0));
+  const abdoAbdo75Profit = roundMoney(abdoWorkRows.reduce((sum, r) => sum + r.abdo75Share, 0));
+  const abdoTotalOwedByAbdo = roundMoney(abdoAhmed25Share);
 
   // Print & Export Handlers
   const handlePrint = () => {
@@ -334,7 +328,7 @@ export default function ProfitsSummary({
     csvRows.push(['إجمالي تكلفة البضاعة المسحوبة', abdoTotalPartsCost]);
     csvRows.push(['نسبة أحمد (25%)', abdoAhmed25Share]);
     csvRows.push(['صافي ربح عبده (75%)', abdoAbdo75Profit]);
-    csvRows.push(['إجمالي المستحق على عبده', abdoTotalOwedByAbdo]);
+    csvRows.push(['إجمالي المستحق على عبده (نسبة أحمد 25%)', abdoTotalOwedByAbdo]);
 
     const csvContent =
       'data:text/csv;charset=utf-8,\uFEFF' +
@@ -572,7 +566,7 @@ export default function ProfitsSummary({
 
           <div className="bg-[#131625] p-2.5 rounded-xl border border-amber-500/20 text-xs text-amber-200/90 flex items-center justify-between">
             <span>
-              💡 <strong>معادلة التسوية:</strong> إجمالي المستحق على عبده = تكلفة الشراء + نصيب أحمد = <strong>{abdoTotalOwedByAbdo.toLocaleString('ar-EG')} ج.م.</strong>
+              💡 <strong>معادلة التسوية:</strong> إجمالي المستحق على عبده = نسبة أحمد 25% من صافي الربح = <strong>{abdoTotalOwedByAbdo.toLocaleString('ar-EG')} ج.م.</strong>
             </span>
           </div>
         </div>

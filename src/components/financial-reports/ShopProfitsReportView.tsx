@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { RepairOrder, WorkOwnershipType } from '../../types';
 import { roundMoney, formatDateISO } from '../../lib/finalReportsEngine';
-import { buildAccountingSummaryV2 } from '../../lib/accountingEngineV2';
+import { calculateOrderAccountingV2 } from '../../lib/accountingEngineV2';
 import { useInvoices, useInventoryMovements, useRepairPartUsages } from '../../hooks/useData';
 
 interface ShopProfitsReportViewProps {
@@ -28,21 +28,10 @@ export default function ShopProfitsReportView({
   const { movements } = useInventoryMovements();
   const { partUsages } = useRepairPartUsages();
   const [dateFrom, setDateFrom] = useState<string>('');
-
-  console.log('COMPONENT_SHOPPROFITS_BUILD_SUMMARY=' + JSON.stringify({
-    inventoryMovementsLength: movements.length,
-    repairPartUsagesLength: partUsages.length
-  }));
   const [dateTo, setDateTo] = useState<string>('');
 
-  const accountingSummary = buildAccountingSummaryV2({
-    orders,
-    invoices,
-    movements,
-    usages: partUsages
-  });
-
-  const rows = accountingSummary.rows
+  const engineRows = orders.map(order => calculateOrderAccountingV2(order, invoices, movements, partUsages));
+  const rows = engineRows
     .filter(row => row.party === 'SHOP')
     .filter(row => {
       const orderDate = formatDateISO(row.date);

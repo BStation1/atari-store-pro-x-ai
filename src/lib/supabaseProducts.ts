@@ -3,18 +3,6 @@ import { Product, InventoryMovement, WorkOwnershipType } from '../types';
 import { getAuthenticatedUserRole } from './authPermissions';
 import { db } from './db';
 
-async function awaitWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`Timeout after ${timeoutMs}ms`)), timeoutMs);
-  });
-  try {
-    return await Promise.race([promise, timeoutPromise]);
-  } finally {
-    if (timer !== null) clearTimeout(timer);
-  }
-}
-
 const PRODUCTS_STORAGE_KEY = 'atari_products';
 const CATEGORIES_STORAGE_KEY = 'atari_categories';
 
@@ -762,12 +750,9 @@ function isUuid(id?: string): boolean {
 export async function getInventoryMovements(productId?: string): Promise<InventoryMovement[]> {
   try {
     const localMovs = db.getInventoryMovements ? db.getInventoryMovements() : [];
-    console.log('FETCH_INVENTORY_MOVEMENTS_START=' + JSON.stringify({ productId, supabaseConfigured: isSupabaseConfigured }));
 
     if (productId && !isUuid(productId)) {
-      const localFiltered = localMovs.filter(m => m.productId === productId);
-      console.log('FETCH_INVENTORY_MOVEMENTS_LOCAL_ONLY=', localFiltered.map(m => ({ id: m.id, movementType: m.movementType, referenceId: m.referenceId, productId: m.productId, quantityChange: m.quantityChange, notes: m.notes, createdAt: m.createdAt })));
-      return localFiltered;
+      return localMovs.filter(m => m.productId === productId);
     }
 
     let query = supabase.from('inventory_movements').select('*').order('created_at', { ascending: false });
@@ -776,15 +761,10 @@ export async function getInventoryMovements(productId?: string): Promise<Invento
       query = query.eq('product_id', productId);
     }
 
-    const { data, error } = await awaitWithTimeout(query, 10000);
-    console.log('FETCH_INVENTORY_MOVEMENTS_RESPONSE=' + JSON.stringify({ productId, dataLength: (data || []).length, error: error?.message ?? null }));
+    const { data, error } = await query;
     if (error) {
       console.warn('⚠️ [getInventoryMovements] Supabase notice (using local movements):', error.message || error);
       return productId ? localMovs.filter(m => m.productId === productId) : localMovs;
-    }
-
-    if (productId && data) {
-      console.log('FETCH_INVENTORY_MOVEMENTS_SUPABASE_ROWS=', (data as any[]).map(row => ({ id: row.id, movement_type: row.movement_type, reference_id: row.reference_id, product_id: row.product_id, quantity_change: row.quantity_change, notes: row.notes, created_at: row.created_at })));
     }
 
     const mapped: InventoryMovement[] = (data || []).map((m: any) => ({
@@ -809,11 +789,8 @@ export async function getInventoryMovements(productId?: string): Promise<Invento
     return mapped;
   } catch (err: any) {
     console.warn('⚠️ [getInventoryMovements] Exception (using local movements):', err?.message || err);
-    console.log('FETCH_INVENTORY_MOVEMENTS_EXCEPTION=' + JSON.stringify({ productId, error: err?.message || String(err) }));
     const localMovs = db.getInventoryMovements ? db.getInventoryMovements() : [];
     return productId ? localMovs.filter(m => m.productId === productId) : localMovs;
-  } finally {
-    console.log('FETCH_INVENTORY_MOVEMENTS_FINALLY=' + JSON.stringify({ productId }));
   }
 }
 
@@ -926,13 +903,9 @@ export async function addInventoryMovementToSupabase(movement: any): Promise<boo
     }
   }
 
-  // Map movement_type to valid enum: ('SALE', 'PURCHASE', 'RETURN', 'REPAIR_USAGE', 'ADJUSTMENT', 'DELETION_RESTORE', 'PARTNER_WITHDRAWAL_RETURN', 'REPAIR_USAGE_RETURN')
+  // Map movement_type to valid enum: ('SALE', 'PURCHASE', 'RETURN', 'REPAIR_USAGE', 'ADJUSTMENT', 'DELETION_RESTORE')
   let movType = movement.movementType;
-  if (movement.usageType === 'REPAIR_USAGE_RETURN' || movement.movementType === 'REPAIR_USAGE_RETURN') {
-    movType = 'REPAIR_USAGE_RETURN';
-  } else if (movement.usageType === 'PARTNER_WITHDRAWAL_RETURN' || movement.movementType === 'PARTNER_WITHDRAWAL_RETURN') {
-    movType = 'PARTNER_WITHDRAWAL_RETURN';
-  } else if (movement.movementType === 'OUT' || movement.usageType === 'REPAIR_USAGE' || movement.movementType === 'REPAIR_USAGE') {
+  if (movement.movementType === 'OUT' || movement.usageType === 'REPAIR_USAGE') {
     movType = 'REPAIR_USAGE';
   } else if (movement.movementType === 'IN') {
     movType = 'PURCHASE';
@@ -957,15 +930,12 @@ export async function addInventoryMovementToSupabase(movement: any): Promise<boo
   }
 
   try {
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('inventory_movements')
-      .insert([row])
-      .select();
+      .insert([row]);
 
     if (error) {
       console.warn("⚠️ Notice inserting inventory_movements into Supabase:", error.message);
-    } else {
-      console.log('PERSISTED_INVENTORY_MOVEMENT_ROW=', (data || []).map((row: any) => ({ id: row.id, movement_type: row.movement_type, reference_id: row.reference_id, product_id: row.product_id, quantity_change: row.quantity_change, notes: row.notes, created_at: row.created_at })));
     }
   } catch (err) {
     console.warn("⚠️ Exception inserting inventory_movements into Supabase:", err);

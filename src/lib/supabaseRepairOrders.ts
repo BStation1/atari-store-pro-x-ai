@@ -66,8 +66,15 @@ export function mapRepairOrderToRow(order: RepairOrder): Record<string, any> {
 }
 
 export async function ensureRepairOrderUuidInSupabase(order: RepairOrder): Promise<string | null> {
-  if (isUuid(order.id)) return order.id;
-  if ((order as any).uuid && isUuid((order as any).uuid)) return (order as any).uuid;
+  if (isUuid(order.id)) {
+    order.uuid = order.id;
+    order.databaseId = order.id;
+    return order.id;
+  }
+  if ((order as any).uuid && isUuid((order as any).uuid)) {
+    order.databaseId = (order as any).uuid;
+    return (order as any).uuid;
+  }
 
   if (!isSupabaseConfigured) return null;
 
@@ -80,6 +87,8 @@ export async function ensureRepairOrderUuidInSupabase(order: RepairOrder): Promi
       .maybeSingle();
 
     if (existing?.id && isUuid(existing.id)) {
+      order.uuid = existing.id;
+      order.databaseId = existing.id;
       return existing.id;
     }
 
@@ -96,6 +105,10 @@ export async function ensureRepairOrderUuidInSupabase(order: RepairOrder): Promi
       return null;
     }
 
+    if (created?.id) {
+      order.uuid = created.id;
+      order.databaseId = created.id;
+    }
     return created?.id || null;
   } catch (err) {
     console.warn("⚠️ Exception resolving repair order UUID:", err);
@@ -164,7 +177,11 @@ export function mapRowToRepairOrder(row: Record<string, any>): RepairOrder {
     }
   }
 
-  const orderId = row.order_number || meta.id || row.id;
+  const rawRowId = row.id ? String(row.id) : undefined;
+  const isRowIdUuid = Boolean(rawRowId && (rawRowId.includes('-') || rawRowId.length >= 30));
+  const rowUuid = isRowIdUuid ? rawRowId : (meta.uuid || meta.databaseId || undefined);
+  const orderNumberStr = row.order_number || meta.orderNumber || meta.order_number || meta.id || (!isRowIdUuid ? rawRowId : undefined);
+  const orderId = orderNumberStr || meta.id || rawRowId || 'UNKNOWN';
 
   // Build devices array
   let devicesList: RepairDevice[] = Array.isArray(meta.devices) ? meta.devices : [];
@@ -193,6 +210,10 @@ export function mapRowToRepairOrder(row: Record<string, any>): RepairOrder {
 
   return {
     id: orderId,
+    uuid: rowUuid || meta.uuid || rawRowId,
+    databaseId: rowUuid || meta.databaseId || rawRowId,
+    order_number: orderNumberStr,
+    orderNumber: orderNumberStr,
     customerId: row.customer_id || meta.customerId || undefined,
     customerType: meta.customerType || (row.customer_id ? "REGISTERED" : "GUEST"),
     guestCustomerName: meta.guestCustomerName || meta.guest_name || meta.customer_name || meta.customerNameSnapshot || meta.customerName || row.guest_name || row.customer_name,

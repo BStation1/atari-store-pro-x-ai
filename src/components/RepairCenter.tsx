@@ -51,9 +51,10 @@ import ReopenOrderModal from "./ReopenOrderModal";
 import CancelWarrantyModal from "./CancelWarrantyModal";
 import { canDeliverDevice, canReopenDeliveredOrder, canCancelWarranty } from "../lib/authPermissions";
 import { db } from "../lib/data";
-import { addInventoryMovementToSupabase, ensureProductUuidInSupabase, updateProductQuantityInSupabase, getInventoryMovements } from "../lib/supabaseProducts";
+import { addInventoryMovementToSupabase, ensureProductUuidInSupabase, updateProductQuantityInSupabase } from "../lib/supabaseProducts";
 import { addRepairPartUsageToSupabase, updateRepairPartUsageInSupabase } from "../lib/supabasePartUsages";
 import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabase } from "../lib/supabaseRepairOrders";
+import { usageMatchesOrder, usageMatchesDevice, syncOrderSelectedRepairItemsFromUsages } from "../lib/accountingEngineV2";
 import { sendRepairNotificationWorkflow } from "../lib/whatsapp";
 import { 
   addTimelineEventHelper, 
@@ -121,6 +122,19 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
   const [selectedOrder, setSelectedOrder] = useState<RepairOrder | null>(
     initialOrderId ? orders.find(o => o.id === initialOrderId) || null : null
   );
+
+  useEffect(() => {
+    if (selectedOrder) {
+      const synced = syncOrderSelectedRepairItemsFromUsages(
+        selectedOrder,
+        partUsages,
+        (pu) => getUsageSellingUnitPrice(pu, products)
+      );
+      if (synced !== selectedOrder) {
+        setSelectedOrder(synced);
+      }
+    }
+  }, [partUsages, products, selectedOrder?.id]);
 
   // Sub-Navigation Tabs inside Order Workspace
   const [workspaceTab, setWorkspaceTab] = useState<"workshop" | "timeline" | "audit">("workshop");
@@ -667,19 +681,13 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       quantity: newQty
     });
 
-    const orderIdsToMatch = new Set<string>([
-      String(selectedOrder.id || ''),
-      String((selectedOrder as any).orderNumber || ''),
-      String((selectedOrder as any).uuid || '')
-    ].filter(Boolean));
-
     const allUsages = partUsages;
     const existingUsage = allUsages.find(
-      pu => (orderIdsToMatch.has(String(pu.repairOrderId)) || pu.repairOrderId === selectedOrder.id || String(pu.repairOrderId) === String(selectedOrder.id)) &&
+      pu => usageMatchesOrder(pu, selectedOrder) &&
             (pu.inventoryItemId === product.id || ((product as any).uuid && pu.inventoryItemId === (product as any).uuid)) &&
             pu.accountingStatus !== 'RETURNED' &&
             pu.accountingStatus !== 'REVERSED' &&
-            ((pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) || selectedOrder.devices.length === 1)
+            usageMatchesDevice(pu, currentDevice, deviceIdx, selectedOrder.devices.length)
     );
 
     let updatedUsageList = [...allUsages];
@@ -724,16 +732,41 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
     // Recalculate device partsCost and grand total
     const activeUsagesForDevice = updatedUsageList.filter(
-      pu => (orderIdsToMatch.has(String(pu.repairOrderId)) || pu.repairOrderId === selectedOrder.id || String(pu.repairOrderId) === String(selectedOrder.id)) &&
+      pu => usageMatchesOrder(pu, selectedOrder) &&
             pu.accountingStatus !== 'RETURNED' &&
             pu.accountingStatus !== 'REVERSED' &&
-            ((pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) || selectedOrder.devices.length === 1)
+            usageMatchesDevice(pu, currentDevice, deviceIdx, selectedOrder.devices.length)
     );
 
     const newPartsCost = activeUsagesForDevice.reduce((sum, pu) => {
       const sellP = getUsageSellingUnitPrice(pu, products);
       return sum + (pu.quantity * sellP);
     }, 0);
+
+    const itemToPut: SelectedRepairItem = {
+      id: usageRecordToSave.id,
+      usageId: usageRecordToSave.id,
+      productId: product.id,
+      name: product.nameAr || product.name,
+      quantity: usageRecordToSave.quantity,
+      costPrice: unitPurchaseCost,
+      repairPrice: unitSellingPrice,
+      salePrice: unitSellingPrice,
+      deviceId: currentDevice.id,
+      deviceIndex: deviceIdx
+    };
+
+    const existingItems = currentDevice.selectedRepairItems || [];
+    const existingItemIdx = existingItems.findIndex(
+      i => i.usageId === usageRecordToSave.id || i.id === usageRecordToSave.id || (i.productId && (i.productId === product.id || i.productId === (product as any).uuid))
+    );
+
+    let nextSelectedRepairItems: SelectedRepairItem[];
+    if (existingItemIdx >= 0) {
+      nextSelectedRepairItems = existingItems.map((item, idx) => idx === existingItemIdx ? itemToPut : item);
+    } else {
+      nextSelectedRepairItems = [...existingItems, itemToPut];
+    }
 
     const tags = currentDevice.selectedQuickFaults || (currentDevice.issue ? currentDevice.issue.split(" - ").map(s => s.trim()) : []);
     const faultsCost = currentDevice.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(tags);
@@ -742,12 +775,14 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     if (currentDevice.isPriceManuallyEdited) {
       updatedDevices[deviceIdx] = {
         ...currentDevice,
+        selectedRepairItems: nextSelectedRepairItems,
         partsCost: newPartsCost,
         priceOverrideAcknowledged: false
       };
     } else {
       updatedDevices[deviceIdx] = {
         ...currentDevice,
+        selectedRepairItems: nextSelectedRepairItems,
         partsCost: newPartsCost,
         finalRepairPrice: newAutoPrice,
         estimatedCost: newAutoPrice
@@ -801,7 +836,6 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
         const quantityPromise = updateProductQuantityInSupabase(productUuid, newQty);
         const movementPromise = addInventoryMovementToSupabase({
-          id: usageRecordToSave.id,
           productId: productUuid,
           productNameSnapshot: product.nameAr || product.name,
           movementType: 'REPAIR_USAGE',
@@ -814,8 +848,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
           referenceId: selectedOrder.id,
           repairOrderId: repairOrderUuid,
           owner: owner,
-          usageId: usageRecordToSave.id,
-          notes: `صرف قطعة غيار صيانة: ${product.nameAr || product.name} للجهاز (${getDeviceDisplayName(currentDevice)}) deviceId:${currentDevice.id || deviceIdx} usageId:${usageRecordToSave.id}`,
+          notes: `صرف قطعة غيار صيانة: ${product.nameAr || product.name} للجهاز (${getDeviceDisplayName(currentDevice)})`,
           createdAt: new Date().toISOString()
         });
 
@@ -960,16 +993,24 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
     if (currentDevice) {
       const remainingUsages = updatedUsages.filter(
-        pu => orderIdsToMatch.has(String(pu.repairOrderId)) && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
+        pu => usageMatchesOrder(pu, selectedOrder) && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
       );
       const deviceRemainingUsages = remainingUsages.filter(
-        pu => (pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || deviceIdx}`)) || selectedOrder.devices.length === 1
+        pu => usageMatchesDevice(pu, currentDevice, deviceIdx, selectedOrder.devices.length)
       );
 
       const newPartsCost = deviceRemainingUsages.reduce((sum, pu) => {
         const sellP = getUsageSellingUnitPrice(pu, products);
         return sum + (pu.quantity * sellP);
       }, 0);
+
+      const nextSelectedRepairItems = (currentDevice.selectedRepairItems || []).map(i => {
+        if (i.id === usageId || i.usageId === usageId) {
+          if (isFullRemove) return null;
+          return { ...i, quantity: newQty, repairPrice: usageSellPrice, salePrice: usageSellPrice };
+        }
+        return i;
+      }).filter(Boolean) as SelectedRepairItem[];
 
       const tags = currentDevice.selectedQuickFaults || (currentDevice.issue ? currentDevice.issue.split(" - ").map(s => s.trim()) : []);
       const faultsCost = currentDevice.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(tags);
@@ -978,12 +1019,14 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       if (currentDevice.isPriceManuallyEdited) {
         updatedDevices[deviceIdx] = {
           ...currentDevice,
+          selectedRepairItems: nextSelectedRepairItems,
           partsCost: newPartsCost,
           priceOverrideAcknowledged: false
         };
       } else {
         updatedDevices[deviceIdx] = {
           ...currentDevice,
+          selectedRepairItems: nextSelectedRepairItems,
           partsCost: newPartsCost,
           finalRepairPrice: newAutoPrice,
           estimatedCost: newAutoPrice
@@ -1016,54 +1059,12 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
         if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) owner = 'AHMED';
         else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) owner = 'ABDO';
 
-        // Try to find the original outgoing movement for this usage so the return links to the movement id
-        let originalMovementId = usage.id; // fallback (legacy behaviour)
-        try {
-          const movs = await getInventoryMovements(usage.inventoryItemId);
-          if (movs && movs.length > 0) {
-            // prefer explicit outgoing movement that carried this usageId
-            const matchedByUsage = movs.find(m => {
-              const mUsageId = (m as any).usageId || (m as any).usage_id || (m as any).usageId;
-              const notes = (m as any).notes || '';
-              const mt = String((m as any).movementType || (m as any).movement_type || '').toUpperCase();
-              const isOutgoing = mt === 'REPAIR_USAGE' || mt === 'OUT' || Number((m as any).quantityChange || (m as any).quantity_change || 0) < 0;
-              if (!isOutgoing) return false;
-              if (mUsageId && String(mUsageId) === String(usage.id)) return true;
-              if (notes && notes.includes(`usageId:${usage.id}`)) return true;
-              return false;
-            });
-
-            if (matchedByUsage && (matchedByUsage as any).id) {
-              originalMovementId = String((matchedByUsage as any).id);
-            } else {
-              // fallback: find most recent outgoing movement for same repair order & product
-              const cand = movs
-                .filter(m => {
-                  const mt = String((m as any).movementType || (m as any).movement_type || '').toUpperCase();
-                  const isOutgoing = mt === 'REPAIR_USAGE' || mt === 'OUT' || Number((m as any).quantityChange || (m as any).quantity_change || 0) < 0;
-                  const ref = (m as any).referenceId || (m as any).reference_id || '';
-                  return isOutgoing && String(ref) === String(selectedOrder.id);
-                })
-                .sort((a, b) => {
-                  const ta = new Date((a as any).createdAt || (a as any).created_at || 0).getTime();
-                  const tb = new Date((b as any).createdAt || (b as any).created_at || 0).getTime();
-                  return tb - ta;
-                })[0];
-              if (cand && (cand as any).id) originalMovementId = String((cand as any).id);
-            }
-          }
-        } catch (e) {
-          console.warn('Could not resolve original outgoing movement for usage', usage.id, e);
-        }
-
         const movementPromise = addInventoryMovementToSupabase({
           id: `MOV-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
           productId: usage.inventoryItemId,
           productNameSnapshot: usage.partName,
-          movementType: 'REPAIR_USAGE_RETURN',
-          usageId: usage.id,
-          reversalOf: originalMovementId,
-          relatedMovementId: originalMovementId,
+          movementType: 'IN',
+          usageType: 'REPAIR_USAGE_RETURN',
           quantityChange: actualReturnedQty,
           previousQuantity: product ? product.quantity : 0,
           newQuantity: product ? product.quantity + actualReturnedQty : actualReturnedQty,
@@ -1073,7 +1074,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
           referenceId: selectedOrder.id,
           repairOrderId: selectedOrder.id,
           owner: owner,
-          notes: `إرجاع قطعة غيار صيانة للمخزن: ${usage.partName} deviceId:${currentDevice?.id || deviceIdx} usageId:${usage.id}`,
+          notes: `إرجاع قطعة غيار صيانة للمخزن: ${usage.partName}`,
           createdAt: new Date().toISOString()
         });
 
@@ -1193,7 +1194,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       const totalOrderPartsCost = selectedOrder.devices.reduce((sum, d) => sum + (Number(d.partsCost) || 0), 0);
       if (totalOrderPartsCost > 0) {
         const linkedUsages = partUsages.filter(
-          pu => (pu.repairOrderId === selectedOrder.id || String(pu.repairOrderId) === String(selectedOrder.id) || String(pu.repairOrderId) === String((selectedOrder as any).orderNumber)) && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
+          pu => usageMatchesOrder(pu, selectedOrder) && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
         );
         if (linkedUsages.length === 0) {
           dialog.alert({
@@ -1712,19 +1713,12 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                 const currentDevice = selectedOrder.devices[0] || { type: 'PlayStation', model: 'PS5', issue: '' };
                 const devIdx = 0;
 
-                // Order matching set for RepairPartUsage
-                const orderIdsToMatch = new Set<string>([
-                  String(selectedOrder.id || ''),
-                  String((selectedOrder as any).orderNumber || ''),
-                  String((selectedOrder as any).uuid || '')
-                ].filter(Boolean));
-
                 // Linked part usages for current device
                 const deviceLinkedUsages = partUsages.filter(
-                  pu => (orderIdsToMatch.has(String(pu.repairOrderId)) || pu.repairOrderId === selectedOrder.id || String(pu.repairOrderId) === String(selectedOrder.id)) &&
+                  pu => usageMatchesOrder(pu, selectedOrder) &&
                         pu.accountingStatus !== 'RETURNED' &&
                         pu.accountingStatus !== 'REVERSED' &&
-                        ((pu.notes && pu.notes.includes(`deviceId:${currentDevice.id || devIdx}`)) || selectedOrder.devices.length === 1)
+                        usageMatchesDevice(pu, currentDevice, devIdx, selectedOrder.devices.length)
                 );
 
                 // Total selling price of all linked used parts

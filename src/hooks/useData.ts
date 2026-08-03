@@ -6,18 +6,6 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase, isSupabaseConfigured } from "../lib/supabaseClient";
 import { fetchOrMigrateRepairPartUsages, addRepairPartUsageToSupabase } from "../lib/supabasePartUsages";
-
-async function awaitWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`Timeout after ${timeoutMs}ms`)), timeoutMs);
-  });
-  try {
-    return await Promise.race([promise, timeoutPromise]);
-  } finally {
-    if (timer !== null) clearTimeout(timer);
-  }
-}
 import { fetchOrMigrateExpenses, addExpenseToSupabase } from "../lib/supabaseExpenses";
 import { fetchOrMigratePartnerTransactions, fetchOrMigratePartnerLedger, fetchOrMigratePartnerSettlements } from "../lib/supabasePartnerAccounting";
 import {
@@ -245,54 +233,46 @@ export function useRepairOrders() {
 
   useEffect(() => {
     let active = true;
-    setLoading(true);
-    setError(null);
 
-    const loadOrders = async () => {
-      try {
-        const res = await awaitWithTimeout(fetchOrMigrateRepairOrders(), 10000);
-        if (!active) return;
-
-        setOrders(prev => {
-          const mergedMap = new Map<string, RepairOrder>();
-          // 1. Put freshly fetched remote/backup orders
-          (res.orders || []).forEach(o => mergedMap.set(o.id, o));
-          // 2. Preserve any order currently in local memory or localStorage
-          const backupLocal = getLocalRepairOrdersBackup();
-          backupLocal.forEach(o => {
-            if (!mergedMap.has(o.id)) {
-              mergedMap.set(o.id, o);
-            }
+    fetchOrMigrateRepairOrders()
+      .then(res => {
+        if (active) {
+          setOrders(prev => {
+            const mergedMap = new Map<string, RepairOrder>();
+            // 1. Put freshly fetched remote/backup orders
+            (res.orders || []).forEach(o => mergedMap.set(o.id, o));
+            // 2. Preserve any order currently in local memory or localStorage
+            const backupLocal = getLocalRepairOrdersBackup();
+            backupLocal.forEach(o => {
+              if (!mergedMap.has(o.id)) {
+                mergedMap.set(o.id, o);
+              }
+            });
+            prev.forEach(o => {
+              if (!mergedMap.has(o.id)) {
+                mergedMap.set(o.id, o);
+              }
+            });
+            return Array.from(mergedMap.values()).sort((a, b) => {
+              return new Date(b.receivedDate || 0).getTime() - new Date(a.receivedDate || 0).getTime();
+            });
           });
-          prev.forEach(o => {
-            if (!mergedMap.has(o.id)) {
-              mergedMap.set(o.id, o);
-            }
-          });
-          return Array.from(mergedMap.values()).sort((a, b) => {
-            return new Date(b.receivedDate || 0).getTime() - new Date(a.receivedDate || 0).getTime();
-          });
-        });
-
-        if (!res.success && res.error) {
-          setError(res.error);
-        } else {
-          setError(null);
+          setLoading(false);
+          if (!res.success && res.error) {
+            setError(res.error);
+          } else {
+            setError(null);
+          }
         }
-      } catch (err: any) {
+      })
+      .catch(err => {
         if (active) {
           console.warn("⚠️ Error fetching repair orders from Supabase:", err);
           setError(err?.message || "تعذر الاتصال بـ Supabase لقراءة أوامر الصيانة");
           setOrders(getLocalRepairOrdersBackup());
-        }
-      } finally {
-        if (active) {
           setLoading(false);
         }
-      }
-    };
-
-    loadOrders();
+      });
 
     return () => {
       active = false;
@@ -475,57 +455,34 @@ export function useProducts() {
 
 export function useInventoryMovements(productId?: string) {
   const trigger = useDbTrigger(['atari_inventory_movements', 'atari_products']);
-  const [movements, setMovements] = useState<any[]>(() => db.getInventoryMovements ? db.getInventoryMovements() : []);
+  const [movements, setMovements] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const requestId = useRef(0);
 
   useEffect(() => {
-    requestId.current += 1;
-    const currentRequestId = requestId.current;
     let active = true;
     setLoading(true);
-    setError(null);
 
-    const loadMovements = async () => {
-      console.log('HOOK_INVENTORY_MOVEMENTS_FETCH_START=' + JSON.stringify({ productId }));
-      try {
-        const movs = await getInventoryMovements(productId);
-        console.log('HOOK_INVENTORY_MOVEMENTS_FETCH_SUCCESS=' + JSON.stringify({ productId, dataLength: movs?.length ?? 0 }));
-        if (active && currentRequestId === requestId.current) {
-          setMovements(movs ?? (db.getInventoryMovements ? db.getInventoryMovements() : []));
-          setError(null);
-        }
-      } catch (err: any) {
-        console.log('HOOK_INVENTORY_MOVEMENTS_FETCH_ERROR=' + JSON.stringify({ productId, error: err?.message || String(err) }));
-        if (active && currentRequestId === requestId.current) {
-          console.warn("⚠️ Error fetching inventory movements:", err);
-          setMovements(prev => prev.length > 0 ? prev : (db.getInventoryMovements ? db.getInventoryMovements() : []));
-          setError(err?.message || String(err));
-        }
-      } finally {
+    getInventoryMovements(productId)
+      .then(movs => {
         if (active) {
+          setMovements(movs);
           setLoading(false);
-          console.log('HOOK_INVENTORY_MOVEMENTS_LOADING_FALSE=' + JSON.stringify({ productId }));
         }
-      }
-    };
-
-    loadMovements();
+      })
+      .catch(err => {
+        if (active) {
+          console.warn("⚠️ Error fetching inventory movements:", err);
+          setMovements(db.getInventoryMovements ? db.getInventoryMovements() : []);
+          setLoading(false);
+        }
+      });
 
     return () => {
       active = false;
     };
   }, [trigger, productId]);
 
-  useEffect(() => {
-    console.log('HOOK_INVENTORY_MOVEMENTS_RENDER=' + JSON.stringify({
-      loading,
-      dataLength: movements.length
-    }));
-  }, [loading, movements.length]);
-
-  return { movements, loading, error };
+  return { movements, loading };
 }
 
 export function useSuppliers() {
@@ -597,34 +554,27 @@ export function useInvoices() {
 
   useEffect(() => {
     let active = true;
-    setLoading(true);
-    setError(null);
 
-    const loadInvoices = async () => {
-      try {
-        const res = await awaitWithTimeout(fetchOrMigrateInvoices(), 10000);
-        if (!active) return;
-
-        setInvoices(res.invoices);
-        if (!res.success && res.error) {
-          setError(res.error);
-        } else {
-          setError(null);
+    fetchOrMigrateInvoices()
+      .then(res => {
+        if (active) {
+          setInvoices(res.invoices);
+          setLoading(false);
+          if (!res.success && res.error) {
+            setError(res.error);
+          } else {
+            setError(null);
+          }
         }
-      } catch (err: any) {
+      })
+      .catch(err => {
         if (active) {
           console.warn("⚠️ Error fetching invoices from Supabase:", err);
           setError(err?.message || "تعذر الاتصال بـ Supabase لقراءة الفواتير");
           setInvoices(getLocalInvoicesBackup());
-        }
-      } finally {
-        if (active) {
           setLoading(false);
         }
-      }
-    };
-
-    loadInvoices();
+      });
 
     return () => {
       active = false;
@@ -655,37 +605,16 @@ export function useInvoices() {
 
 export function useExpenses() {
   const trigger = useDbTrigger(['atari_expenses']);
-  const [expenses, setExpenses] = useState<Expense[]>(db.getExpenses());
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
 
   useEffect(() => {
     let active = true;
-    setLoading(true);
-    setError(null);
-
-    const loadExpenses = async () => {
-      try {
-        const res = await fetchOrMigrateExpenses();
-        if (!active) return;
-        setExpenses(res.expenses);
-        if (!res.success && res.error) {
-          setError(res.error);
-        }
-      } catch (err: any) {
-        if (!active) return;
-        setError(err?.message || String(err));
-        setExpenses(db.getExpenses());
-      } finally {
-        if (active) setLoading(false);
-      }
-    };
-
-    loadExpenses();
-
-    return () => {
-      active = false;
-    };
+    fetchOrMigrateExpenses().then(res => {
+      if (active) setExpenses(res.expenses);
+    }).catch(() => {
+      if (active) setExpenses(db.getExpenses());
+    });
+    return () => { active = false; };
   }, [trigger]);
 
   const addExpense = (expense: Omit<Expense, "id" | "date">) => {
@@ -696,7 +625,7 @@ export function useExpenses() {
     return created;
   };
 
-  return { expenses, loading, error, addExpense };
+  return { expenses, addExpense };
 }
 
 export function useSettings() {
@@ -1244,50 +1173,16 @@ export function usePartnerTransactions() {
 export function useRepairPartUsages() {
   const trigger = useDbTrigger(['atari_repair_part_usages']);
   const [partUsages, setPartUsages] = useState<RepairPartUsage[]>(() => db.getRepairPartUsages());
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const requestId = useRef(0);
 
   useEffect(() => {
-    requestId.current += 1;
-    const currentRequestId = requestId.current;
     let active = true;
-    setLoading(true);
-    setError(null);
-
-    const loadPartUsages = async () => {
-      console.log('HOOK_REPAIR_PART_USAGES_FETCH_START=1');
-      try {
-        const res = await fetchOrMigrateRepairPartUsages();
-        console.log('HOOK_REPAIR_PART_USAGES_FETCH_SUCCESS=' + JSON.stringify({ dataLength: res.partUsages?.length ?? 0, success: res.success, error: res.error }));
-        if (active && currentRequestId === requestId.current) {
-          setPartUsages(res.partUsages ?? db.getRepairPartUsages());
-          setError(null);
-        }
-      } catch (err: any) {
-        console.log('HOOK_REPAIR_PART_USAGES_FETCH_ERROR=' + JSON.stringify({ error: err?.message || String(err) }));
-        if (active && currentRequestId === requestId.current) {
-          setPartUsages(prev => prev.length > 0 ? prev : db.getRepairPartUsages());
-          setError(err?.message || String(err));
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-          console.log('HOOK_REPAIR_PART_USAGES_LOADING_FALSE=1');
-        }
-      }
-    };
-
-    loadPartUsages();
+    fetchOrMigrateRepairPartUsages().then(res => {
+      if (active) setPartUsages(res.partUsages);
+    }).catch(() => {
+      if (active) setPartUsages(db.getRepairPartUsages());
+    });
     return () => { active = false; };
   }, [trigger]);
-
-  useEffect(() => {
-    console.log('HOOK_REPAIR_PART_USAGES_RENDER=' + JSON.stringify({
-      loading,
-      dataLength: partUsages.length
-    }));
-  }, [loading, partUsages.length]);
 
   const persistLocalUsages = (next: RepairPartUsage[]) => {
     setPartUsages(next);
