@@ -18,7 +18,7 @@ import {
   getDeviceDisplayName
 } from "../lib/customerDisplayHelper";
 import { useRepairPartUsages } from "../hooks/useData";
-import { syncOrderSelectedRepairItemsFromUsages, getActiveRepairUsagesForDevice } from "../lib/accountingEngineV2";
+import { syncOrderSelectedRepairItemsFromUsages, getActiveRepairUsagesForDevice, getActiveRepairUsagesForOrder, buildRepairPartReceiptLines } from "../lib/accountingEngineV2";
 
 interface PrintReceiptModalProps {
   isOpen: boolean;
@@ -52,6 +52,27 @@ export default function PrintReceiptModal({
   const total = invoice ? invoice.totalAmount : (syncedOrder ? syncedOrder.totalEstimatedCost : 0);
   const paid = invoice ? invoice.paidAmount : (syncedOrder ? syncedOrder.advancePayment : 0);
   const remaining = total - paid;
+
+  const matchedOrderUsages = order ? getActiveRepairUsagesForOrder(order, partUsages) : [];
+  const receiptLines = order ? buildRepairPartReceiptLines(order, partUsages) : [];
+
+  console.log("RECEIPT_RUNTIME=", {
+    orderId: order?.id,
+    partUsagesLoaded,
+    matchedOrderUsages: matchedOrderUsages.map(pu => ({
+      id: pu.id,
+      repairOrderId: pu.repairOrderId || (pu as any).repair_order_id,
+      deviceId: (pu as any).deviceId || (pu as any).device_id,
+      deviceIndex: (pu as any).deviceIndex ?? (pu as any).device_index,
+      inventoryItemId: pu.inventoryItemId,
+      partName: pu.partName,
+      quantity: pu.quantity,
+      sellingPrice: pu.sellingPrice,
+      accountingStatus: pu.accountingStatus
+    })),
+    receiptLines,
+    selectedRepairItemsSnapshot: order?.devices?.flatMap(d => d.selectedRepairItems || []) || []
+  });
 
   const handlePrint = () => {
     const printContent = printAreaRef.current?.innerHTML;

@@ -56,7 +56,7 @@ import { addRepairPartUsageToSupabase, updateRepairPartUsageInSupabase } from ".
 import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabase } from "../lib/supabaseRepairOrders";
 import { executeRemovePartUsageTransaction } from "../lib/repairPartRemovalService";
 import { executeAddPartUsageTransaction } from "../lib/repairPartAddService";
-import { usageMatchesOrder, usageMatchesDevice, syncOrderSelectedRepairItemsFromUsages, getActiveRepairUsagesForDevice } from "../lib/accountingEngineV2";
+import { usageMatchesOrder, usageMatchesDevice, syncOrderSelectedRepairItemsFromUsages, getActiveRepairUsagesForDevice, getActiveRepairUsagesForOrder } from "../lib/accountingEngineV2";
 import { sendRepairNotificationWorkflow } from "../lib/whatsapp";
 import { 
   addTimelineEventHelper, 
@@ -1380,6 +1380,37 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                       accountingStatus: 'CONSUMED',
                       createdAt: selectedOrder.createdAt || new Date().toISOString()
                     }));
+
+                const matchedOrderUsages = getActiveRepairUsagesForOrder(selectedOrder, partUsages);
+                console.log("REPAIR_UI_RUNTIME=", {
+                  orderId: selectedOrder.id,
+                  orderNumber: selectedOrder.orderNumber,
+                  partUsagesLoaded,
+                  allPartUsagesCount: partUsages.length,
+                  matchedOrderUsages: matchedOrderUsages.map(pu => ({
+                    id: pu.id,
+                    repairOrderId: pu.repairOrderId || (pu as any).repair_order_id,
+                    deviceId: (pu as any).deviceId || (pu as any).device_id,
+                    deviceIndex: (pu as any).deviceIndex ?? (pu as any).device_index,
+                    inventoryItemId: pu.inventoryItemId,
+                    partName: pu.partName,
+                    quantity: pu.quantity,
+                    sellingPrice: pu.sellingPrice,
+                    accountingStatus: pu.accountingStatus
+                  })),
+                  matchedDeviceUsages: deviceLinkedUsages.map(pu => ({
+                    id: pu.id,
+                    repairOrderId: pu.repairOrderId || (pu as any).repair_order_id,
+                    deviceId: (pu as any).deviceId || (pu as any).device_id,
+                    deviceIndex: (pu as any).deviceIndex ?? (pu as any).device_index,
+                    inventoryItemId: pu.inventoryItemId,
+                    partName: pu.partName,
+                    quantity: pu.quantity,
+                    sellingPrice: pu.sellingPrice,
+                    accountingStatus: pu.accountingStatus
+                  })),
+                  selectedRepairItemsSnapshot: currentDevice.selectedRepairItems || []
+                });
 
                 // Total selling price of all linked used parts
                 const partsTotalSelling = deviceLinkedUsages.reduce((sum, pu) => {
