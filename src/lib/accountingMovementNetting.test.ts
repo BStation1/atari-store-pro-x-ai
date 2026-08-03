@@ -54,3 +54,21 @@ const fullyReturned = resolveOrderPartsAccounting(order, [
 ], []);
 assert(fullyReturned.partsQuantity === 0, 'full return leaves no accounting parts');
 assert(fullyReturned.purchaseCostStatus === 'NO_PARTS', 'full return is reported as no parts');
+
+// Production Supabase movements only retain productId + notes. OUT and RETURN
+// notes differ, so they must net using the stable product identity.
+const productionStyleMovements = [
+  {
+    ...movement('OUT-PROD', 'UUID-HDMI', '', 'REPAIR_USAGE', -1, 100),
+    productNameSnapshot: undefined,
+    notes: 'صرف قطعة غيار صيانة: HDMI للجهاز'
+  },
+  {
+    ...movement('RETURN-PROD', 'UUID-HDMI', '', 'RETURN', 1, 100),
+    productNameSnapshot: undefined,
+    notes: 'إرجاع قطعة غيار صيانة للمخزن: HDMI'
+  }
+] as unknown as InventoryMovement[];
+const productionStyle = resolveOrderPartsAccounting(order, productionStyleMovements, []);
+assert(productionStyle.partsQuantity === 0, 'different OUT/RETURN notes net by product id');
+assert(productionStyle.purchaseCost === 0, 'returned production movement leaves zero dashboard cost');

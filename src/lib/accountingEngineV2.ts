@@ -381,7 +381,10 @@ function movementProductKey(movement: any): string {
   const name = upper(productNameFromMovement(movement));
   const sku = upper(movement.sku ?? movement.productSku ?? movement.product_sku);
   const id = upper(movement.productId ?? movement.product_id ?? movement.inventoryItemId ?? movement.inventory_item_id);
-  return name ? `NAME:${name}` : sku ? `SKU:${sku}` : `ID:${id}`;
+  // Product IDs are stable across OUT/RETURN movements, while their notes are
+  // intentionally different ("صرف..." versus "إرجاع..."). Prefer identity
+  // fields so a return always cancels the corresponding purchase cost.
+  return id ? `ID:${id}` : sku ? `SKU:${sku}` : `NAME:${name}`;
 }
 
 function netMovementParts(
@@ -404,7 +407,13 @@ function netMovementParts(
   });
 
   returns.forEach((movement: any) => {
-    const group = groups.get(movementProductKey(movement));
+    let group = groups.get(movementProductKey(movement));
+    // Legacy local records sometimes changed product IDs during UUID
+    // migration. Preserve their historical name-based matching as a fallback.
+    if (!group) {
+      const returnName = upper(productNameFromMovement(movement));
+      group = Array.from(groups.values()).find(candidate => upper(candidate.name) === returnName);
+    }
     if (!group || group.quantity <= 0) return;
     const returnedQty = movementCost(movement).quantity;
     const qtyBefore = group.quantity;
