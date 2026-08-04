@@ -1435,7 +1435,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                 const usagesFromStore = partUsagesLoaded
                   ? getActiveRepairUsagesForDevice(selectedOrder, currentDevice, devIdx, partUsages)
                   : [];
-                const deviceLinkedUsages: RepairPartUsage[] = (usagesFromStore.length > 0)
+                const deviceLinkedUsages: RepairPartUsage[] = partUsagesLoaded
                   ? usagesFromStore
                   : (currentDevice.selectedRepairItems || []).map((item, idx) => ({
                       id: item.usageId || item.id || `fallback-${idx}`,
