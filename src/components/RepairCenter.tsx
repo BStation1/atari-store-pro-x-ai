@@ -678,7 +678,9 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       if (res.success && res.updatedOrder && res.updatedProducts && res.updatedPartUsages) {
         setSelectedOrder(res.updatedOrder);
         setRepairOrderLocal(res.updatedOrder);
+        updateRepairOrder(res.updatedOrder, currentUserForAction);
         setProductLocal(res.updatedProducts.find(p => p.id === product.id) || product);
+        res.updatedProducts.forEach(p => updateProduct(p));
         persistLocalUsages(res.updatedPartUsages);
         console.log(`⏱️ [AddPart] Atomic add part transaction completed in ${(performance.now() - t0).toFixed(2)}ms`);
       } else {
@@ -703,13 +705,22 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
   const handleRemovePartUsage = async (usageId: string, deviceIdx: number, removeQty: number = 1) => {
     if (!selectedOrder) return;
-    const usage = partUsages.find(pu => pu.id === usageId);
-    if (!usage) return;
+    let usage = partUsages.find(pu => pu.id === usageId);
+    if (!usage) {
+      usage = partUsages.find(pu => pu.inventoryItemId === usageId && usageMatchesOrder(pu, selectedOrder) && pu.accountingStatus !== 'RETURNED');
+    }
 
-    if (usage.accountingStatus === 'RETURNED') return;
-    if (busyProductIds.has(usage.inventoryItemId)) return;
+    const currentDevice = selectedOrder.devices?.[deviceIdx];
+    const targetItem = currentDevice?.selectedRepairItems?.find(
+      i => i.id === usageId || i.usageId === usageId || i.productId === usageId || i.name === usageId
+    );
 
-    setBusyProductIds(prev => new Set(prev).add(usage.inventoryItemId));
+    if (usage && usage.accountingStatus === 'RETURNED') return;
+
+    const inventoryItemId = usage ? usage.inventoryItemId : (targetItem?.productId || targetItem?.id || usageId);
+    if (busyProductIds.has(inventoryItemId)) return;
+
+    setBusyProductIds(prev => new Set(prev).add(inventoryItemId));
 
     try {
       const res = await executeRemovePartUsageTransaction({
@@ -729,10 +740,12 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
         return;
       }
 
-      // UI updates ONLY AFTER all three persistence operations succeed
+      // UI updates ONLY AFTER all persistence operations succeed
       if (res.updatedProducts) {
-        const prod = res.updatedProducts.find(p => p.id === usage.inventoryItemId);
-        if (prod) setProductLocal(prod);
+        res.updatedProducts.forEach(p => {
+          setProductLocal(p);
+          updateProduct(p);
+        });
       }
       if (res.updatedPartUsages) {
         persistLocalUsages(res.updatedPartUsages);
@@ -740,6 +753,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       if (res.updatedOrder) {
         setSelectedOrder(res.updatedOrder);
         setRepairOrderLocal(res.updatedOrder);
+        updateRepairOrder(res.updatedOrder, currentUserForAction);
       }
     } catch (err: any) {
       console.error("Removal transaction exception:", err);
@@ -750,7 +764,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     } finally {
       setBusyProductIds(prev => {
         const next = new Set(prev);
-        next.delete(usage.inventoryItemId);
+        next.delete(inventoryItemId);
         return next;
       });
     }
@@ -1363,10 +1377,13 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                 const devIdx = 0;
 
                 // Linked part usages for current device (canonical usages dataset when loaded, snapshot fallback when unhydrated)
-                const deviceLinkedUsages: RepairPartUsage[] = partUsagesLoaded
+                const usagesFromStore = partUsagesLoaded
                   ? getActiveRepairUsagesForDevice(selectedOrder, currentDevice, devIdx, partUsages)
+                  : [];
+                const deviceLinkedUsages: RepairPartUsage[] = (usagesFromStore.length > 0)
+                  ? usagesFromStore
                   : (currentDevice.selectedRepairItems || []).map((item, idx) => ({
-                      id: item.id || item.usageId || `fallback-${idx}`,
+                      id: item.usageId || item.id || `fallback-${idx}`,
                       repairOrderId: selectedOrder.id,
                       inventoryItemId: item.productId || item.id || '',
                       partName: item.name,

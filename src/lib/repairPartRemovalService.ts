@@ -38,7 +38,37 @@ export async function executeRemovePartUsageTransaction(
     return { success: false, error: 'لم يتم تحديد أمر الصيانة.' };
   }
 
-  const usage = partUsages.find(pu => pu.id === usageId);
+  let usage = partUsages.find(pu => pu.id === usageId);
+  if (!usage) {
+    usage = partUsages.find(pu => pu.inventoryItemId === usageId && usageMatchesOrder(pu, selectedOrder) && pu.accountingStatus !== 'RETURNED');
+  }
+
+  const targetDevice = selectedOrder.devices?.[deviceIdx];
+
+  if (!usage && targetDevice?.selectedRepairItems) {
+    const item = targetDevice.selectedRepairItems.find(
+      i => i.id === usageId || i.usageId === usageId || i.productId === usageId || i.name === usageId
+    );
+    if (item) {
+      usage = {
+        id: item.usageId || item.id || usageId,
+        repairOrderId: selectedOrder.id,
+        inventoryItemId: item.productId || item.id || usageId,
+        partName: item.name,
+        sku: item.productId || item.id || usageId,
+        quantity: item.quantity || 1,
+        unitCost: item.costPrice || 0,
+        totalCost: (item.costPrice || 0) * (item.quantity || 1),
+        sellingPrice: item.repairPrice ?? item.salePrice ?? 0,
+        sellingTotal: (item.repairPrice ?? item.salePrice ?? 0) * (item.quantity || 1),
+        ownershipType: selectedOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED,
+        responsiblePartnerId: 'SHOP',
+        accountingStatus: 'CONSUMED',
+        createdAt: (selectedOrder as any).createdAt || new Date().toISOString()
+      };
+    }
+  }
+
   if (!usage) {
     return { success: false, error: 'لم يتم العثور على استخدام قطعة الغيار.' };
   }
@@ -119,7 +149,7 @@ export async function executeRemovePartUsageTransaction(
     };
   }
 
-  const usageOk = await updateRepairPartUsageInSupabase(usageId, usageUpdates);
+  const usageOk = await updateRepairPartUsageInSupabase(usage.id, usageUpdates);
   const usageUpdateResult = { ok: usageOk, updates: usageUpdates };
   if (!usageOk) {
     return {
@@ -150,10 +180,11 @@ export async function executeRemovePartUsageTransaction(
   }
 
   let updatedPartUsages: RepairPartUsage[] = [];
+  const targetUsageId = usage.id;
   if (isFullRemove) {
-    updatedPartUsages = partUsages.map(pu => pu.id === usageId ? { ...pu, accountingStatus: 'RETURNED' as const } : pu);
+    updatedPartUsages = partUsages.map(pu => (pu.id === targetUsageId || pu.id === usageId) ? { ...pu, accountingStatus: 'RETURNED' as const } : pu);
   } else {
-    updatedPartUsages = partUsages.map(pu => pu.id === usageId ? { ...pu, ...usageUpdates } : pu);
+    updatedPartUsages = partUsages.map(pu => (pu.id === targetUsageId || pu.id === usageId) ? { ...pu, ...usageUpdates } : pu);
   }
 
   const updatedDevices = [...selectedOrder.devices];
@@ -174,7 +205,14 @@ export async function executeRemovePartUsageTransaction(
     }, 0);
 
     const nextSelectedRepairItems = (currentDevice.selectedRepairItems || []).map(i => {
-      if (i.id === usageId || i.usageId === usageId) {
+      const isMatch = i.id === usageId ||
+                      i.usageId === usageId ||
+                      i.id === targetUsageId ||
+                      i.usageId === targetUsageId ||
+                      i.productId === usage.inventoryItemId ||
+                      i.id === usage.inventoryItemId ||
+                      i.name === usage.partName;
+      if (isMatch) {
         if (isFullRemove) return null;
         return { ...i, quantity: newQty, repairPrice: usageSellPrice, salePrice: usageSellPrice };
       }
