@@ -248,7 +248,11 @@ export async function executeAddPartUsageTransaction(
     }
 
     // Success: Update local DB collections
-    const updatedProductsList = products.map(p => p.id === product.id ? { ...p, quantity: newQty } : p);
+    const updatedProductsList = products.map(p => 
+      (p.id === product.id || (p as any).uuid === product.id || p.id === productUuid || (p as any).uuid === productUuid || (product.sku && p.sku === product.sku))
+        ? { ...p, quantity: newQty }
+        : p
+    );
     db.saveProducts(updatedProductsList);
     db.saveRepairPartUsages(updatedUsageList);
 

@@ -810,32 +810,44 @@ export async function ensureProductUuidInSupabase(product: Product): Promise<str
     }
 
     const { data: existing } = await query.maybeSingle();
-    if (existing?.id && isUuid(existing.id)) {
-      return existing.id;
+    let realUuid = existing?.id || null;
+    if (!realUuid) {
+      // Insert product if missing
+      const row = {
+        name: product.nameAr || product.name,
+        sku: product.sku || `SKU-${Date.now()}`,
+        barcode: product.barcode || null,
+        quantity: Number(product.quantity || 0),
+        cost_price: Number(product.purchasePrice || 0),
+        selling_price: Number(product.sellPrice || 0),
+      };
+
+      const { data: created, error } = await supabase
+        .from('products')
+        .insert([row])
+        .select('id')
+        .single();
+
+      if (error) {
+        console.warn("⚠️ Error creating product in Supabase:", error.message);
+        return null;
+      }
+      realUuid = created?.id || null;
     }
 
-    // Insert product if missing
-    const row = {
-      name: product.nameAr || product.name,
-      sku: product.sku || `SKU-${Date.now()}`,
-      barcode: product.barcode || null,
-      quantity: Number(product.quantity || 0),
-      cost_price: Number(product.purchasePrice || 0),
-      selling_price: Number(product.sellPrice || 0),
-    };
-
-    const { data: created, error } = await supabase
-      .from('products')
-      .insert([row])
-      .select('id')
-      .single();
-
-    if (error) {
-      console.warn("⚠️ Error creating product in Supabase:", error.message);
-      return null;
+    if (realUuid) {
+      const allProds = db.getProducts();
+      let changed = false;
+      for (let i = 0; i < allProds.length; i++) {
+        if (allProds[i].id === product.id || (product.sku && allProds[i].sku === product.sku)) {
+          (allProds[i] as any).uuid = realUuid;
+          changed = true;
+        }
+      }
+      if (changed) db.saveProducts(allProds);
     }
 
-    return created?.id || null;
+    return realUuid;
   } catch (err) {
     console.warn("⚠️ Exception resolving product UUID:", err);
     return null;
@@ -843,11 +855,33 @@ export async function ensureProductUuidInSupabase(product: Product): Promise<str
 }
 
 export async function updateProductQuantityInSupabase(productId: string, newQuantity: number): Promise<boolean> {
+  let realUuid = productId;
+  if (isSupabaseConfigured && !isUuid(realUuid)) {
+    const fetched = await ensureProductUuidInSupabase({ id: productId } as any);
+    if (fetched) realUuid = fetched;
+  }
+
   const allProds = db.getProducts();
-  const index = allProds.findIndex(p => p.id === productId || (p as any).uuid === productId);
-  if (index !== -1) {
-    allProds[index] = { ...allProds[index], quantity: newQuantity };
+  let updatedLocal = false;
+  for (let i = 0; i < allProds.length; i++) {
+    const p = allProds[i];
+    if (
+      p.id === productId || 
+      p.id === realUuid || 
+      (p as any).uuid === productId || 
+      (p as any).uuid === realUuid || 
+      (p.sku && p.sku === productId)
+    ) {
+      allProds[i] = { ...allProds[i], quantity: newQuantity, updatedAt: new Date().toISOString() };
+      updatedLocal = true;
+    }
+  }
+
+  if (updatedLocal) {
     db.saveProducts(allProds);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
+    }
   }
 
   if (!isSupabaseConfigured) {
@@ -855,12 +889,6 @@ export async function updateProductQuantityInSupabase(productId: string, newQuan
   }
 
   try {
-    let realUuid = productId;
-    if (!isUuid(realUuid)) {
-      const fetched = await ensureProductUuidInSupabase({ id: productId } as any);
-      if (fetched) realUuid = fetched;
-    }
-
     if (isUuid(realUuid)) {
       const { error } = await supabase
         .from('products')

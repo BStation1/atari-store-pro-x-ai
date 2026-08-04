@@ -102,7 +102,12 @@ export async function executeRemovePartUsageTransaction(
     };
   }
 
-  const product = products.find(p => p.id === usage.inventoryItemId);
+  const product = products.find(p => 
+    p.id === usage.inventoryItemId || 
+    (p as any).uuid === usage.inventoryItemId || 
+    (usage.sku && p.sku === usage.sku) || 
+    (usage.partName && (p.nameAr === usage.partName || p.name === usage.partName))
+  );
   const qtyToReturn = Math.min(usage.quantity, Math.max(1, removeQty === -1 ? usage.quantity : removeQty));
   const isFullRemove = usage.quantity <= qtyToReturn || removeQty === -1;
   const actualReturnedQty = isFullRemove ? usage.quantity : qtyToReturn;
@@ -138,8 +143,8 @@ export async function executeRemovePartUsageTransaction(
     createdAt: new Date().toISOString()
   };
 
-  // STEP A: Restore product stock whenever linked product exists
-  const shouldRestoreStock = !!product;
+  // STEP A: Restore product stock ONLY if this was an actual consumed part usage (not synthetic fallback)
+  const shouldRestoreStock = !isSyntheticFallbackItem && !!product;
   let stockUpdateResult: any = { ok: true };
   let stockOk = true;
 
@@ -210,7 +215,12 @@ export async function executeRemovePartUsageTransaction(
   // ALL SUCCEEDED -> NOW RECALCULATE LOCAL STATE & PERSIST ORDER
   let updatedProducts = products;
   if (shouldRestoreStock && product) {
-    updatedProducts = products.map(p => p.id === product.id ? { ...p, quantity: newProductQuantity } : p);
+    updatedProducts = products.map(p => 
+      (p.id === product.id || (p as any).uuid === product.id || p.id === usage.inventoryItemId || (p as any).uuid === usage.inventoryItemId || (product.sku && p.sku === product.sku))
+        ? { ...p, quantity: newProductQuantity }
+        : p
+    );
+    db.saveProducts(updatedProducts);
   }
 
   let updatedPartUsages: RepairPartUsage[] = [];
