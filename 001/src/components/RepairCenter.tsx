@@ -205,7 +205,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       extra: {
         reason: customReason || "مطلوب موافقة العميل على تفاصيل وتكلفة الصيانة",
         additionalCost: 0,
-        newTotal: (order.finalRepairPrice || order.totalEstimatedCost) || 0,
+        newTotal: order.finalRepairPrice ?? order.totalEstimatedCost,
         repairedItems: order.devices?.map(d => `${getDeviceDisplayName(d)}: ${d.issue || "إصلاح بنجاح"}`).join(" + "),
         warrantyInfo: order.warrantyDays ? `ضمان لمدة ${order.warrantyDays} يوم` : "حسب الشروط المدونة بالإيصال"
       }
@@ -306,7 +306,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     };
 
     const totalFinal = updatedDevices.reduce((sum, d) => {
-      return sum + ((d.finalRepairPrice || d.estimatedCost) || 0);
+      return sum + (d.finalRepairPrice ?? d.estimatedCost ?? 0);
     }, 0);
 
     const updatedOrder: RepairOrder = {
@@ -382,7 +382,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       estimatedCost: currentDevice.isPriceManuallyEdited ? (currentDevice.finalRepairPrice || 0) : (newRepairPrice + (currentDevice.suggestedRepairPrice || 0))
     };
 
-    const totalFinal = updatedDevices.reduce((sum, d) => sum + ((d.finalRepairPrice || d.estimatedCost) || 0), 0);
+    const totalFinal = updatedDevices.reduce((sum, d) => sum + (d.finalRepairPrice ?? d.estimatedCost ?? 0), 0);
 
     let updatedOrder: RepairOrder = {
       ...selectedOrder,
@@ -444,7 +444,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       estimatedCost: currentDevice.isPriceManuallyEdited ? (currentDevice.finalRepairPrice || 0) : (newRepairPrice + (currentDevice.suggestedRepairPrice || 0))
     };
 
-    const totalFinal = updatedDevices.reduce((sum, d) => sum + ((d.finalRepairPrice || d.estimatedCost) || 0), 0);
+    const totalFinal = updatedDevices.reduce((sum, d) => sum + (d.finalRepairPrice ?? d.estimatedCost ?? 0), 0);
 
     let updatedOrder: RepairOrder = {
       ...selectedOrder,
@@ -522,7 +522,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       };
     }
 
-    const totalFinal = updatedDevices.reduce((sum, d) => sum + ((d.finalRepairPrice || d.estimatedCost) || 0), 0);
+    const totalFinal = updatedDevices.reduce((sum, d) => sum + (d.finalRepairPrice ?? d.estimatedCost ?? 0), 0);
 
     let updatedOrder: RepairOrder = {
       ...selectedOrder,
@@ -553,7 +553,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     const currentDevice = updatedDevices[deviceIdx];
     if (!currentDevice) return;
 
-    const oldPrice = (currentDevice.finalRepairPrice || currentDevice.estimatedCost) || 0;
+    const oldPrice = currentDevice.finalRepairPrice ?? currentDevice.estimatedCost ?? 0;
 
     updatedDevices[deviceIdx] = {
       ...currentDevice,
@@ -563,7 +563,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       priceOverrideAcknowledged: true
     };
 
-    const totalFinal = updatedDevices.reduce((sum, d) => sum + ((d.finalRepairPrice || d.estimatedCost) || 0), 0);
+    const totalFinal = updatedDevices.reduce((sum, d) => sum + (d.finalRepairPrice ?? d.estimatedCost ?? 0), 0);
 
     let updatedOrder: RepairOrder = {
       ...selectedOrder,
@@ -607,7 +607,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       priceOverrideAcknowledged: false
     };
 
-    const totalFinal = updatedDevices.reduce((sum, d) => sum + ((d.finalRepairPrice || d.estimatedCost) || 0), 0);
+    const totalFinal = updatedDevices.reduce((sum, d) => sum + (d.finalRepairPrice ?? d.estimatedCost ?? 0), 0);
 
     const updatedOrder: RepairOrder = {
       ...selectedOrder,
@@ -1154,14 +1154,14 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                     {order.devices.map((d, i) => (
                       <div key={i} className="flex justify-between items-center text-[11px] text-gray-300">
                         <span className="font-semibold">{getDeviceDisplayName(d)}</span>
-                        <span className="text-emerald-400 font-mono font-bold">{(d.finalRepairPrice || d.estimatedCost) || 0} ج.م</span>
+                        <span className="text-emerald-400 font-mono font-bold">{d.finalRepairPrice ?? d.estimatedCost} ج.م</span>
                       </div>
                     ))}
                   </div>
 
                   <div className="flex justify-between items-center mt-3 text-[10px] text-gray-400 border-t border-[#2a2d42]/40 pt-2">
                     <span>{new Date(order.receivedDate).toLocaleDateString("ar-EG")}</span>
-                    <span className="text-indigo-300 font-bold">إجمالي: {(order.finalRepairPrice || order.totalEstimatedCost) || 0} ج.م</span>
+                    <span className="text-indigo-300 font-bold">إجمالي: {order.totalEstimatedCost} ج.م</span>
                   </div>
                 </div>
               );
@@ -2081,58 +2081,32 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
               )}
 
               {/* Order Financial & Printing actions Footer */}
-              {(() => {
-                const computedDevicesTotal = (selectedOrder.devices || []).reduce((s, d) => s + ((d.finalRepairPrice || d.estimatedCost) || 0), 0);
-                const orderFinalPrice = (selectedOrder.finalRepairPrice || selectedOrder.totalEstimatedCost) || computedDevicesTotal;
+              <div className="border-t border-[#2a2d42] pt-4 flex flex-col md:flex-row justify-between items-center gap-4 bg-gray-950/40 p-4 rounded-xl border border-dashed border-[#2a2d42]">
+                <div className="text-right">
+                  <p className="text-xs text-gray-400 font-medium">الحسابات الإجمالية للطلب:</p>
+                  <h4 className="text-lg font-bold text-white mt-1">
+                    السعر النهائي المعتمد للعميل: <span className="text-emerald-400 font-extrabold">{selectedOrder.finalRepairPrice ?? selectedOrder.totalEstimatedCost} ج.م</span>
+                  </h4>
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    المدفوع مقدماً: {selectedOrder.advancePayment} ج.م | المتبقي عند الاستلام:{" "}
+                    <span className="font-bold text-red-400">{Math.max(0, (selectedOrder.finalRepairPrice ?? selectedOrder.totalEstimatedCost) - selectedOrder.advancePayment)} ج.م</span>
+                  </p>
+                </div>
 
-                return (
-                  <div className="border-t border-[#2a2d42] pt-4 flex flex-col md:flex-row justify-between items-center gap-4 bg-gray-950/40 p-4 rounded-xl border border-dashed border-[#2a2d42]">
-                    <div className="text-right">
-                      <p className="text-xs text-gray-400 font-medium">الحسابات الإجمالية للطلب:</p>
-                      <h4 className="text-lg font-bold text-white mt-1">
-                        السعر النهائي المعتمد للعميل: <span className="text-emerald-400 font-extrabold">{orderFinalPrice.toLocaleString('ar-EG')} ج.م</span>
-                      </h4>
-                      <p className="text-[10px] text-gray-400 mt-1">
-                        المدفوع مقدماً: {selectedOrder.advancePayment.toLocaleString('ar-EG')} ج.م | المتبقي عند الاستلام:{" "}
-                        <span className="font-bold text-red-400">{Math.max(0, orderFinalPrice - selectedOrder.advancePayment).toLocaleString('ar-EG')} ج.م</span>
-                      </p>
-                    </div>
-
-                    <div className="flex gap-2 w-full md:w-auto">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const updatedDevices = (selectedOrder.devices || []).map((d, idx) => {
-                            const dUsages = getActiveRepairUsagesForDevice(selectedOrder, d, idx, partUsages);
-                            const dPartsTotal = dUsages.reduce((s, pu) => s + (pu.quantity * getUsageSellingUnitPrice(pu, products)), 0);
-                            const dFaults = d.reportedFaults || (d.issue ? d.issue.split(" - ").map(st => st.trim()) : []);
-                            const dLabor = d.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(dFaults);
-                            const dPrice = (d.finalRepairPrice || d.estimatedCost) || (dPartsTotal + dLabor);
-                            return {
-                              ...d,
-                              partsCost: dPartsTotal,
-                              finalRepairPrice: dPrice,
-                              estimatedCost: dPrice
-                            };
-                          });
-                          const orderToSave: RepairOrder = {
-                            ...selectedOrder,
-                            devices: updatedDevices,
-                            totalEstimatedCost: orderFinalPrice,
-                            finalRepairPrice: orderFinalPrice
-                          };
-                          setReceiptOrder(orderToSave);
-                          setIsReceiptOpen(true);
-                        }}
-                        className="flex-1 md:flex-initial bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer"
-                      >
-                        <FileText className="w-4 h-4" />
-                        معاينة وطباعة الفاتورة
-                      </button>
-                    </div>
-                  </div>
-                );
-              })()}
+                <div className="flex gap-2 w-full md:w-auto">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReceiptOrder(selectedOrder);
+                      setIsReceiptOpen(true);
+                    }}
+                    className="flex-1 md:flex-initial bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer"
+                  >
+                    <FileText className="w-4 h-4" />
+                    معاينة وطباعة الفاتورة
+                  </button>
+                </div>
+              </div>
             </div>
           ) : (
             <div className="bg-[#11131e] border border-[#2a2d42] rounded-2xl p-16 text-center text-gray-500 h-full flex flex-col justify-center items-center">
