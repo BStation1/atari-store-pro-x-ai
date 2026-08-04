@@ -652,9 +652,9 @@ export function calculateOrderAccountingV2(
       ahmedShare = money(netProfit * 0.25);
       abdoShare = money(netProfit * 0.75);
     } else {
-      ahmedShare = 0;
-      abdoShare = 0;
-    }
+  ahmedShare = money(netProfit * 0.5);
+  abdoShare = money(netProfit * 0.5);
+}
   }
 
   const anyOrder = order as any;
