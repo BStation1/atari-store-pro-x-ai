@@ -652,8 +652,8 @@ export function calculateOrderAccountingV2(
       ahmedShare = money(netProfit * 0.25);
       abdoShare = money(netProfit * 0.75);
     } else {
-      ahmedShare = money(netProfit * 0.5);
-      abdoShare = money(netProfit * 0.5);
+      ahmedShare = 0;
+      abdoShare = 0;
     }
   }
 
