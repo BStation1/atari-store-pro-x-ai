@@ -307,7 +307,7 @@ export default function DeliverDeviceModal({
                         <p className="text-[10px] text-gray-400 mt-0.5">العطل: {dev.issue}</p>
                       </div>
                       <span className="font-mono font-bold text-white bg-gray-950 px-2 py-1 rounded border border-[#2a2d42]">
-                        {(dev.finalRepairPrice || dev.estimatedCost || (Number(dev.partsCost || 0) + Number(dev.laborCost || 0))) || 0} ج.م
+                        {(dev.finalRepairPrice ?? dev.estimatedCost ?? (Number(dev.partsCost || 0) + Number(dev.laborCost || 0))) || 0} ج.م
                       </span>
                     </div>
                   ))}
@@ -324,7 +324,7 @@ export default function DeliverDeviceModal({
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
                   <div className="bg-gray-950 p-2 rounded-lg border border-[#2a2d42]">
                     <span className="text-[10px] text-gray-400 block">سعر الصيانة المتفق عليه</span>
-                    <span className="font-bold text-white text-sm mt-0.5 block">{(order.finalRepairPrice || order.totalEstimatedCost || totalCost)} ج.م</span>
+                    <span className="font-bold text-white text-sm mt-0.5 block">{order.finalRepairPrice ?? totalCost} ج.م</span>
                   </div>
 
                   <div className="bg-gray-950 p-2 rounded-lg border border-[#2a2d42]">
