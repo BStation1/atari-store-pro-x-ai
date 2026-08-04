@@ -329,7 +329,7 @@ export default function PrintReceiptModal({
                           )}
                         </td>
                         <td className="py-1 text-center font-bold">١</td>
-                        <td className="py-1 text-left font-bold">{(dev.finalRepairPrice ?? dev.estimatedCost) || 0} ج.م</td>
+                        <td className="py-1 text-left font-bold">{(dev.finalRepairPrice || dev.estimatedCost) || 0} ج.م</td>
                       </tr>
                     );
                   })}
@@ -356,7 +356,7 @@ export default function PrintReceiptModal({
               )}
               <div className="flex justify-between font-bold text-sm">
                 <span>سعر الصيانة المتفق عليه:</span>
-                <span>{order?.finalRepairPrice ?? total} ج.م</span>
+                <span>{(order?.finalRepairPrice || order?.totalEstimatedCost) || total} ج.م</span>
               </div>
               <div className="flex justify-between text-green-700 font-medium">
                 <span>المدفوع مقدمًا / نقداً:</span>
