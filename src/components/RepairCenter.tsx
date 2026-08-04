@@ -1432,10 +1432,11 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                 const devIdx = 0;
 
                 // Linked part usages for current device (canonical usages dataset when loaded, snapshot fallback when unhydrated)
+                const hasUsagesForOrder = partUsagesLoaded && partUsages.some(pu => usageMatchesOrder(pu, selectedOrder));
                 const usagesFromStore = partUsagesLoaded
                   ? getActiveRepairUsagesForDevice(selectedOrder, currentDevice, devIdx, partUsages)
                   : [];
-                const deviceLinkedUsages: RepairPartUsage[] = partUsagesLoaded
+                const deviceLinkedUsages: RepairPartUsage[] = (partUsagesLoaded && (hasUsagesForOrder || usagesFromStore.length > 0))
                   ? usagesFromStore
                   : (currentDevice.selectedRepairItems || []).map((item, idx) => ({
                       id: item.usageId || item.id || `fallback-${idx}`,

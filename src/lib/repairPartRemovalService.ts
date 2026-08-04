@@ -1,6 +1,6 @@
 import { Product, RepairOrder, RepairPartUsage, WorkOwnershipType, SelectedRepairItem } from '../types';
 import { updateProductQuantityInSupabase, addInventoryMovementToSupabase } from './supabaseProducts';
-import { updateRepairPartUsageInSupabase } from './supabasePartUsages';
+import { updateRepairPartUsageInSupabase, addRepairPartUsageToSupabase } from './supabasePartUsages';
 import { updateRepairOrderInSupabase } from './supabaseRepairOrders';
 import { calculateSuggestedPriceForFaults, getUsageSellingUnitPrice } from './repairOrderCalculations';
 import { usageMatchesDevice, usageMatchesOrder } from './accountingEngineV2';
@@ -59,14 +59,16 @@ export async function executeRemovePartUsageTransaction(
   }
 
   const targetDevice = selectedOrder.devices?.[deviceIdx];
+  let isSyntheticFallbackItem = false;
 
   if (!usage && targetDevice?.selectedRepairItems) {
     const item = targetDevice.selectedRepairItems.find(
       i => i.id === usageId || i.usageId === usageId || i.productId === usageId || i.name === usageId
     );
     if (item) {
+      isSyntheticFallbackItem = true;
       usage = {
-        id: item.usageId || item.id || usageId,
+        id: item.usageId || item.id || `usage-fallback-${Date.now()}`,
         repairOrderId: selectedOrder.id,
         inventoryItemId: item.productId || item.id || usageId,
         partName: item.name,
@@ -136,10 +138,12 @@ export async function executeRemovePartUsageTransaction(
     createdAt: new Date().toISOString()
   };
 
-  // STEP A: Restore product stock
+  // STEP A: Restore product stock ONLY if this was an actual consumed part usage (not synthetic fallback)
+  const shouldRestoreStock = !isSyntheticFallbackItem && !!product;
   let stockUpdateResult: any = { ok: true };
   let stockOk = true;
-  if (product) {
+
+  if (shouldRestoreStock && product) {
     stockOk = await updateProductQuantityInSupabase(product.id, newProductQuantity);
     stockUpdateResult = { ok: stockOk, newQuantity: newProductQuantity };
     if (!stockOk) {
@@ -164,7 +168,19 @@ export async function executeRemovePartUsageTransaction(
     };
   }
 
-  const usageOk = await updateRepairPartUsageInSupabase(usage.id, usageUpdates);
+  let usageOk = true;
+  if (isSyntheticFallbackItem) {
+    const syntheticReturnedUsage: RepairPartUsage = {
+      ...usage,
+      accountingStatus: 'RETURNED'
+    };
+    await addRepairPartUsageToSupabase(syntheticReturnedUsage).catch(err => {
+      console.warn("Notice saving synthetic returned usage to Supabase:", err);
+    });
+  } else {
+    usageOk = await updateRepairPartUsageInSupabase(usage.id, usageUpdates);
+  }
+
   const usageUpdateResult = { ok: usageOk, updates: usageUpdates };
   if (!usageOk) {
     return {
@@ -175,28 +191,40 @@ export async function executeRemovePartUsageTransaction(
     };
   }
 
-  // STEP C: Insert linked REPAIR_USAGE_RETURN movement
-  const movementOk = await addInventoryMovementToSupabase(returnMovementPayload);
-  const movementInsertResult = { ok: movementOk, movement: returnMovementPayload };
-  if (!movementOk) {
-    return {
-      success: false,
-      error: 'فشل تسجيل حركة إرجاع المخزون REPAIR_USAGE_RETURN في Supabase.',
-      stockUpdateResult,
-      usageUpdateResult,
-      movementInsertResult
-    };
+  // STEP C: Insert linked REPAIR_USAGE_RETURN movement ONLY if stock was restored
+  let movementInsertResult: any = { ok: true };
+  if (shouldRestoreStock) {
+    const movementOk = await addInventoryMovementToSupabase(returnMovementPayload);
+    movementInsertResult = { ok: movementOk, movement: returnMovementPayload };
+    if (!movementOk) {
+      return {
+        success: false,
+        error: 'فشل تسجيل حركة إرجاع المخزون REPAIR_USAGE_RETURN في Supabase.',
+        stockUpdateResult,
+        usageUpdateResult,
+        movementInsertResult
+      };
+    }
   }
 
-  // ALL THREE SUCCEEDED -> NOW RECALCULATE LOCAL STATE & PERSIST ORDER
+  // ALL SUCCEEDED -> NOW RECALCULATE LOCAL STATE & PERSIST ORDER
   let updatedProducts = products;
-  if (product) {
+  if (shouldRestoreStock && product) {
     updatedProducts = products.map(p => p.id === product.id ? { ...p, quantity: newProductQuantity } : p);
   }
 
   let updatedPartUsages: RepairPartUsage[] = [];
   const targetUsageId = usage.id;
-  if (isFullRemove) {
+  if (isSyntheticFallbackItem) {
+    const syntheticReturnedUsage: RepairPartUsage = {
+      ...usage,
+      accountingStatus: 'RETURNED'
+    };
+    const exists = partUsages.some(pu => pu.id === syntheticReturnedUsage.id);
+    updatedPartUsages = exists
+      ? partUsages.map(pu => pu.id === syntheticReturnedUsage.id ? syntheticReturnedUsage : pu)
+      : [...partUsages, syntheticReturnedUsage];
+  } else if (isFullRemove) {
     updatedPartUsages = partUsages.map(pu => (pu.id === targetUsageId || pu.id === usageId) ? { ...pu, accountingStatus: 'RETURNED' as const } : pu);
   } else {
     updatedPartUsages = partUsages.map(pu => (pu.id === targetUsageId || pu.id === usageId) ? { ...pu, ...usageUpdates } : pu);
