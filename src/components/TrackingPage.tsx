@@ -460,7 +460,7 @@ export default function TrackingPage({ initialQuery }: TrackingPageProps) {
               <div className="bg-gray-950/80 p-3.5 rounded-2xl border border-[#2a2d42]">
                 <span className="text-[10px] text-gray-400 block">سعر الصيانة المتفق عليه</span>
                 <span className="text-base font-bold text-white mt-0.5 block">
-                  {(searchedOrder.finalRepairPrice || searchedOrder.totalEstimatedCost) || 0} ج.م
+                  {searchedOrder.finalRepairPrice ?? searchedOrder.totalEstimatedCost} ج.م
                 </span>
               </div>
               <div className="bg-gray-950/80 p-3.5 rounded-2xl border border-[#2a2d42]">
@@ -472,7 +472,7 @@ export default function TrackingPage({ initialQuery }: TrackingPageProps) {
               <div className="bg-gray-950/80 p-3.5 rounded-2xl border border-[#2a2d42]">
                 <span className="text-[10px] text-gray-400 block">المتبقي عند الاستلام النهائي</span>
                 <span className="text-base font-bold text-emerald-400 mt-0.5 block">
-                  {Math.max(0, ((searchedOrder.finalRepairPrice || searchedOrder.totalEstimatedCost) || 0) - searchedOrder.advancePayment)} ج.م
+                  {Math.max(0, (searchedOrder.finalRepairPrice ?? searchedOrder.totalEstimatedCost) - searchedOrder.advancePayment)} ج.م
                 </span>
               </div>
             </div>
@@ -498,7 +498,7 @@ export default function TrackingPage({ initialQuery }: TrackingPageProps) {
                       </h5>
                     </div>
                     <span className="text-xs font-bold text-emerald-400 bg-emerald-950/40 border border-emerald-500/20 px-3 py-1 rounded-xl">
-                      {(device.finalRepairPrice || device.estimatedCost) || 0} ج.م
+                      {device.finalRepairPrice ?? device.estimatedCost} ج.م
                     </span>
                   </div>
 
