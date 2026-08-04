@@ -706,8 +706,11 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       return;
     }
 
-    const product = products.find(p => p.id === productId);
-    if (!product) return;
+    const product = products.find(p => p.id === productId || (p as any).uuid === productId || p.sku === productId);
+    if (!product) {
+      dialog.alert({ message: "لم يتم العثور على هذا الصنف في القائمة!", variant: "error" });
+      return;
+    }
 
     const qty = Math.max(1, Math.floor(qtyToAdd));
     if (product.quantity < qty) {

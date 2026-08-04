@@ -68,7 +68,12 @@ export async function executeAddPartUsageTransaction(
     // Check existing active usage for same product on this order & device
     const allUsages = [...partUsages];
     const existingUsage = allUsages.find(
-      pu => pu.inventoryItemId === product.id &&
+      pu => (
+              pu.inventoryItemId === product.id ||
+              pu.inventoryItemId === productUuid ||
+              ((product as any).uuid && pu.inventoryItemId === (product as any).uuid) ||
+              (product.sku && pu.sku === product.sku)
+            ) &&
             pu.accountingStatus !== 'RETURNED' &&
             pu.accountingStatus !== 'REVERSED' &&
             usageMatchesOrder(pu, selectedOrder) &&
@@ -259,6 +264,12 @@ export async function executeAddPartUsageTransaction(
     const allOrders = db.getRepairOrders();
     const updatedOrdersList = allOrders.map(o => o.id === updatedOrder.id || o.uuid === updatedOrder.uuid ? updatedOrder : o);
     db.saveRepairOrders(updatedOrdersList);
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));
+      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_orders' } }));
+    }
 
     return {
       success: true,

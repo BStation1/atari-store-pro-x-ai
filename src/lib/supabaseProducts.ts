@@ -794,29 +794,55 @@ export async function getInventoryMovements(productId?: string): Promise<Invento
   }
 }
 
-export async function ensureProductUuidInSupabase(product: Product): Promise<string | null> {
-  if (isUuid(product.id)) return product.id;
+export async function ensureProductUuidInSupabase(productOrId: Product | Partial<Product> | string): Promise<string | null> {
+  if (!productOrId) return null;
+
+  let product: Partial<Product> | undefined;
+  const allLocal = db.getProducts();
+
+  if (typeof productOrId === 'string') {
+    if (isUuid(productOrId)) return productOrId;
+    product = allLocal.find(p => p.id === productOrId || (p as any).uuid === productOrId || p.sku === productOrId);
+  } else {
+    product = productOrId;
+  }
+
+  if (product && product.id && isUuid(product.id)) return product.id;
+  if (product && (product as any).uuid && isUuid((product as any).uuid)) return (product as any).uuid;
+
+  // Enrich partial product from local DB if missing name or sku
+  if (product && product.id && (!product.sku || (!product.name && !product.nameAr))) {
+    const full = allLocal.find(p => p.id === product!.id || (p as any).uuid === product!.id || p.sku === product!.id);
+    if (full) product = { ...full, ...product };
+  }
+
   if (!isSupabaseConfigured) return null;
 
   try {
-    // Search by sku or barcode or name
+    const targetName = product?.nameAr || product?.name;
+    const targetSku = product?.sku;
+    const targetBarcode = product?.barcode;
+
     let query = supabase.from('products').select('id, quantity');
-    if (product.sku) {
-      query = query.eq('sku', product.sku);
-    } else if (product.barcode) {
-      query = query.eq('barcode', product.barcode);
+    if (targetSku) {
+      query = query.eq('sku', targetSku);
+    } else if (targetBarcode) {
+      query = query.eq('barcode', targetBarcode);
+    } else if (targetName) {
+      query = query.eq('name', targetName);
     } else {
-      query = query.eq('name', product.nameAr || product.name);
+      return null;
     }
 
     const { data: existing } = await query.maybeSingle();
     let realUuid = existing?.id || null;
-    if (!realUuid) {
+
+    if (!realUuid && product) {
       // Insert product if missing
       const row = {
-        name: product.nameAr || product.name,
-        sku: product.sku || `SKU-${Date.now()}`,
-        barcode: product.barcode || null,
+        name: targetName || 'قطعة غيار',
+        sku: targetSku || `SKU-${Date.now()}`,
+        barcode: targetBarcode || null,
         quantity: Number(product.quantity || 0),
         cost_price: Number(product.purchasePrice || 0),
         selling_price: Number(product.sellPrice || 0),
@@ -839,7 +865,11 @@ export async function ensureProductUuidInSupabase(product: Product): Promise<str
       const allProds = db.getProducts();
       let changed = false;
       for (let i = 0; i < allProds.length; i++) {
-        if (allProds[i].id === product.id || (product.sku && allProds[i].sku === product.sku)) {
+        if (
+          allProds[i].id === product?.id ||
+          (targetSku && allProds[i].sku === targetSku) ||
+          (targetName && (allProds[i].name === targetName || allProds[i].nameAr === targetName))
+        ) {
           (allProds[i] as any).uuid = realUuid;
           changed = true;
         }
@@ -855,13 +885,19 @@ export async function ensureProductUuidInSupabase(product: Product): Promise<str
 }
 
 export async function updateProductQuantityInSupabase(productId: string, newQuantity: number): Promise<boolean> {
-  let realUuid = productId;
-  if (isSupabaseConfigured && !isUuid(realUuid)) {
-    const fetched = await ensureProductUuidInSupabase({ id: productId } as any);
-    if (fetched) realUuid = fetched;
+  const allProds = db.getProducts();
+  const fullProd = allProds.find(p => 
+    p.id === productId || 
+    (p as any).uuid === productId || 
+    p.sku === productId
+  );
+
+  let realUuid: string | null = isUuid(productId) ? productId : (fullProd ? ((fullProd as any).uuid || null) : null);
+
+  if (isSupabaseConfigured && !realUuid) {
+    realUuid = await ensureProductUuidInSupabase(fullProd || productId);
   }
 
-  const allProds = db.getProducts();
   let updatedLocal = false;
   for (let i = 0; i < allProds.length; i++) {
     const p = allProds[i];
@@ -870,9 +906,11 @@ export async function updateProductQuantityInSupabase(productId: string, newQuan
       p.id === realUuid || 
       (p as any).uuid === productId || 
       (p as any).uuid === realUuid || 
-      (p.sku && p.sku === productId)
+      (p.sku && p.sku === productId) ||
+      (fullProd && (p.id === fullProd.id || (p.sku && p.sku === fullProd.sku)))
     ) {
       allProds[i] = { ...allProds[i], quantity: newQuantity, updatedAt: new Date().toISOString() };
+      if (realUuid) (allProds[i] as any).uuid = realUuid;
       updatedLocal = true;
     }
   }
@@ -900,6 +938,19 @@ export async function updateProductQuantityInSupabase(productId: string, newQuan
 
       if (error) {
         console.warn("⚠️ Notice updating product quantity in Supabase:", error.message);
+      }
+    } else if (fullProd) {
+      const query = supabase
+        .from('products')
+        .update({
+          quantity: newQuantity,
+          updated_at: new Date().toISOString()
+        });
+
+      if (fullProd.sku) {
+        await query.eq('sku', fullProd.sku);
+      } else if (fullProd.nameAr || fullProd.name) {
+        await query.eq('name', fullProd.nameAr || fullProd.name);
       }
     }
     return true;

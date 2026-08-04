@@ -314,6 +314,12 @@ export async function executeRemovePartUsageTransaction(
     db.getRepairOrders().map(o => o.id === updatedOrder.id ? updatedOrder : o)
   );
 
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));
+    window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_orders' } }));
+  }
+
   return {
     success: true,
     updatedOrder,
