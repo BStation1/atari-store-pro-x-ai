@@ -65,30 +65,6 @@ export async function executeRemovePartUsageTransaction(
       i => i.id === usageId || i.usageId === usageId || i.productId === usageId || i.name === usageId
     );
     if (item) {
-      // Safety check: verify if this item was already marked RETURNED in partUsages
-      const alreadyReturnedInUsages = partUsages.find(
-        pu => (pu.id === item.usageId || pu.id === item.id || pu.inventoryItemId === item.productId || pu.inventoryItemId === item.id) &&
-              usageMatchesOrder(pu, selectedOrder) &&
-              pu.accountingStatus === 'RETURNED'
-      );
-      if (alreadyReturnedInUsages) {
-        // Already returned! Clean selectedRepairItems on order and return success without touching stock
-        const nextSelectedRepairItems = (targetDevice.selectedRepairItems || []).filter(
-          i => i.id !== item.id && i.usageId !== item.id && i.productId !== item.id && i.name !== item.name
-        );
-        const updatedDevices = [...selectedOrder.devices];
-        updatedDevices[deviceIdx] = { ...targetDevice, selectedRepairItems: nextSelectedRepairItems };
-        const updatedOrder = { ...selectedOrder, devices: updatedDevices };
-        return {
-          success: true,
-          updatedOrder,
-          updatedProducts: products,
-          updatedPartUsages: partUsages,
-          returnedQty: 0,
-          isFullRemove: true
-        };
-      }
-
       usage = {
         id: item.usageId || item.id || usageId,
         repairOrderId: selectedOrder.id,
