@@ -1354,18 +1354,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                     طباعة الإيصال
                   </button>
 
-                  {/* Delete Button */}
-                  {(!currentLoggedUser || currentLoggedUser?.role === "admin" || currentLoggedUser?.roleId === "OWNER" || currentLoggedUser?.role === "OWNER" || currentLoggedUser?.email === "elbannafc@gmail.com" || currentLoggedUser?.permissions?.includes("all")) && selectedOrder.status !== RepairStatus.Delivered && selectedOrder.deliveryStatus !== "DELIVERED" && (
-                    <button
-                      type="button"
-                      onClick={(e) => handleDeleteOrder(selectedOrder.id, e)}
-                      className="bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs py-2 px-3 rounded-xl border border-red-500/20 flex items-center gap-1.5 font-bold cursor-pointer transition-colors"
-                      title="حذف الأوردر نهائياً قبل التسليم مع إرجاع قطع الغيار للمخزن وإلغاء المبيعات وحسابات الشركاء"
-                    >
-                      <Trash2 className="w-4 h-4 text-red-400" />
-                      حذف الأمر قبل التسليم
-                    </button>
-                  )}
+
                 </div>
               </div>
 
