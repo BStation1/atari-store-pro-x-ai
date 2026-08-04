@@ -48,23 +48,10 @@ export async function fetchOrMigrateRepairPartUsages(): Promise<{
       notes: r.notes
     }));
 
-    const localById = new Map(localUsages.map(u => [u.id, u]));
     const mergedMap = new Map<string, RepairPartUsage>();
-    remoteUsages.forEach(remote => {
-      const local = localById.get(remote.id);
-      const localTerminal = local?.accountingStatus === 'RETURNED' || local?.accountingStatus === 'REVERSED';
-      mergedMap.set(remote.id, {
-        ...remote,
-        sku: remote.sku || local?.sku || '',
-        notes: remote.notes || local?.notes,
-        accountingStatus: localTerminal ? local.accountingStatus : remote.accountingStatus
-      });
-    });
+    remoteUsages.forEach(u => mergedMap.set(u.id, u));
     localUsages.forEach(u => {
-      // A UUID that disappeared from a successful remote fetch was deleted
-      // intentionally (RETURNED/REVERSED cleanup). Do not resurrect it from a
-      // stale browser cache. Only legacy local-only IDs are retained.
-      if (!mergedMap.has(u.id) && !isUuid(u.id)) {
+      if (!mergedMap.has(u.id)) {
         mergedMap.set(u.id, u);
       }
     });
@@ -84,109 +71,6 @@ export async function fetchOrMigrateRepairPartUsages(): Promise<{
 export function isUuid(id?: string): boolean {
   if (!id || typeof id !== 'string') return false;
   return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(id);
-}
-
-/**
- * Fetch only the usages belonging to one repair order. Interactive add/remove
- * actions must not wait for the full historical usages table to download.
- */
-export async function fetchRepairPartUsagesForOrderId(
-  repairOrderId: string
-): Promise<{ success: boolean; partUsages: RepairPartUsage[]; error?: string }> {
-  const localMatches = db.getRepairPartUsages().filter(usage => usage.repairOrderId === repairOrderId);
-
-  if (!isSupabaseConfigured || !isUuid(repairOrderId)) {
-    return { success: true, partUsages: localMatches };
-  }
-
-  try {
-    const { data, error } = await supabase
-      .from('repair_part_usages')
-      .select('*')
-      .eq('repair_order_id', repairOrderId)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      return { success: false, error: error.message, partUsages: localMatches };
-    }
-
-    const partUsages: RepairPartUsage[] = (data || []).map((r: any) => ({
-      id: String(r.id),
-      repairOrderId: String(r.repair_order_id || repairOrderId),
-      inventoryItemId: String(r.inventory_item_id || ''),
-      partName: String(r.part_name_snapshot || r.part_name || ''),
-      sku: String(r.sku || ''),
-      quantity: Number(r.quantity || 0),
-      unitCost: Number(r.cost_price_snapshot ?? r.unit_cost ?? 0),
-      totalCost: Number(r.total_cost ?? 0),
-      sellingPrice: Number(r.selling_price_snapshot ?? r.selling_unit_price_snapshot ?? 0),
-      sellingTotal: Number(r.selling_total ?? (Number(r.quantity || 0) * Number(r.selling_price_snapshot || 0))),
-      ownershipType: (r.ownership_type || 'CUSTOMER_SHARED') as any,
-      responsiblePartnerId: String(r.responsible_partner_id || 'SHOP'),
-      accountingStatus: (r.accounting_status || 'CONSUMED') as any,
-      createdAt: r.created_at || new Date().toISOString(),
-      employeeName: r.employee_name,
-      warehouse: r.warehouse,
-      notes: r.notes
-    }));
-
-    return { success: true, partUsages };
-  } catch (err: any) {
-    return { success: false, error: err?.message, partUsages: localMatches };
-  }
-}
-
-function isMissingColumnError(error: any): boolean {
-  return error?.code === 'PGRST204' || /column .*schema cache|could not find .* column/i.test(String(error?.message || ''));
-}
-
-async function resolveRemoteUsageId(id: string, usage?: RepairPartUsage): Promise<string | null> {
-  if (isUuid(id)) return id;
-  if (!usage) return null;
-
-  let orderUuid = isUuid(usage.repairOrderId) ? usage.repairOrderId : null;
-  if (!orderUuid && usage.repairOrderId) {
-    const { data: order } = await supabase
-      .from('repair_orders')
-      .select('id')
-      .eq('order_number', usage.repairOrderId)
-      .limit(1)
-      .maybeSingle();
-    if (order?.id && isUuid(String(order.id))) orderUuid = String(order.id);
-  }
-  if (!orderUuid) return null;
-
-  let productUuid = isUuid(usage.inventoryItemId) ? usage.inventoryItemId : null;
-  if (!productUuid && usage.sku) {
-    const { data: product } = await supabase
-      .from('products')
-      .select('id')
-      .eq('sku', usage.sku)
-      .limit(1)
-      .maybeSingle();
-    if (product?.id && isUuid(String(product.id))) productUuid = String(product.id);
-  }
-  if (!productUuid && usage.partName) {
-    const { data: product } = await supabase
-      .from('products')
-      .select('id')
-      .eq('name', usage.partName)
-      .limit(1)
-      .maybeSingle();
-    if (product?.id && isUuid(String(product.id))) productUuid = String(product.id);
-  }
-  if (!productUuid) return null;
-
-  const { data: remoteUsage } = await supabase
-    .from('repair_part_usages')
-    .select('id')
-    .eq('repair_order_id', orderUuid)
-    .eq('inventory_item_id', productUuid)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  return remoteUsage?.id && isUuid(String(remoteUsage.id)) ? String(remoteUsage.id) : null;
 }
 
 export async function addRepairPartUsageToSupabase(
@@ -269,40 +153,15 @@ export async function addRepairPartUsageToSupabase(
   }
 
   try {
-    let { data: insertedRow, error } = await supabase
+    const { data: insertedRow, error } = await supabase
       .from('repair_part_usages')
       .insert([row])
       .select()
       .single();
 
-    // Older production databases only have the original compact table shape.
-    // Keep the app operational until the additive schema migration is applied.
-    if (error && isMissingColumnError(error)) {
-      const legacyRow = {
-        repair_order_id: row.repair_order_id,
-        inventory_item_id: row.inventory_item_id,
-        part_name_snapshot: row.part_name_snapshot,
-        quantity: row.quantity,
-        cost_price_snapshot: row.cost_price_snapshot,
-        selling_price_snapshot: row.selling_price_snapshot,
-        stock_ownership_snapshot: row.stock_ownership_snapshot,
-        created_at: row.created_at
-      };
-      const retry = await supabase
-        .from('repair_part_usages')
-        .insert([legacyRow])
-        .select()
-        .single();
-      insertedRow = retry.data;
-      error = retry.error;
-    }
-
     if (error) {
       console.warn("⚠️ Notice inserting repair_part_usages into Supabase:", error.message);
-      throw new Error(`تعذر إنشاء سجل قطعة الغيار: ${error.message}`);
     }
-
-    if (!insertedRow?.id) throw new Error('لم تُرجع قاعدة البيانات معرّف سجل قطعة الغيار');
 
     return db.addRepairPartUsage({
       ...partUsage,
@@ -311,63 +170,36 @@ export async function addRepairPartUsageToSupabase(
     } as any);
   } catch (err) {
     console.warn("⚠️ Exception inserting repair_part_usages into Supabase:", err);
-    throw err;
+    return db.addRepairPartUsage(partUsage);
   }
 }
 
-export async function updateRepairPartUsageInSupabase(
-  id: string,
-  updates: Partial<RepairPartUsage>,
-  usageSnapshot?: RepairPartUsage
-): Promise<boolean> {
-  if (isSupabaseConfigured) {
-    try {
-      const remoteUsageId = await resolveRemoteUsageId(id, usageSnapshot);
-      if (!remoteUsageId) {
-        if (isUuid(id)) {
-          console.warn('⚠️ Remote repair_part_usage UUID no longer exists:', id);
-          return false;
-        }
-        // Historical local-only usages predate reliable Supabase persistence.
-        // Their stock and movement operations still persist remotely; keep the
-        // usage snapshot editable locally instead of making the UI unusable.
-        console.warn('⚠️ Updating historical local-only repair usage:', id);
-      } else {
-        const isTerminal = updates.accountingStatus === 'RETURNED' || updates.accountingStatus === 'REVERSED';
-        const legacySafeUpdates: any = {};
-        if (updates.quantity !== undefined) legacySafeUpdates.quantity = updates.quantity;
-        if (updates.unitCost !== undefined) legacySafeUpdates.cost_price_snapshot = updates.unitCost;
-        if (updates.sellingPrice !== undefined) legacySafeUpdates.selling_price_snapshot = updates.sellingPrice;
-
-        // The production table may still use the original schema. A terminal
-        // usage is removed after its compensating inventory movement succeeds;
-        // partial changes only touch columns present in every schema version.
-        const operation = isTerminal
-          ? supabase.from('repair_part_usages').delete()
-          : supabase.from('repair_part_usages').update(legacySafeUpdates);
-        const query = operation.eq('id', remoteUsageId);
-        if (!isTerminal && Object.keys(legacySafeUpdates).length === 0) return false;
-        const { data, error } = await query.select('id');
-        if (error) {
-          console.warn("⚠️ Notice updating repair_part_usages in Supabase:", error.message);
-          return false;
-        }
-        if (!data || data.length !== 1) {
-          console.warn('⚠️ Repair part usage update affected an unsafe row count:', data?.length || 0);
-          return false;
-        }
-      }
-    } catch (err) {
-      console.warn("⚠️ Exception updating repair_part_usages in Supabase:", err);
-      return false;
-    }
-  }
-
+export async function updateRepairPartUsageInSupabase(id: string, updates: Partial<RepairPartUsage>): Promise<boolean> {
   const all = db.getRepairPartUsages();
   const index = all.findIndex(pu => pu.id === id);
   if (index !== -1) {
     all[index] = { ...all[index], ...updates };
     db.saveRepairPartUsages(all);
+  }
+
+  if (isSupabaseConfigured) {
+    try {
+      const rowUpdates: any = {};
+      if (updates.accountingStatus) rowUpdates.accounting_status = updates.accountingStatus;
+      if (updates.notes !== undefined) rowUpdates.notes = updates.notes;
+      if (updates.quantity !== undefined) rowUpdates.quantity = updates.quantity;
+      if (updates.unitCost !== undefined) rowUpdates.unit_cost = updates.unitCost;
+      if (updates.totalCost !== undefined) rowUpdates.total_cost = updates.totalCost;
+      if (updates.sellingPrice !== undefined) rowUpdates.selling_price_snapshot = updates.sellingPrice;
+      if (updates.sellingTotal !== undefined) rowUpdates.selling_total = updates.sellingTotal;
+
+      const { error } = await supabase.from('repair_part_usages').update(rowUpdates).eq('id', id);
+      if (error) {
+        console.warn("⚠️ Notice updating repair_part_usages in Supabase:", error.message);
+      }
+    } catch (err) {
+      console.warn("⚠️ Exception updating repair_part_usages in Supabase:", err);
+    }
   }
   return true;
 }

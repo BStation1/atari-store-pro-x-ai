@@ -235,14 +235,12 @@ export async function fetchOrMigrateProducts(): Promise<{
             .from('inventory_movements')
             .select('id')
             .eq('product_id', p.id)
-            .eq('reference_id', 'OPENING_BALANCE')
+            .or('reference_id.eq.OPENING_BALANCE,notes.ilike.%OPENING_BALANCE%')
             .limit(1);
 
           if (!mData || mData.length === 0) {
-            // The database has a partial unique index on product_id for
-            // OPENING_BALANCE rows. Concurrent tabs may both reach this
-            // insert, so a 23505 response is an expected idempotency result.
-            const { error: openingBalanceError } = await supabase.from('inventory_movements').insert([
+            // Create opening balance record
+            await supabase.from('inventory_movements').insert([
               {
                 product_id: p.id,
                 movement_type: 'ADJUSTMENT',
@@ -255,11 +253,7 @@ export async function fetchOrMigrateProducts(): Promise<{
                 notes: 'رصيد افتتاحي - OPENING_BALANCE',
               },
             ]);
-            if (!openingBalanceError) {
-              createdMovements++;
-            } else if (openingBalanceError.code !== '23505') {
-              console.warn('⚠️ Could not create OPENING_BALANCE movement:', openingBalanceError.message);
-            }
+            createdMovements++;
           }
         }
       }
@@ -352,23 +346,22 @@ export async function addProductToSupabase(
       newProduct = mapRowToProduct(data);
 
       if (newProduct.quantity > 0) {
-        const { error: openingBalanceError } = await supabase.from('inventory_movements').insert([
-          {
-            product_id: newProduct.id,
-            movement_type: 'ADJUSTMENT',
-            quantity_change: newProduct.quantity,
-            previous_quantity: 0,
-            new_quantity: newProduct.quantity,
-            cost_price_snapshot: newProduct.purchasePrice,
-            selling_price_snapshot: newProduct.sellPrice,
-            reference_id: 'OPENING_BALANCE',
-            notes: 'إضافة منتج جديد - رصيد افتتاحي',
-            created_by_user_id: userId || null,
-          },
-        ]);
-        if (openingBalanceError && openingBalanceError.code !== '23505') {
-          console.warn('⚠️ Could not create product OPENING_BALANCE movement:', openingBalanceError.message);
-        }
+        try {
+          await supabase.from('inventory_movements').insert([
+            {
+              product_id: newProduct.id,
+              movement_type: 'ADJUSTMENT',
+              quantity_change: newProduct.quantity,
+              previous_quantity: 0,
+              new_quantity: newProduct.quantity,
+              cost_price_snapshot: newProduct.purchasePrice,
+              selling_price_snapshot: newProduct.sellPrice,
+              reference_id: 'OPENING_BALANCE',
+              notes: 'إضافة منتج جديد - رصيد افتتاحي',
+              created_by_user_id: userId || null,
+            },
+          ]);
+        } catch (_) {}
       }
     }
   } catch (err: any) {
@@ -849,60 +842,42 @@ export async function ensureProductUuidInSupabase(product: Product): Promise<str
   }
 }
 
-export async function updateProductQuantityInSupabase(
-  productId: string,
-  newQuantity: number,
-  productSnapshot?: Product
-): Promise<boolean> {
+export async function updateProductQuantityInSupabase(productId: string, newQuantity: number): Promise<boolean> {
+  const allProds = db.getProducts();
+  const index = allProds.findIndex(p => p.id === productId || (p as any).uuid === productId);
+  if (index !== -1) {
+    allProds[index] = { ...allProds[index], quantity: newQuantity };
+    db.saveProducts(allProds);
+  }
+
+  if (!isSupabaseConfigured) {
+    return true;
+  }
+
   try {
     let realUuid = productId;
-    if (isSupabaseConfigured && !isUuid(realUuid)) {
-      const fetched = await ensureProductUuidInSupabase(productSnapshot || ({ id: productId } as Product));
+    if (!isUuid(realUuid)) {
+      const fetched = await ensureProductUuidInSupabase({ id: productId } as any);
       if (fetched) realUuid = fetched;
     }
 
-    if (isSupabaseConfigured) {
-      if (!isUuid(realUuid)) {
-        console.warn('⚠️ Could not resolve product UUID for stock update:', productId);
-        return false;
-      }
-
-      const { data, error } = await supabase
+    if (isUuid(realUuid)) {
+      const { error } = await supabase
         .from('products')
         .update({
           quantity: newQuantity,
           updated_at: new Date().toISOString()
         })
-        .eq('id', realUuid)
-        .select('id, quantity')
-        .maybeSingle();
+        .eq('id', realUuid);
 
       if (error) {
         console.warn("⚠️ Notice updating product quantity in Supabase:", error.message);
-        return false;
-      }
-      if (!data || Number(data.quantity) !== Number(newQuantity)) {
-        console.warn('⚠️ Supabase stock update did not return the expected row:', productId);
-        return false;
       }
     }
-
-    const allProds = db.getProducts();
-    const index = allProds.findIndex(p =>
-      p.id === productId ||
-      (p as any).uuid === productId ||
-      p.id === realUuid ||
-      (p as any).uuid === realUuid
-    );
-    if (index !== -1) {
-      allProds[index] = { ...allProds[index], quantity: newQuantity };
-      db.saveProducts(allProds);
-    }
-
     return true;
   } catch (err) {
     console.warn("⚠️ Exception updating product quantity in Supabase:", err);
-    return false;
+    return true;
   }
 }
 
@@ -910,8 +885,9 @@ export async function updateProductQuantityInSupabase(
  * Adds an inventory movement to Supabase and updates local storage backup.
  */
 export async function addInventoryMovementToSupabase(movement: any): Promise<boolean> {
+  db.addInventoryMovement(movement);
+
   if (!isSupabaseConfigured) {
-    db.addInventoryMovement(movement);
     return true;
   }
 
@@ -927,10 +903,6 @@ export async function addInventoryMovementToSupabase(movement: any): Promise<boo
     } catch (err) {
       console.warn("⚠️ Error resolving product UUID for inventory movement:", err);
     }
-  }
-  if (!isUuid(realProdUuid)) {
-    console.warn('⚠️ Could not resolve product UUID for inventory movement:', movement.productId);
-    return false;
   }
 
   // Map movement_type to valid enum: ('SALE', 'PURCHASE', 'RETURN', 'REPAIR_USAGE', 'ADJUSTMENT', 'DELETION_RESTORE')
@@ -962,23 +934,17 @@ export async function addInventoryMovementToSupabase(movement: any): Promise<boo
   }
 
   try {
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('inventory_movements')
-      .insert([row])
-      .select('id')
-      .single();
+      .insert([row]);
 
     if (error) {
       console.warn("⚠️ Notice inserting inventory_movements into Supabase:", error.message);
-      return false;
     }
-    if (!data?.id) return false;
   } catch (err) {
     console.warn("⚠️ Exception inserting inventory_movements into Supabase:", err);
-    return false;
   }
 
-  db.addInventoryMovement(movement);
   return true;
 }
 

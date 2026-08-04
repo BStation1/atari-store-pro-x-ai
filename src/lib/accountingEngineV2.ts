@@ -377,64 +377,6 @@ function movementCost(movement: any): { quantity: number; unitCost: number; tota
   return { quantity, unitCost, totalCost };
 }
 
-function movementProductKey(movement: any): string {
-  const name = upper(productNameFromMovement(movement));
-  const sku = upper(movement.sku ?? movement.productSku ?? movement.product_sku);
-  const id = upper(movement.productId ?? movement.product_id ?? movement.inventoryItemId ?? movement.inventory_item_id);
-  // Product IDs are stable across OUT/RETURN movements, while their notes are
-  // intentionally different ("صرف..." versus "إرجاع..."). Prefer identity
-  // fields so a return always cancels the corresponding purchase cost.
-  return id ? `ID:${id}` : sku ? `SKU:${sku}` : `NAME:${name}`;
-}
-
-function netMovementParts(
-  order: RepairOrder,
-  outgoing: InventoryMovement[],
-  returns: InventoryMovement[]
-): AccountingPartDetail[] {
-  const groups = new Map<string, { name: string; quantity: number; totalCost: number; ids: string[] }>();
-
-  outgoing.forEach((movement: any, index) => {
-    const key = movementProductKey(movement);
-    const cost = movementCost(movement);
-    const group = groups.get(key) || {
-      name: productNameFromMovement(movement), quantity: 0, totalCost: 0, ids: []
-    };
-    group.quantity += cost.quantity;
-    group.totalCost += cost.totalCost;
-    group.ids.push(clean(movement.id) || `movement-${order.id}-${index}`);
-    groups.set(key, group);
-  });
-
-  returns.forEach((movement: any) => {
-    let group = groups.get(movementProductKey(movement));
-    // Legacy local records sometimes changed product IDs during UUID
-    // migration. Preserve their historical name-based matching as a fallback.
-    if (!group) {
-      const returnName = upper(productNameFromMovement(movement));
-      group = Array.from(groups.values()).find(candidate => upper(candidate.name) === returnName);
-    }
-    if (!group || group.quantity <= 0) return;
-    const returnedQty = movementCost(movement).quantity;
-    const qtyBefore = group.quantity;
-    const unitCost = qtyBefore > 0 ? group.totalCost / qtyBefore : 0;
-    const appliedQty = Math.min(qtyBefore, returnedQty);
-    group.quantity = Math.max(0, qtyBefore - appliedQty);
-    group.totalCost = money(Math.max(0, group.totalCost - (appliedQty * unitCost)));
-  });
-
-  return Array.from(groups.values())
-    .filter(group => group.quantity > 0)
-    .map(group => ({
-      id: group.ids[0],
-      partName: group.name,
-      quantity: group.quantity,
-      unitPurchaseCost: money(group.totalCost / group.quantity),
-      totalPurchaseCost: money(group.totalCost),
-      source: 'INVENTORY_MOVEMENT' as const
-    }));
-}
-
 function positiveNumber(...values: unknown[]): number | null {
   for (const value of values) {
     const n = Number(value);
@@ -583,9 +525,10 @@ export function resolveOrderPartsAccounting(
       return type === 'RETURN' || (m as any).usageType === 'REPAIR_USAGE_RETURN' || type === 'IN';
     });
 
-    const parts = netMovementParts(order, linkedMovements, returnMovements);
+    const returnQty = returnMovements.reduce((sum, m) => sum + Math.abs(Number(m.quantityChange ?? (m as any).quantity_change ?? 0)), 0);
+    const outgoingQty = linkedMovements.reduce((sum, m) => sum + Math.abs(Number(m.quantityChange ?? (m as any).quantity_change ?? 0)), 0);
 
-    if (parts.length === 0) {
+    if (returnQty >= outgoingQty && outgoingQty > 0) {
       return {
         parts: [],
         purchaseCost: 0,
@@ -596,6 +539,17 @@ export function resolveOrderPartsAccounting(
       };
     }
 
+    const parts = linkedMovements.map((movement: any, index) => {
+      const cost = movementCost(movement);
+      return {
+        id: clean(movement.id) || `movement-${order.id}-${index}`,
+        partName: productNameFromMovement(movement),
+        quantity: cost.quantity,
+        unitPurchaseCost: cost.unitCost,
+        totalPurchaseCost: cost.totalCost,
+        source: 'INVENTORY_MOVEMENT' as const
+      };
+    });
     return {
       parts,
       purchaseCost: money(parts.reduce((sum, part) => sum + part.totalPurchaseCost, 0)),
