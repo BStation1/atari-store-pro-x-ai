@@ -66,12 +66,19 @@ import {
 } from "../lib/repairLogging";
 
 export function getUsageSellingUnitPrice(pu: RepairPartUsage, productsList: Product[]): number {
-  if (pu.sellingPrice && pu.sellingPrice > 0) return pu.sellingPrice;
-  const prod = productsList.find(p => p.id === pu.inventoryItemId || (p.nameAr || p.name) === pu.partName);
-  if (prod && Number(prod.sellPrice || (prod as any).price) > 0) {
-    return Number(prod.sellPrice || (prod as any).price);
+  if (pu.sellingPrice !== undefined && pu.sellingPrice !== null) {
+    return Number(pu.sellingPrice);
   }
-  return pu.unitCost || 0;
+  const prod = productsList.find(p =>
+    p.id === pu.inventoryItemId ||
+    (p as any).uuid === pu.inventoryItemId ||
+    p.sku === pu.sku ||
+    (p.nameAr || p.name) === pu.partName
+  );
+  if (prod && prod.sellPrice !== undefined && prod.sellPrice !== null) {
+    return Number(prod.sellPrice);
+  }
+  return pu.unitCost ?? 0;
 }
 
 export function isProductCompatibleWithDevice(product: Product, deviceType?: string, deviceModel?: string): boolean {

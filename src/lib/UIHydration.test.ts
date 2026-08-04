@@ -3,7 +3,7 @@ import {
   getActiveRepairUsagesForDevice,
   buildRepairPartReceiptLines
 } from "./accountingEngineV2";
-import { RepairOrder, RepairPartUsage, WorkOwnershipType, RepairStatus } from "../types";
+import { RepairOrder, RepairPartUsage, WorkOwnershipType, RepairStatus, DeviceType } from "../types";
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -27,12 +27,17 @@ export function runUIHydrationTests() {
     devices: [
       {
         id: "DEV-PLAYSTATION-5",
-        type: "PlayStation",
+        type: DeviceType.PS5,
         model: "PS5",
+        serialNumber: "SN-999",
+        color: "أسود",
+        accessories: "بدون",
         issue: "عطل باور",
         partsCost: 600,
+        laborCost: 1200,
         estimatedCost: 1800,
         finalRepairPrice: 1800,
+        status: RepairStatus.Ready,
         selectedRepairItems: [] // Note: selectedRepairItems is empty snapshot after reopen
       }
     ],
@@ -40,11 +45,13 @@ export function runUIHydrationTests() {
     finalRepairPrice: 1800,
     advancePayment: 0,
     isPaid: false,
-    createdAt: new Date().toISOString()
+    receivedDate: new Date().toISOString(),
+    trackingToken: "TRK-UI-001"
   };
 
   const usagePartA: RepairPartUsage = {
     id: "PU-PART-A",
+    sku: "PROD-A",
     repairOrderId: "RO-UI-TEST-001",
     inventoryItemId: "PROD-A",
     partName: "آيسي باور سوني 5 (Part A)",
@@ -66,6 +73,7 @@ export function runUIHydrationTests() {
 
   const usagePartB: RepairPartUsage = {
     id: "PU-PART-B",
+    sku: "PROD-B",
     repairOrderId: "RO-UI-TEST-001",
     inventoryItemId: "PROD-B",
     partName: "كابل باور سوني 5 (Part B)",

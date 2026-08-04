@@ -38,7 +38,37 @@ export async function executeRemovePartUsageTransaction(
     return { success: false, error: 'لم يتم تحديد أمر الصيانة.' };
   }
 
-  const usage = partUsages.find(pu => pu.id === usageId);
+  let usage = partUsages.find(pu => pu.id === usageId);
+  if (!usage) {
+    usage = partUsages.find(pu =>
+      (pu.inventoryItemId === usageId || pu.id === usageId || pu.sku === usageId) &&
+      usageMatchesOrder(pu, selectedOrder)
+    );
+  }
+
+  if (!usage) {
+    const dev = selectedOrder.devices[deviceIdx];
+    const item = dev?.selectedRepairItems?.find(i => i.id === usageId || i.usageId === usageId || i.productId === usageId);
+    if (item) {
+      usage = {
+        id: item.usageId || item.id || usageId,
+        sku: (item as any).sku || item.productId || item.id || usageId,
+        repairOrderId: selectedOrder.uuid || selectedOrder.id,
+        inventoryItemId: item.productId || item.id,
+        partName: item.name,
+        quantity: item.quantity || 1,
+        unitCost: item.costPrice || 0,
+        totalCost: (item.quantity || 1) * (item.costPrice || 0),
+        sellingPrice: item.repairPrice ?? item.salePrice ?? 0,
+        sellingTotal: (item.quantity || 1) * (item.repairPrice ?? item.salePrice ?? 0),
+        ownershipType: selectedOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED,
+        responsiblePartnerId: 'SHOP',
+        accountingStatus: 'CONSUMED',
+        createdAt: new Date().toISOString()
+      };
+    }
+  }
+
   if (!usage) {
     return { success: false, error: 'لم يتم العثور على استخدام قطعة الغيار.' };
   }

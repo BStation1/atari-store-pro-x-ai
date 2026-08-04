@@ -42,8 +42,8 @@ export async function executeAddPartUsageTransaction(
 
   const currentDevice = selectedOrder.devices[deviceIdx];
   const newQty = product.quantity - qty;
-  const unitPurchaseCost = Number(product.costPrice || (product as any).cost || 0);
-  const unitSellingPrice = Number(product.price || (product as any).sellingPrice || unitPurchaseCost);
+  const unitPurchaseCost = Number(product.purchasePrice || (product as any).costPrice || (product as any).cost || 0);
+  const unitSellingPrice = Number(product.sellPrice || (product as any).price || (product as any).sellingPrice || unitPurchaseCost);
   const totalCost = unitPurchaseCost * qty;
   const sellingTotal = unitSellingPrice * qty;
 
