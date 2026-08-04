@@ -56,6 +56,7 @@ import { addRepairPartUsageToSupabase, updateRepairPartUsageInSupabase } from ".
 import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabase } from "../lib/supabaseRepairOrders";
 import { executeRemovePartUsageTransaction } from "../lib/repairPartRemovalService";
 import { executeAddPartUsageTransaction } from "../lib/repairPartAddService";
+import { executeDeleteRepairOrderTransaction } from "../lib/repairOrderDeleteService";
 import { usageMatchesOrder, usageMatchesDevice, syncOrderSelectedRepairItemsFromUsages, getActiveRepairUsagesForDevice, getActiveRepairUsagesForOrder } from "../lib/accountingEngineV2";
 import { sendRepairNotificationWorkflow } from "../lib/whatsapp";
 import { 
@@ -161,6 +162,22 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
   const handleDeleteOrder = async (orderId: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
 
+    const targetOrder = orders.find(o => o.id === orderId) || (selectedOrder?.id === orderId ? selectedOrder : null);
+    if (!targetOrder) {
+      await dialog.alert({ message: "أمر الصيانة المطلوب حذف غير موجود!", variant: "error" });
+      return;
+    }
+
+    // Pre-delivery check
+    if (targetOrder.status === RepairStatus.Delivered || targetOrder.deliveryStatus === "DELIVERED") {
+      await dialog.alert({
+        title: "غير مسموح بالحذف المباشر",
+        message: "هذا الجهاز تم تسليمه وإغلاق طلبه سابقاً! لا يمكن حذفه مباشرة عبر هذا الزر. يرجى إعادة فتح الطلب وإلغاء التسليم أولاً إن لزم الأمر.",
+        variant: "warning"
+      });
+      return;
+    }
+
     // Check admin / owner permission
     const isOwnerOrAdmin = currentLoggedUser?.role === "admin" || currentLoggedUser?.roleId === "OWNER" || currentLoggedUser?.role === "OWNER" || currentLoggedUser?.email === "elbannafc@gmail.com" || currentLoggedUser?.permissions?.includes("all");
     if (!isOwnerOrAdmin) {
@@ -169,16 +186,52 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     }
 
     const confirmed = await dialog.confirm({
-      title: "حذف أمر صيانة",
-      message: `هل أنت متأكد من حذف أمر الصيانة رقم [${orderId}] نهائياً من السجلات والبيانات؟`,
+      title: "حذف أمر الصيانة قبل التسليم",
+      message: `هل أنت متأكد من حذف أمر الصيانة رقم [${orderId}] نهائياً؟\n\nإجراءات الحذف التلقائية:\n1. إرجاع جميع قطع الغيار المستهلكة بالطلب إلى المخزن وزيادة كمياتها.\n2. إلغاء ومسح المبيعات والفواتير المرتبطة بالأوردر.\n3. خصم/إعادة ضبط أرباح وحسابات الشركاء الخاصة بالأوردر.`,
       variant: "danger",
-      confirmText: "نعم، حذف"
+      confirmText: "نعم، إرجاع القطع وحذف الأوردر"
     });
 
     if (confirmed) {
-      deleteRepairOrder(orderId);
-      if (selectedOrder?.id === orderId) {
-        setSelectedOrder(null);
+      const res = await executeDeleteRepairOrderTransaction({
+        orderId,
+        selectedOrder: targetOrder,
+        products,
+        partUsages,
+        invoices,
+        currentUser: currentLoggedUser
+      });
+
+      if (res.success) {
+        if (res.updatedProducts) {
+          res.updatedProducts.forEach(p => updateProduct(p));
+        }
+        if (res.updatedPartUsages) {
+          persistLocalUsages(res.updatedPartUsages);
+        }
+        deleteRepairOrder(orderId);
+
+        if (selectedOrder?.id === orderId) {
+          setSelectedOrder(null);
+        }
+
+        window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_orders' } }));
+        window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
+        window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));
+        window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_invoices' } }));
+        window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_partner_ledger' } }));
+
+        await dialog.alert({
+          title: "تم الحذف بنجاح",
+          message: `تم حذف أمر الصيانة رقم [${orderId}] وإعادة قطع الغيار إلى المخزن، وإلغاء المبيعات وتسوية حسابات الشركاء بنجاح.`,
+          variant: "success"
+        });
+      } else {
+        await dialog.alert({
+          title: "فشل الحذف",
+          message: res.error || "تعذر إتمام عملية حذف أمر الصيانة.",
+          variant: "error"
+        });
       }
     }
   };
@@ -1290,14 +1343,15 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                   </button>
 
                   {/* Delete Button */}
-                  {(currentLoggedUser?.role === "admin" || currentLoggedUser?.permissions?.includes("all")) && (
+                  {(currentLoggedUser?.role === "admin" || currentLoggedUser?.permissions?.includes("all")) && selectedOrder.status !== RepairStatus.Delivered && selectedOrder.deliveryStatus !== "DELIVERED" && (
                     <button
                       type="button"
                       onClick={() => handleDeleteOrder(selectedOrder.id)}
                       className="bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs py-2 px-3 rounded-xl border border-red-500/20 flex items-center gap-1.5 font-bold cursor-pointer transition-colors"
+                      title="حذف الأوردر نهائياً قبل التسليم مع إرجاع قطع الغيار للمخزن وإلغاء المبيعات وحسابات الشركاء"
                     >
-                      <Trash2 className="w-4 h-4" />
-                      حذف الأمر
+                      <Trash2 className="w-4 h-4 text-red-400" />
+                      حذف الأمر قبل التسليم
                     </button>
                   )}
                 </div>
