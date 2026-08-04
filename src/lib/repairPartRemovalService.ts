@@ -138,8 +138,8 @@ export async function executeRemovePartUsageTransaction(
     createdAt: new Date().toISOString()
   };
 
-  // STEP A: Restore product stock ONLY if this was an actual consumed part usage (not synthetic fallback)
-  const shouldRestoreStock = !isSyntheticFallbackItem && !!product;
+  // STEP A: Restore product stock whenever linked product exists
+  const shouldRestoreStock = !!product;
   let stockUpdateResult: any = { ok: true };
   let stockOk = true;
 

@@ -250,6 +250,8 @@ export function syncOrderSelectedRepairItemsFromUsages(
           pu.accountingStatus !== 'REVERSED'
   );
 
+  const hasUsagesForOrder = (usages || []).some(pu => usageMatchesOrder(pu, order));
+
   let changed = false;
   const updatedDevices = order.devices.map((device, devIdx) => {
     const existingItems = device.selectedRepairItems || [];
@@ -257,7 +259,7 @@ export function syncOrderSelectedRepairItemsFromUsages(
       usageMatchesDevice(pu, device, devIdx, order.devices.length)
     );
 
-    if (deviceUsages.length === 0 && existingItems.length > 0 && !allowClear) {
+    if (deviceUsages.length === 0 && existingItems.length > 0 && (!allowClear || !hasUsagesForOrder)) {
       return device;
     }
 
