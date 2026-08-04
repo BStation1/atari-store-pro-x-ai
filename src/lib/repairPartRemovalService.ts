@@ -185,25 +185,24 @@ export async function executeRemovePartUsageTransaction(
     const faultsCost = currentDevice.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(tags);
     const newAutoPrice = faultsCost + newPartsCost;
 
-    const currentPrice = currentDevice.finalRepairPrice || currentDevice.estimatedCost || 0;
-    const currentLabor = currentDevice.isPriceManuallyEdited && currentPrice > 0
-      ? Math.max(0, currentPrice - (currentDevice.partsCost || 0))
-      : faultsCost;
+    if (currentDevice.isPriceManuallyEdited) {
+      updatedDevices[deviceIdx] = {
+        ...currentDevice,
+        selectedRepairItems: nextSelectedRepairItems,
+        partsCost: newPartsCost,
+        priceOverrideAcknowledged: false
+      };
+    } else {
+      updatedDevices[deviceIdx] = {
+        ...currentDevice,
+        selectedRepairItems: nextSelectedRepairItems,
+        partsCost: newPartsCost,
+        finalRepairPrice: newAutoPrice,
+        estimatedCost: newAutoPrice
+      };
+    }
 
-    const computedDevicePrice = (currentDevice.isPriceManuallyEdited && currentPrice > 0)
-      ? currentLabor + newPartsCost
-      : newAutoPrice;
-
-    updatedDevices[deviceIdx] = {
-      ...currentDevice,
-      selectedRepairItems: nextSelectedRepairItems,
-      partsCost: newPartsCost,
-      finalRepairPrice: computedDevicePrice,
-      estimatedCost: computedDevicePrice,
-      priceOverrideAcknowledged: false
-    };
-
-    const totalFinal = updatedDevices.reduce((sum, d) => sum + (d.finalRepairPrice || d.estimatedCost || 0), 0);
+    const totalFinal = updatedDevices.reduce((sum, d) => sum + (d.finalRepairPrice ?? d.estimatedCost ?? 0), 0);
 
     updatedOrder = {
       ...selectedOrder,

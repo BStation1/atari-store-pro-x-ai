@@ -2081,66 +2081,32 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
               )}
 
               {/* Order Financial & Printing actions Footer */}
-              {(() => {
-                const computedOrderTotal = (selectedOrder.devices || []).reduce((sum, d, idx) => {
-                  const dUsages = getActiveRepairUsagesForDevice(selectedOrder, d, idx, partUsages);
-                  const dPartsTotal = dUsages.reduce((s, pu) => s + (pu.quantity * getUsageSellingUnitPrice(pu, products)), 0);
-                  const dFaults = d.reportedFaults || (d.issue ? d.issue.split(" - ").map(st => st.trim()) : []);
-                  const dLabor = d.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(dFaults);
-                  const dPrice = (d.finalRepairPrice || d.estimatedCost) || (dPartsTotal + dLabor);
-                  return sum + dPrice;
-                }, 0);
+              <div className="border-t border-[#2a2d42] pt-4 flex flex-col md:flex-row justify-between items-center gap-4 bg-gray-950/40 p-4 rounded-xl border border-dashed border-[#2a2d42]">
+                <div className="text-right">
+                  <p className="text-xs text-gray-400 font-medium">الحسابات الإجمالية للطلب:</p>
+                  <h4 className="text-lg font-bold text-white mt-1">
+                    السعر النهائي المعتمد للعميل: <span className="text-emerald-400 font-extrabold">{selectedOrder.finalRepairPrice ?? selectedOrder.totalEstimatedCost} ج.م</span>
+                  </h4>
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    المدفوع مقدماً: {selectedOrder.advancePayment} ج.م | المتبقي عند الاستلام:{" "}
+                    <span className="font-bold text-red-400">{Math.max(0, (selectedOrder.finalRepairPrice ?? selectedOrder.totalEstimatedCost) - selectedOrder.advancePayment)} ج.م</span>
+                  </p>
+                </div>
 
-                const displayOrderFinalPrice = (selectedOrder.finalRepairPrice || selectedOrder.totalEstimatedCost) || computedOrderTotal;
-
-                return (
-                  <div className="border-t border-[#2a2d42] pt-4 flex flex-col md:flex-row justify-between items-center gap-4 bg-gray-950/40 p-4 rounded-xl border border-dashed border-[#2a2d42]">
-                    <div className="text-right">
-                      <p className="text-xs text-gray-400 font-medium">الحسابات الإجمالية للطلب:</p>
-                      <h4 className="text-lg font-bold text-white mt-1">
-                        السعر النهائي المعتمد للعميل: <span className="text-emerald-400 font-extrabold">{displayOrderFinalPrice.toLocaleString('ar-EG')} ج.م</span>
-                      </h4>
-                      <p className="text-[10px] text-gray-400 mt-1">
-                        المدفوع مقدماً: {selectedOrder.advancePayment.toLocaleString('ar-EG')} ج.م | المتبقي عند الاستلام:{" "}
-                        <span className="font-bold text-red-400">{Math.max(0, displayOrderFinalPrice - selectedOrder.advancePayment).toLocaleString('ar-EG')} ج.م</span>
-                      </p>
-                    </div>
-
-                    <div className="flex gap-2 w-full md:w-auto">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const updatedDevices = selectedOrder.devices.map((d, idx) => {
-                            const dUsages = getActiveRepairUsagesForDevice(selectedOrder, d, idx, partUsages);
-                            const dPartsTotal = dUsages.reduce((s, pu) => s + (pu.quantity * getUsageSellingUnitPrice(pu, products)), 0);
-                            const dFaults = d.reportedFaults || (d.issue ? d.issue.split(" - ").map(st => st.trim()) : []);
-                            const dLabor = d.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(dFaults);
-                            const dPrice = (d.finalRepairPrice || d.estimatedCost) || (dPartsTotal + dLabor);
-                            return {
-                              ...d,
-                              partsCost: dPartsTotal,
-                              finalRepairPrice: dPrice,
-                              estimatedCost: dPrice
-                            };
-                          });
-                          const orderToSave: RepairOrder = {
-                            ...selectedOrder,
-                            devices: updatedDevices,
-                            totalEstimatedCost: displayOrderFinalPrice,
-                            finalRepairPrice: displayOrderFinalPrice
-                          };
-                          setReceiptOrder(orderToSave);
-                          setIsReceiptOpen(true);
-                        }}
-                        className="flex-1 md:flex-initial bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer"
-                      >
-                        <FileText className="w-4 h-4" />
-                        معاينة وطباعة الفاتورة
-                      </button>
-                    </div>
-                  </div>
-                );
-              })()}
+                <div className="flex gap-2 w-full md:w-auto">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReceiptOrder(selectedOrder);
+                      setIsReceiptOpen(true);
+                    }}
+                    className="flex-1 md:flex-initial bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer"
+                  >
+                    <FileText className="w-4 h-4" />
+                    معاينة وطباعة الفاتورة
+                  </button>
+                </div>
+              </div>
             </div>
           ) : (
             <div className="bg-[#11131e] border border-[#2a2d42] rounded-2xl p-16 text-center text-gray-500 h-full flex flex-col justify-center items-center">
