@@ -18,7 +18,7 @@ import {
   getDeviceDisplayName
 } from "../lib/customerDisplayHelper";
 import { useRepairPartUsages } from "../hooks/useData";
-import { syncOrderSelectedRepairItemsFromUsages, getActiveRepairUsagesForDevice, getActiveRepairUsagesForOrder, buildRepairPartReceiptLines, usageMatchesOrder } from "../lib/accountingEngineV2";
+import { syncOrderSelectedRepairItemsFromUsages, getActiveRepairUsagesForDevice, getActiveRepairUsagesForOrder, buildRepairPartReceiptLines } from "../lib/accountingEngineV2";
 
 interface PrintReceiptModalProps {
   isOpen: boolean;
@@ -307,12 +307,11 @@ export default function PrintReceiptModal({
               <tbody>
                 {syncedOrder &&
                   syncedOrder.devices.map((dev, devIdx) => {
-                    const hasUsagesForOrder = partUsagesLoaded && order && partUsages.some(pu => usageMatchesOrder(pu, order));
                     const deviceUsages = (partUsagesLoaded && order)
                       ? getActiveRepairUsagesForDevice(order, dev, devIdx, partUsages)
                       : [];
 
-                    const partLines = (partUsagesLoaded && hasUsagesForOrder)
+                    const partLines = deviceUsages.length > 0
                       ? deviceUsages.map(pu => `${pu.partName} (x${pu.quantity} بسعر ${pu.sellingPrice ?? (pu as any).salePrice ?? 0} ج.م)`)
                       : (dev.selectedRepairItems && dev.selectedRepairItems.length > 0)
                         ? dev.selectedRepairItems.map(i => `${i.name} (x${i.quantity} بسعر ${i.repairPrice ?? i.salePrice ?? 0} ج.م)`)

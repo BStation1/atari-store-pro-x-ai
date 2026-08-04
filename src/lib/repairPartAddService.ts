@@ -42,8 +42,8 @@ export async function executeAddPartUsageTransaction(
 
   const currentDevice = selectedOrder.devices[deviceIdx];
   const newQty = product.quantity - qty;
-  const unitPurchaseCost = Number(product.purchasePrice || (product as any).costPrice || 0);
-  const unitSellingPrice = Number(product.sellPrice || (product as any).price || unitPurchaseCost);
+  const unitPurchaseCost = Number(product.costPrice || (product as any).cost || 0);
+  const unitSellingPrice = Number(product.price || (product as any).sellingPrice || unitPurchaseCost);
   const totalCost = unitPurchaseCost * qty;
   const sellingTotal = unitSellingPrice * qty;
 
@@ -68,12 +68,7 @@ export async function executeAddPartUsageTransaction(
     // Check existing active usage for same product on this order & device
     const allUsages = [...partUsages];
     const existingUsage = allUsages.find(
-      pu => (
-              pu.inventoryItemId === product.id ||
-              pu.inventoryItemId === productUuid ||
-              ((product as any).uuid && pu.inventoryItemId === (product as any).uuid) ||
-              (product.sku && pu.sku === product.sku)
-            ) &&
+      pu => pu.inventoryItemId === product.id &&
             pu.accountingStatus !== 'RETURNED' &&
             pu.accountingStatus !== 'REVERSED' &&
             usageMatchesOrder(pu, selectedOrder) &&
@@ -253,23 +248,13 @@ export async function executeAddPartUsageTransaction(
     }
 
     // Success: Update local DB collections
-    const updatedProductsList = products.map(p => 
-      (p.id === product.id || (p as any).uuid === product.id || p.id === productUuid || (p as any).uuid === productUuid || (product.sku && p.sku === product.sku))
-        ? { ...p, quantity: newQty }
-        : p
-    );
+    const updatedProductsList = products.map(p => p.id === product.id ? { ...p, quantity: newQty } : p);
     db.saveProducts(updatedProductsList);
     db.saveRepairPartUsages(updatedUsageList);
 
     const allOrders = db.getRepairOrders();
     const updatedOrdersList = allOrders.map(o => o.id === updatedOrder.id || o.uuid === updatedOrder.uuid ? updatedOrder : o);
     db.saveRepairOrders(updatedOrdersList);
-
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
-      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));
-      window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_orders' } }));
-    }
 
     return {
       success: true,

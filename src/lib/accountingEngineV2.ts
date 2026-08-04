@@ -250,8 +250,6 @@ export function syncOrderSelectedRepairItemsFromUsages(
           pu.accountingStatus !== 'REVERSED'
   );
 
-  const hasUsagesForOrder = (usages || []).some(pu => usageMatchesOrder(pu, order));
-
   let changed = false;
   const updatedDevices = order.devices.map((device, devIdx) => {
     const existingItems = device.selectedRepairItems || [];
@@ -259,7 +257,7 @@ export function syncOrderSelectedRepairItemsFromUsages(
       usageMatchesDevice(pu, device, devIdx, order.devices.length)
     );
 
-    if (deviceUsages.length === 0 && existingItems.length > 0 && (!allowClear || !hasUsagesForOrder)) {
+    if (deviceUsages.length === 0 && existingItems.length > 0 && !allowClear) {
       return device;
     }
 
@@ -626,7 +624,7 @@ export function calculateOrderAccountingV2(
     netProfit,
     ahmedShare,
     abdoShare,
-    amountDueFromAbdo: party === 'ABDO' ? money(purchaseCost + ahmedShare) : 0,
+    amountDueFromAbdo: party === 'ABDO' ? ahmedShare : 0,
     partsQuantity: partsAccounting.partsQuantity,
     parts: partsAccounting.parts,
     costSource: partsAccounting.costSource,

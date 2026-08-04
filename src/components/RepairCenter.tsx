@@ -56,7 +56,6 @@ import { addRepairPartUsageToSupabase, updateRepairPartUsageInSupabase } from ".
 import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabase } from "../lib/supabaseRepairOrders";
 import { executeRemovePartUsageTransaction } from "../lib/repairPartRemovalService";
 import { executeAddPartUsageTransaction } from "../lib/repairPartAddService";
-import { executeDeleteRepairOrderTransaction } from "../lib/repairOrderDeleteService";
 import { usageMatchesOrder, usageMatchesDevice, syncOrderSelectedRepairItemsFromUsages, getActiveRepairUsagesForDevice, getActiveRepairUsagesForOrder } from "../lib/accountingEngineV2";
 import { sendRepairNotificationWorkflow } from "../lib/whatsapp";
 import { 
@@ -162,22 +161,6 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
   const handleDeleteOrder = async (orderId: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
 
-    const targetOrder = orders.find(o => o.id === orderId) || (selectedOrder?.id === orderId ? selectedOrder : null);
-    if (!targetOrder) {
-      await dialog.alert({ message: "أمر الصيانة المطلوب حذف غير موجود!", variant: "error" });
-      return;
-    }
-
-    // Pre-delivery check
-    if (targetOrder.status === RepairStatus.Delivered || targetOrder.deliveryStatus === "DELIVERED") {
-      await dialog.alert({
-        title: "غير مسموح بالحذف المباشر",
-        message: "هذا الجهاز تم تسليمه وإغلاق طلبه سابقاً! لا يمكن حذفه مباشرة عبر هذا الزر. يرجى إعادة فتح الطلب وإلغاء التسليم أولاً إن لزم الأمر.",
-        variant: "warning"
-      });
-      return;
-    }
-
     // Check admin / owner permission
     const isOwnerOrAdmin = currentLoggedUser?.role === "admin" || currentLoggedUser?.roleId === "OWNER" || currentLoggedUser?.role === "OWNER" || currentLoggedUser?.email === "elbannafc@gmail.com" || currentLoggedUser?.permissions?.includes("all");
     if (!isOwnerOrAdmin) {
@@ -186,52 +169,16 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     }
 
     const confirmed = await dialog.confirm({
-      title: "حذف أمر الصيانة قبل التسليم",
-      message: `هل أنت متأكد من حذف أمر الصيانة رقم [${orderId}] نهائياً؟\n\nإجراءات الحذف التلقائية:\n1. إرجاع جميع قطع الغيار المستهلكة بالطلب إلى المخزن وزيادة كمياتها.\n2. إلغاء ومسح المبيعات والفواتير المرتبطة بالأوردر.\n3. خصم/إعادة ضبط أرباح وحسابات الشركاء الخاصة بالأوردر.`,
+      title: "حذف أمر صيانة",
+      message: `هل أنت متأكد من حذف أمر الصيانة رقم [${orderId}] نهائياً من السجلات والبيانات؟`,
       variant: "danger",
-      confirmText: "نعم، إرجاع القطع وحذف الأوردر"
+      confirmText: "نعم، حذف"
     });
 
     if (confirmed) {
-      const res = await executeDeleteRepairOrderTransaction({
-        orderId,
-        selectedOrder: targetOrder,
-        products,
-        partUsages,
-        invoices,
-        currentUser: currentLoggedUser
-      });
-
-      if (res.success) {
-        if (res.updatedProducts) {
-          res.updatedProducts.forEach(p => updateProduct(p));
-        }
-        if (res.updatedPartUsages) {
-          persistLocalUsages(res.updatedPartUsages);
-        }
-        deleteRepairOrder(orderId);
-
-        if (selectedOrder?.id === orderId) {
-          setSelectedOrder(null);
-        }
-
-        window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_orders' } }));
-        window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_products' } }));
-        window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_repair_part_usages' } }));
-        window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_invoices' } }));
-        window.dispatchEvent(new CustomEvent('atari_db_changed', { detail: { key: 'atari_partner_ledger' } }));
-
-        await dialog.alert({
-          title: "تم الحذف بنجاح",
-          message: `تم حذف أمر الصيانة رقم [${orderId}] وإعادة قطع الغيار إلى المخزن، وإلغاء المبيعات وتسوية حسابات الشركاء بنجاح.`,
-          variant: "success"
-        });
-      } else {
-        await dialog.alert({
-          title: "فشل الحذف",
-          message: res.error || "تعذر إتمام عملية حذف أمر الصيانة.",
-          variant: "error"
-        });
+      deleteRepairOrder(orderId);
+      if (selectedOrder?.id === orderId) {
+        setSelectedOrder(null);
       }
     }
   };
@@ -706,11 +653,8 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       return;
     }
 
-    const product = products.find(p => p.id === productId || (p as any).uuid === productId || p.sku === productId);
-    if (!product) {
-      dialog.alert({ message: "لم يتم العثور على هذا الصنف في القائمة!", variant: "error" });
-      return;
-    }
+    const product = products.find(p => p.id === productId);
+    if (!product) return;
 
     const qty = Math.max(1, Math.floor(qtyToAdd));
     if (product.quantity < qty) {
@@ -734,9 +678,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       if (res.success && res.updatedOrder && res.updatedProducts && res.updatedPartUsages) {
         setSelectedOrder(res.updatedOrder);
         setRepairOrderLocal(res.updatedOrder);
-        updateRepairOrder(res.updatedOrder, currentUserForAction);
         setProductLocal(res.updatedProducts.find(p => p.id === product.id) || product);
-        res.updatedProducts.forEach(p => updateProduct(p));
         persistLocalUsages(res.updatedPartUsages);
         console.log(`⏱️ [AddPart] Atomic add part transaction completed in ${(performance.now() - t0).toFixed(2)}ms`);
       } else {
@@ -761,22 +703,13 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
   const handleRemovePartUsage = async (usageId: string, deviceIdx: number, removeQty: number = 1) => {
     if (!selectedOrder) return;
-    let usage = partUsages.find(pu => pu.id === usageId);
-    if (!usage) {
-      usage = partUsages.find(pu => pu.inventoryItemId === usageId && usageMatchesOrder(pu, selectedOrder) && pu.accountingStatus !== 'RETURNED');
-    }
+    const usage = partUsages.find(pu => pu.id === usageId);
+    if (!usage) return;
 
-    const currentDevice = selectedOrder.devices?.[deviceIdx];
-    const targetItem = currentDevice?.selectedRepairItems?.find(
-      i => i.id === usageId || i.usageId === usageId || i.productId === usageId || i.name === usageId
-    );
+    if (usage.accountingStatus === 'RETURNED') return;
+    if (busyProductIds.has(usage.inventoryItemId)) return;
 
-    if (usage && usage.accountingStatus === 'RETURNED') return;
-
-    const inventoryItemId = usage ? usage.inventoryItemId : (targetItem?.productId || targetItem?.id || usageId);
-    if (busyProductIds.has(inventoryItemId)) return;
-
-    setBusyProductIds(prev => new Set(prev).add(inventoryItemId));
+    setBusyProductIds(prev => new Set(prev).add(usage.inventoryItemId));
 
     try {
       const res = await executeRemovePartUsageTransaction({
@@ -796,12 +729,10 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
         return;
       }
 
-      // UI updates ONLY AFTER all persistence operations succeed
+      // UI updates ONLY AFTER all three persistence operations succeed
       if (res.updatedProducts) {
-        res.updatedProducts.forEach(p => {
-          setProductLocal(p);
-          updateProduct(p);
-        });
+        const prod = res.updatedProducts.find(p => p.id === usage.inventoryItemId);
+        if (prod) setProductLocal(prod);
       }
       if (res.updatedPartUsages) {
         persistLocalUsages(res.updatedPartUsages);
@@ -809,7 +740,6 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       if (res.updatedOrder) {
         setSelectedOrder(res.updatedOrder);
         setRepairOrderLocal(res.updatedOrder);
-        updateRepairOrder(res.updatedOrder, currentUserForAction);
       }
     } catch (err: any) {
       console.error("Removal transaction exception:", err);
@@ -820,7 +750,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     } finally {
       setBusyProductIds(prev => {
         const next = new Set(prev);
-        next.delete(inventoryItemId);
+        next.delete(usage.inventoryItemId);
         return next;
       });
     }
@@ -1214,21 +1144,9 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                       <h4 className="text-xs font-bold text-white mt-0.5">{customerName}</h4>
                       <PhoneDisplay phone={customerPhone} className="text-[10px] text-gray-400 font-mono" />
                     </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${cfg.class}`}>
-                        {cfg?.text ?? order.status ?? "غير محدد"}
-                      </span>
-                      {(!currentLoggedUser || currentLoggedUser?.role === "admin" || currentLoggedUser?.roleId === "OWNER" || currentLoggedUser?.role === "OWNER" || currentLoggedUser?.email === "elbannafc@gmail.com" || currentLoggedUser?.permissions?.includes("all")) && order.status !== RepairStatus.Delivered && order.deliveryStatus !== "DELIVERED" && (
-                        <button
-                          type="button"
-                          onClick={(e) => handleDeleteOrder(order.id, e)}
-                          title="حذف أمر الصيانة قبل التسليم"
-                          className="p-1 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded-md transition cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
+                    <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${cfg.class}`}>
+                      {cfg?.text ?? order.status ?? "غير محدد"}
+                    </span>
                   </div>
 
                   {/* Devices Brief */}
@@ -1357,7 +1275,17 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                     طباعة الإيصال
                   </button>
 
-
+                  {/* Delete Button */}
+                  {(currentLoggedUser?.role === "admin" || currentLoggedUser?.permissions?.includes("all")) && (
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteOrder(selectedOrder.id)}
+                      className="bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs py-2 px-3 rounded-xl border border-red-500/20 flex items-center gap-1.5 font-bold cursor-pointer transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      حذف الأمر
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1435,14 +1363,10 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                 const devIdx = 0;
 
                 // Linked part usages for current device (canonical usages dataset when loaded, snapshot fallback when unhydrated)
-                const hasUsagesForOrder = partUsagesLoaded && partUsages.some(pu => usageMatchesOrder(pu, selectedOrder));
-                const usagesFromStore = partUsagesLoaded
+                const deviceLinkedUsages: RepairPartUsage[] = partUsagesLoaded
                   ? getActiveRepairUsagesForDevice(selectedOrder, currentDevice, devIdx, partUsages)
-                  : [];
-                const deviceLinkedUsages: RepairPartUsage[] = (partUsagesLoaded && (hasUsagesForOrder || usagesFromStore.length > 0))
-                  ? usagesFromStore
                   : (currentDevice.selectedRepairItems || []).map((item, idx) => ({
-                      id: item.usageId || item.id || `fallback-${idx}`,
+                      id: item.id || item.usageId || `fallback-${idx}`,
                       repairOrderId: selectedOrder.id,
                       inventoryItemId: item.productId || item.id || '',
                       partName: item.name,
@@ -1988,19 +1912,6 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                             <Truck className="w-4 h-4" />
                             <span>🚚 تم التسليم</span>
                           </button>
-
-                          {/* 🗑️ حذف أمر الصيانة قبل التسليم */}
-                          {(!currentLoggedUser || currentLoggedUser?.role === "admin" || currentLoggedUser?.roleId === "OWNER" || currentLoggedUser?.role === "OWNER" || currentLoggedUser?.email === "elbannafc@gmail.com" || currentLoggedUser?.permissions?.includes("all")) && selectedOrder.status !== RepairStatus.Delivered && selectedOrder.deliveryStatus !== "DELIVERED" && (
-                            <button
-                              type="button"
-                              onClick={(e) => handleDeleteOrder(selectedOrder.id, e)}
-                              className="w-full bg-red-950/80 hover:bg-red-900 text-red-200 border border-red-600/60 font-extrabold text-xs py-3 px-4 rounded-xl shadow transition cursor-pointer flex items-center justify-center gap-2 mt-1"
-                              title="حذف الأوردر نهائياً قبل التسليم مع إرجاع قطع الغيار للمخزن وإلغاء المبيعات وحسابات الشركاء"
-                            >
-                              <Trash2 className="w-4 h-4 text-red-400" />
-                              <span>🗑️ حذف أمر الصيانة</span>
-                            </button>
-                          )}
                         </div>
                       </div>
                     </div>
