@@ -1211,9 +1211,21 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                       <h4 className="text-xs font-bold text-white mt-0.5">{customerName}</h4>
                       <PhoneDisplay phone={customerPhone} className="text-[10px] text-gray-400 font-mono" />
                     </div>
-                    <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${cfg.class}`}>
-                      {cfg?.text ?? order.status ?? "غير محدد"}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${cfg.class}`}>
+                        {cfg?.text ?? order.status ?? "غير محدد"}
+                      </span>
+                      {(!currentLoggedUser || currentLoggedUser?.role === "admin" || currentLoggedUser?.roleId === "OWNER" || currentLoggedUser?.role === "OWNER" || currentLoggedUser?.email === "elbannafc@gmail.com" || currentLoggedUser?.permissions?.includes("all")) && order.status !== RepairStatus.Delivered && order.deliveryStatus !== "DELIVERED" && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteOrder(order.id, e)}
+                          title="حذف أمر الصيانة قبل التسليم"
+                          className="p-1 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded-md transition cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {/* Devices Brief */}
@@ -1343,10 +1355,10 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                   </button>
 
                   {/* Delete Button */}
-                  {(currentLoggedUser?.role === "admin" || currentLoggedUser?.permissions?.includes("all")) && selectedOrder.status !== RepairStatus.Delivered && selectedOrder.deliveryStatus !== "DELIVERED" && (
+                  {(!currentLoggedUser || currentLoggedUser?.role === "admin" || currentLoggedUser?.roleId === "OWNER" || currentLoggedUser?.role === "OWNER" || currentLoggedUser?.email === "elbannafc@gmail.com" || currentLoggedUser?.permissions?.includes("all")) && selectedOrder.status !== RepairStatus.Delivered && selectedOrder.deliveryStatus !== "DELIVERED" && (
                     <button
                       type="button"
-                      onClick={() => handleDeleteOrder(selectedOrder.id)}
+                      onClick={(e) => handleDeleteOrder(selectedOrder.id, e)}
                       className="bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs py-2 px-3 rounded-xl border border-red-500/20 flex items-center gap-1.5 font-bold cursor-pointer transition-colors"
                       title="حذف الأوردر نهائياً قبل التسليم مع إرجاع قطع الغيار للمخزن وإلغاء المبيعات وحسابات الشركاء"
                     >
@@ -1983,6 +1995,19 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                             <Truck className="w-4 h-4" />
                             <span>🚚 تم التسليم</span>
                           </button>
+
+                          {/* 🗑️ حذف أمر الصيانة قبل التسليم */}
+                          {(!currentLoggedUser || currentLoggedUser?.role === "admin" || currentLoggedUser?.roleId === "OWNER" || currentLoggedUser?.role === "OWNER" || currentLoggedUser?.email === "elbannafc@gmail.com" || currentLoggedUser?.permissions?.includes("all")) && selectedOrder.status !== RepairStatus.Delivered && selectedOrder.deliveryStatus !== "DELIVERED" && (
+                            <button
+                              type="button"
+                              onClick={(e) => handleDeleteOrder(selectedOrder.id, e)}
+                              className="w-full bg-red-950/80 hover:bg-red-900 text-red-200 border border-red-600/60 font-extrabold text-xs py-3 px-4 rounded-xl shadow transition cursor-pointer flex items-center justify-center gap-2 mt-1"
+                              title="حذف الأوردر نهائياً قبل التسليم مع إرجاع قطع الغيار للمخزن وإلغاء المبيعات وحسابات الشركاء"
+                            >
+                              <Trash2 className="w-4 h-4 text-red-400" />
+                              <span>🗑️ حذف أمر الصيانة</span>
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>
