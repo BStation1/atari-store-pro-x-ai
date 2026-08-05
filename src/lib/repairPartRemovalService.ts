@@ -1,7 +1,7 @@
 import { Product, RepairOrder, RepairPartUsage, WorkOwnershipType, SelectedRepairItem } from '../types';
 import { updateProductQuantityInSupabase, addInventoryMovementToSupabase } from './supabaseProducts';
 import { updateRepairPartUsageInSupabase } from './supabasePartUsages';
-import { updateRepairOrderInSupabase } from './supabaseRepairOrders';
+import { updateRepairOrderInSupabaseStrict } from './supabaseRepairOrders';
 import { calculateSuggestedPriceForFaults, getUsageSellingUnitPrice } from './repairOrderCalculations';
 import { usageMatchesDevice, usageMatchesOrder } from './accountingEngineV2';
 import { db } from './db';
@@ -230,7 +230,43 @@ export async function executeRemovePartUsageTransaction(
       finalRepairPrice: totalFinal
     };
 
-    await updateRepairOrderInSupabase(updatedOrder);
+    const orderSaveOk = await updateRepairOrderInSupabaseStrict(updatedOrder);
+    if (!orderSaveOk) {
+      // Restore the remote usage and stock first. The RETURN movement is
+      // append-only, so add an equal outgoing movement to neutralize it.
+      await updateRepairPartUsageInSupabase(usageId, {
+        quantity: usage.quantity,
+        totalCost: usage.totalCost,
+        sellingPrice: usage.sellingPrice,
+        sellingTotal: usage.sellingTotal,
+        accountingStatus: usage.accountingStatus
+      }, usage);
+      await updateProductQuantityInSupabase(product.id, previousProductQty, product);
+      await addInventoryMovementToSupabase({
+        productId: usage.inventoryItemId || (product as Product & { uuid?: string }).uuid || product.id,
+        productNameSnapshot: usage.partName,
+        movementType: 'REPAIR_USAGE',
+        usageType: 'REPAIR_USAGE',
+        quantityChange: -actualReturnedQty,
+        previousQuantity: newProductQuantity,
+        newQuantity: previousProductQty,
+        costPriceSnapshot: usage.unitCost,
+        sellingPriceSnapshot: usageSellPrice,
+        totalCost: usage.unitCost * actualReturnedQty,
+        referenceId: selectedOrder.id,
+        repairOrderId: selectedOrder.id,
+        owner,
+        notes: `عكس إرجاع فاشل بعد تعذر حفظ أمر الصيانة: ${usage.partName}`,
+        createdAt: new Date().toISOString()
+      });
+      return {
+        success: false,
+        error: 'فشل حفظ أمر الصيانة بعد إرجاع القطعة، وتم عكس تغييرات المخزون وسجل الاستخدام.',
+        stockUpdateResult,
+        usageUpdateResult,
+        movementInsertResult
+      };
+    }
   }
 
   // Sync to local storage db

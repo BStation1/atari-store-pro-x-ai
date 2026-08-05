@@ -555,6 +555,38 @@ export async function updateRepairOrderInSupabase(
   return order;
 }
 
+
+/**
+ * Strict remote-only update used by multi-step repair-part transactions.
+ * Unlike updateRepairOrderInSupabase, this function does not report a local
+ * fallback as a successful remote save.
+ */
+export async function updateRepairOrderInSupabaseStrict(order: RepairOrder): Promise<boolean> {
+  if (!isSupabaseConfigured) return true;
+
+  const payload = mapRepairOrderToRow(order);
+  delete payload.id;
+  delete payload.created_at;
+
+  try {
+    const { data, error } = await supabase
+      .from('repair_orders')
+      .update(payload)
+      .or(`order_number.eq.${order.id}${isUuid(order.id) ? `,id.eq.${order.id}` : ''}`)
+      .select('id')
+      .maybeSingle();
+
+    if (error || !data) {
+      console.warn('⚠️ [updateRepairOrderInSupabaseStrict] Remote update failed:', error?.message || 'No row returned');
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('⚠️ [updateRepairOrderInSupabaseStrict] Exception:', err);
+    return false;
+  }
+}
+
 /**
  * Deletes a repair order from Supabase
  */

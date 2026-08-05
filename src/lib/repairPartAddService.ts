@@ -2,7 +2,7 @@ import { Product, RepairOrder, RepairPartUsage, SelectedRepairItem, WorkOwnershi
 import { db } from './db';
 import { ensureProductUuidInSupabase, updateProductQuantityInSupabase, addInventoryMovementToSupabase } from './supabaseProducts';
 import { addRepairPartUsageToSupabase, fetchRepairPartUsagesForOrderId, updateRepairPartUsageInSupabase } from './supabasePartUsages';
-import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabase } from './supabaseRepairOrders';
+import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabaseStrict } from './supabaseRepairOrders';
 import { getUsageSellingUnitPrice, calculateSuggestedPriceForFaults } from './repairOrderCalculations';
 import { usageMatchesOrder, usageMatchesDevice } from './accountingEngineV2';
 import { addAuditLogRecordHelper, addTimelineEventHelper } from './repairLogging';
@@ -55,6 +55,9 @@ export async function executeAddPartUsageTransaction(
 
   let createdUsage: RepairPartUsage | null = null;
   let isNewUsageCreated = false;
+  let previousUsageSnapshot: RepairPartUsage | null = null;
+  let movementCreated = false;
+  let stockChanged = false;
   let productUuid = product.id;
   let repairOrderUuid = selectedOrder.id;
 
@@ -86,6 +89,7 @@ export async function executeAddPartUsageTransaction(
     let updatedUsageList: RepairPartUsage[] = [];
 
     if (existingUsage) {
+      previousUsageSnapshot = { ...existingUsage };
       const newUsageQty = existingUsage.quantity + qty;
       const newUsageTotalCost = newUsageQty * unitPurchaseCost;
       const newUsageSellingTotal = newUsageQty * unitSellingPrice;
@@ -151,14 +155,16 @@ export async function executeAddPartUsageTransaction(
     });
 
     if (!movementOk) {
-      throw new Error("فشل تسكيل حركة صرف المخزون بقاعدة البيانات");
+      throw new Error("فشل تسجيل حركة صرف المخزون بقاعدة البيانات");
     }
+    movementCreated = true;
 
     // Step 3: Update Product Quantity
     const stockOk = await updateProductQuantityInSupabase(productUuid, newQty);
     if (!stockOk) {
       throw new Error("فشل خصم الكمية من المخزون بقاعدة البيانات");
     }
+    stockChanged = true;
 
     // Step 4: Rebuild the complete device snapshot from canonical active
     // usages. Never append to the React snapshot because two quick additions
@@ -245,7 +251,7 @@ export async function executeAddPartUsageTransaction(
     );
 
     // Step 5: Await updateRepairOrderInSupabase and verify success
-    const orderSaveOk = await updateRepairOrderInSupabase(updatedOrder);
+    const orderSaveOk = await updateRepairOrderInSupabaseStrict(updatedOrder);
     if (!orderSaveOk) {
       throw new Error("فشل حفظ بيانات أمر الصيانة والتحديثات بجدول الصيانة في الخادم");
     }
@@ -270,19 +276,70 @@ export async function executeAddPartUsageTransaction(
   } catch (err: any) {
     console.error("❌ Add part transaction failed, executing rollback:", err);
 
-    // Rollback stock in Supabase
-    try {
-      await updateProductQuantityInSupabase(productUuid, product.quantity);
-    } catch (rbErr) {
-      console.warn("⚠️ Rollback stock failed:", rbErr);
+    // Roll back only the remote steps that actually succeeded.
+    if (stockChanged) {
+      try {
+        const stockRollbackOk = await updateProductQuantityInSupabase(productUuid, product.quantity, product);
+        if (!stockRollbackOk) console.warn("⚠️ Rollback stock returned false");
+      } catch (rbErr) {
+        console.warn("⚠️ Rollback stock failed:", rbErr);
+      }
     }
 
-    // Rollback created usage if new
-    if (isNewUsageCreated && createdUsage?.id) {
+    // Restore an updated usage to its exact previous values, or reverse a newly
+    // created usage. This prevents a failed order save from leaving quantity
+    // and accounting totals ahead of the real stock state.
+    if (createdUsage?.id) {
       try {
-        await updateRepairPartUsageInSupabase(createdUsage.id, { accountingStatus: 'REVERSED' }, createdUsage);
+        if (isNewUsageCreated) {
+          await updateRepairPartUsageInSupabase(
+            createdUsage.id,
+            { accountingStatus: 'REVERSED' },
+            createdUsage
+          );
+        } else if (previousUsageSnapshot) {
+          await updateRepairPartUsageInSupabase(
+            createdUsage.id,
+            {
+              quantity: previousUsageSnapshot.quantity,
+              unitCost: previousUsageSnapshot.unitCost,
+              totalCost: previousUsageSnapshot.totalCost,
+              sellingPrice: previousUsageSnapshot.sellingPrice,
+              sellingTotal: previousUsageSnapshot.sellingTotal,
+              accountingStatus: previousUsageSnapshot.accountingStatus
+            },
+            createdUsage
+          );
+        }
       } catch (rbErr) {
         console.warn("⚠️ Rollback usage failed:", rbErr);
+      }
+    }
+
+    // Inventory movements are append-only. Compensate a created outgoing row
+    // with a linked RETURN row so reports net the failed operation back to zero.
+    if (movementCreated) {
+      try {
+        const compensationOk = await addInventoryMovementToSupabase({
+          productId: productUuid,
+          productNameSnapshot: product.nameAr || product.name,
+          movementType: 'RETURN',
+          usageType: 'REPAIR_USAGE_RETURN',
+          quantityChange: qty,
+          previousQuantity: newQty,
+          newQuantity: product.quantity,
+          costPriceSnapshot: unitPurchaseCost,
+          sellingPriceSnapshot: 0,
+          totalCost,
+          referenceId: selectedOrder.id,
+          repairOrderId: repairOrderUuid,
+          owner,
+          notes: `عكس صرف فاشل لقطعة صيانة: ${product.nameAr || product.name}`,
+          createdAt: new Date().toISOString()
+        });
+        if (!compensationOk) console.warn("⚠️ Rollback movement compensation returned false");
+      } catch (rbErr) {
+        console.warn("⚠️ Rollback movement compensation failed:", rbErr);
       }
     }
 
