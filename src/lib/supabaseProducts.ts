@@ -138,7 +138,7 @@ export function mapProductToRow(
   };
 
   // If id is a valid UUID, pass it
-  if (prod.id && !prod.id.startsWith('P-') && prod.id.length > 10) {
+  if (prod.id && isUuid(prod.id)) {
     row.id = prod.id;
   }
 
@@ -795,49 +795,104 @@ export async function getInventoryMovements(productId?: string): Promise<Invento
 }
 
 export async function ensureProductUuidInSupabase(product: Product): Promise<string | null> {
-  if (isUuid(product.id)) return product.id;
-  if (!isSupabaseConfigured) return null;
+  if (!isSupabaseConfigured) return product.id || null;
 
   try {
-    // Search by sku or barcode or name
-    let query = supabase.from('products').select('id, quantity');
-    if (product.sku) {
-      query = query.eq('sku', product.sku);
-    } else if (product.barcode) {
-      query = query.eq('barcode', product.barcode);
-    } else {
-      query = query.eq('name', product.nameAr || product.name);
+    // 1. If product.id is a UUID, check if it actually exists in Supabase products table
+    if (product.id && isUuid(product.id)) {
+      const { data: existingById } = await supabase
+        .from('products')
+        .select('id')
+        .eq('id', product.id)
+        .maybeSingle();
+
+      if (existingById?.id) {
+        return existingById.id;
+      }
     }
 
-    const { data: existing } = await query.maybeSingle();
-    if (existing?.id && isUuid(existing.id)) {
-      return existing.id;
+    // 2. Search by SKU
+    if (product.sku && product.sku.trim()) {
+      const { data: existingBySku } = await supabase
+        .from('products')
+        .select('id')
+        .eq('sku', product.sku.trim())
+        .maybeSingle();
+
+      if (existingBySku?.id && isUuid(existingBySku.id)) {
+        return existingBySku.id;
+      }
     }
 
-    // Insert product if missing
-    const row = {
-      name: product.nameAr || product.name,
-      sku: product.sku || `SKU-${Date.now()}`,
-      barcode: product.barcode || null,
-      quantity: Number(product.quantity || 0),
-      cost_price: Number(product.purchasePrice || 0),
-      selling_price: Number(product.sellPrice || 0),
-    };
+    // 3. Search by Barcode
+    if (product.barcode && product.barcode.trim()) {
+      const { data: existingByBarcode } = await supabase
+        .from('products')
+        .select('id')
+        .eq('barcode', product.barcode.trim())
+        .maybeSingle();
 
-    const { data: created, error } = await supabase
+      if (existingByBarcode?.id && isUuid(existingByBarcode.id)) {
+        return existingByBarcode.id;
+      }
+    }
+
+    // 4. Search by Name
+    const productName = (product.nameAr || product.name || '').trim();
+    if (productName) {
+      const { data: existingByName } = await supabase
+        .from('products')
+        .select('id')
+        .eq('name', productName)
+        .maybeSingle();
+
+      if (existingByName?.id && isUuid(existingByName.id)) {
+        return existingByName.id;
+      }
+    }
+
+    // 5. Product does not exist in Supabase! Migrate/upsert local product to Supabase products table
+    const categoryMap = await getCategoryUuidMap();
+    const row = mapProductToRow(product, categoryMap);
+
+    let { data: created, error } = await supabase
       .from('products')
       .insert([row])
       .select('id')
-      .single();
+      .maybeSingle();
+
+    if (error && (error.code === 'PGRST204' || error.message?.includes('is_archived'))) {
+      const fallbackRow = { ...row };
+      delete fallbackRow.is_archived;
+      const retryRes = await supabase
+        .from('products')
+        .insert([fallbackRow])
+        .select('id')
+        .maybeSingle();
+      created = retryRes.data;
+      error = retryRes.error;
+    }
+
+    if (error && (error.code === '23505' || error.message?.includes('primary') || error.message?.includes('id'))) {
+      const noIdRow = { ...row };
+      delete noIdRow.id;
+      const retryRes = await supabase
+        .from('products')
+        .insert([noIdRow])
+        .select('id')
+        .maybeSingle();
+      created = retryRes.data;
+      error = retryRes.error;
+    }
 
     if (error) {
-      console.warn("⚠️ Error creating product in Supabase:", error.message);
+      console.error("❌ Error creating missing product in Supabase:", error.message);
       return null;
     }
 
     return created?.id || null;
   } catch (err) {
-    console.warn("⚠️ Exception resolving product UUID:", err);
+    console.error("❌ Exception resolving product UUID in Supabase:", err);
     return null;
   }
 }
@@ -861,23 +916,28 @@ export async function updateProductQuantityInSupabase(productId: string, newQuan
       if (fetched) realUuid = fetched;
     }
 
-    if (isUuid(realUuid)) {
-      const { error } = await supabase
-        .from('products')
-        .update({
-          quantity: newQuantity,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', realUuid);
-
-      if (error) {
-        console.warn("⚠️ Notice updating product quantity in Supabase:", error.message);
-      }
+    if (!isUuid(realUuid)) {
+      console.error("❌ Invalid product UUID for quantity update:", productId);
+      return false;
     }
+
+    const { error } = await supabase
+      .from('products')
+      .update({
+        quantity: newQuantity,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', realUuid);
+
+    if (error) {
+      console.error("❌ Error updating product quantity in Supabase:", error.message);
+      return false;
+    }
+
     return true;
-  } catch (err) {
-    console.warn("⚠️ Exception updating product quantity in Supabase:", err);
-    return true;
+  } catch (err: any) {
+    console.error("❌ Exception updating product quantity in Supabase:", err?.message || err);
+    return false;
   }
 }
 
@@ -905,6 +965,11 @@ export async function addInventoryMovementToSupabase(movement: any): Promise<boo
     }
   }
 
+  if (!isUuid(realProdUuid)) {
+    console.error("❌ Cannot record inventory_movement: Product UUID is invalid or missing in Supabase:", movement.productId);
+    return false;
+  }
+
   // Map movement_type to valid enum: ('SALE', 'PURCHASE', 'RETURN', 'REPAIR_USAGE', 'ADJUSTMENT', 'DELETION_RESTORE')
   let movType = movement.movementType;
   if (movement.movementType === 'RETURN' || movement.usageType === 'REPAIR_USAGE_RETURN' || movement.movementType === 'PARTNER_WITHDRAWAL_RETURN') {
@@ -916,7 +981,7 @@ export async function addInventoryMovementToSupabase(movement: any): Promise<boo
   }
 
   const row: any = {
-    product_id: isUuid(realProdUuid) ? realProdUuid : null,
+    product_id: realProdUuid,
     movement_type: movType,
     quantity_change: Number(movement.quantityChange),
     previous_quantity: Number(movement.previousQuantity || 0),
@@ -939,13 +1004,15 @@ export async function addInventoryMovementToSupabase(movement: any): Promise<boo
       .insert([row]);
 
     if (error) {
-      console.warn("⚠️ Notice inserting inventory_movements into Supabase:", error.message);
+      console.error("❌ Error inserting inventory_movements into Supabase:", error.message);
+      return false;
     }
-  } catch (err) {
-    console.warn("⚠️ Exception inserting inventory_movements into Supabase:", err);
-  }
 
-  return true;
+    return true;
+  } catch (err: any) {
+    console.error("❌ Exception inserting inventory_movements into Supabase:", err?.message || err);
+    return false;
+  }
 }
 
 /**

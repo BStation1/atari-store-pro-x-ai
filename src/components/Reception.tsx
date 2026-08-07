@@ -502,7 +502,7 @@ export default function Reception({ prefillData, onNavigate }: ReceptionProps) {
           reportedFaults: d.reportedFaults || d.selectedQuickFaults || [],
           technicalProcedures: selectedItems,
           needsInspection: d.needsInspection || false,
-          selectedRepairItems: selectedItems,
+          selectedRepairItems: selectedItems.filter(item => Boolean(item.usageId)),
           estimatedCost: d.needsInspection ? 0 : (d.estimatedCost || totalRepairPrice),
           partsCost: totalCostPrice,
           laborCost: Math.max(0, (d.estimatedCost || totalRepairPrice) - totalCostPrice),

@@ -106,6 +106,10 @@ export async function addRepairPartUsageToSupabase(
     }
   }
 
+  if (!isUuid(resolvedOrderUuid)) {
+    throw new Error(`تعذر ربط أمر الصيانة بقاعدة البيانات Supabase (المعرف ${partUsage.repairOrderId} غير موجود/غير صالح)`);
+  }
+
   // 2. Resolve inventory_item_id UUID in Supabase if needed
   let resolvedItemUuid = partUsage.inventoryItemId;
   if (resolvedItemUuid && !isUuid(resolvedItemUuid)) {
@@ -118,12 +122,14 @@ export async function addRepairPartUsageToSupabase(
 
       if (existingProd?.id && isUuid(existingProd.id)) {
         resolvedItemUuid = existingProd.id;
-      } else {
-        resolvedItemUuid = undefined;
       }
     } catch (err) {
-      resolvedItemUuid = undefined;
+      // ignore
     }
+  }
+
+  if (!isUuid(resolvedItemUuid)) {
+    throw new Error(`تعذر ربط قطعة الغيار بقاعدة البيانات Supabase (المعرف ${partUsage.inventoryItemId} غير موجود/غير صالح)`);
   }
 
   // Map ownership
@@ -135,51 +141,36 @@ export async function addRepairPartUsageToSupabase(
   }
 
   const row: any = {
-    repair_order_id: isUuid(resolvedOrderUuid) ? resolvedOrderUuid : null,
-    inventory_item_id: isUuid(resolvedItemUuid) ? resolvedItemUuid : null,
+    repair_order_id: resolvedOrderUuid,
+    inventory_item_id: resolvedItemUuid,
     part_name_snapshot: partUsage.partName,
-    part_name: partUsage.partName,
-    sku: partUsage.sku || null,
     quantity: Number(partUsage.quantity || 1),
     cost_price_snapshot: Number(partUsage.unitCost || 0),
-    unit_cost: Number(partUsage.unitCost || 0),
     selling_price_snapshot: Number(partUsage.sellingPrice || partUsage.unitCost || 0),
-    total_cost: Number(partUsage.totalCost || (partUsage.quantity * partUsage.unitCost)),
-    selling_total: Number(partUsage.sellingTotal || (partUsage.quantity * (partUsage.sellingPrice || partUsage.unitCost || 0))),
     stock_ownership_snapshot: ownershipEnum,
-    ownership_type: partUsage.ownershipType || 'CUSTOMER_SHARED',
-    responsible_partner_id: partUsage.responsiblePartnerId || 'SHOP',
-    accounting_status: partUsage.accountingStatus || 'CONSUMED',
-    created_at: partUsage.createdAt || new Date().toISOString(),
-    employee_name: partUsage.employeeName || null,
-    warehouse: partUsage.warehouse || null,
-    notes: partUsage.notes || null
+    created_at: partUsage.createdAt || new Date().toISOString()
   };
 
   if (isUuid(partUsage.id)) {
     row.id = partUsage.id;
   }
 
-  try {
-    const { data: insertedRow, error } = await supabase
-      .from('repair_part_usages')
-      .insert([row])
-      .select()
-      .single();
+  const { data: insertedRow, error } = await supabase
+    .from('repair_part_usages')
+    .insert([row])
+    .select()
+    .single();
 
-    if (error) {
-      console.warn("⚠️ Notice inserting repair_part_usages into Supabase:", error.message);
-    }
-
-    return db.addRepairPartUsage({
-      ...partUsage,
-      id: insertedRow?.id ? String(insertedRow.id) : partUsage.id,
-      repairOrderId: partUsage.repairOrderId
-    } as any);
-  } catch (err) {
-    console.warn("⚠️ Exception inserting repair_part_usages into Supabase:", err);
-    return db.addRepairPartUsage(partUsage);
+  if (error) {
+    console.error("❌ Error inserting repair_part_usages into Supabase:", error.message);
+    throw new Error(`فشل حفظ سجل قطعة الغيار في قاعدة البيانات Supabase: ${error.message}`);
   }
+
+  return db.addRepairPartUsage({
+    ...partUsage,
+    id: insertedRow?.id ? String(insertedRow.id) : partUsage.id,
+    repairOrderId: partUsage.repairOrderId
+  } as any);
 }
 
 export async function updateRepairPartUsageInSupabase(id: string, updates: Partial<RepairPartUsage>): Promise<boolean> {

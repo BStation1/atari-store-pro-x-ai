@@ -436,8 +436,42 @@ export const authStore = {
 
       if (!profile) {
         console.warn("⚠️ Profile not found for session user:", session.user.id);
-        this.clearSession();
-        return { user: null, error: "لم يتم العثور على الملف الشخصي للمستخدم في قاعدة البيانات." };
+        // Fallback: create or sync profile in public.profiles so user profile is preserved
+        const metaRole = String(session.user.user_metadata?.role || "OWNER").toUpperCase();
+        const fallbackRole: UserRole = (metaRole === "OWNER" || metaRole === "ADMIN") ? "OWNER" : (metaRole as UserRole);
+
+        const newProfileData = {
+          id: session.user.id,
+          email: session.user.email || "",
+          full_name: session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "مستخدم",
+          role: fallbackRole === "OWNER" ? "OWNER" : fallbackRole === "TECHNICIAN" ? "ENGINEER" : "RECEPTION"
+        };
+
+        try {
+          await supabase.from("profiles").upsert(newProfileData, { onConflict: "id" });
+        } catch (e) {
+          console.warn("⚠️ Fallback profile upsert error:", e);
+        }
+
+        // Re-read or construct profile
+        const activeUser: AuthUser = {
+          id: session.user.id,
+          fullName: newProfileData.full_name,
+          name: newProfileData.full_name,
+          username: (session.user.email || "user").split("@")[0],
+          email: session.user.email || "",
+          phone: "",
+          roleId: fallbackRole,
+          role: fallbackRole.toLowerCase(),
+          permissions: ALL_PERMISSIONS,
+          isActive: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80"
+        };
+
+        this.setActiveUser(activeUser);
+        return { user: activeUser };
       }
 
       if (profile.is_active === false) {
@@ -513,7 +547,11 @@ export const authStore = {
       if (authError) {
         console.warn("⚠️ Supabase login error:", authError.message);
         this.logLoginAttempt(usernameOrEmail, false, authError.message);
-        return { success: false, error: "اسم المستخدم أو كلمة المرور غير صحيحة" };
+        let msg = "اسم المستخدم أو كلمة المرور غير صحيحة";
+        if (authError.message.includes("Email not confirmed")) {
+          msg = "البريد الإلكتروني لم يتم تأكيده في Supabase Auth (Email not confirmed). يرجى تأكيد البريد أولاً.";
+        }
+        return { success: false, error: msg };
       }
 
       if (!authData || !authData.session || !authData.user) {

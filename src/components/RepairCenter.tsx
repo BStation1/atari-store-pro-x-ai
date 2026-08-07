@@ -52,9 +52,9 @@ import CancelWarrantyModal from "./CancelWarrantyModal";
 import { canDeliverDevice, canReopenDeliveredOrder, canCancelWarranty } from "../lib/authPermissions";
 import { db } from "../lib/data";
 import { addInventoryMovementToSupabase, ensureProductUuidInSupabase, updateProductQuantityInSupabase } from "../lib/supabaseProducts";
-import { addRepairPartUsageToSupabase, updateRepairPartUsageInSupabase } from "../lib/supabasePartUsages";
+import { addRepairPartUsageToSupabase, updateRepairPartUsageInSupabase, fetchOrMigrateRepairPartUsages } from "../lib/supabasePartUsages";
 import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabase } from "../lib/supabaseRepairOrders";
-import { executeRemovePartUsageTransaction } from "../lib/repairPartRemovalService";
+import { executeRemovePartUsageTransaction, resolveCanonicalRepairPartUsage } from "../lib/repairPartRemovalService";
 import { executeAddPartUsageTransaction } from "../lib/repairPartAddService";
 import { usageMatchesOrder, usageMatchesDevice, syncOrderSelectedRepairItemsFromUsages, getActiveRepairUsagesForDevice, getActiveRepairUsagesForOrder } from "../lib/accountingEngineV2";
 import { sendRepairNotificationWorkflow } from "../lib/whatsapp";
@@ -710,22 +710,70 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
   const handleRemovePartUsage = async (usageId: string, deviceIdx: number, removeQty: number = 1) => {
     if (!selectedOrder) return;
-    const usage = partUsages.find(pu => pu.id === usageId);
-    if (!usage) return;
 
-    if (usage.accountingStatus === 'RETURNED') return;
-    if (busyProductIds.has(usage.inventoryItemId)) return;
+    let currentPartUsages = partUsages;
 
-    setBusyProductIds(prev => new Set(prev).add(usage.inventoryItemId));
+    // Check if currentPartUsages in state has active usages for selectedOrder
+    const activeUsagesInState = currentPartUsages.filter(pu =>
+      pu.accountingStatus !== 'RETURNED' &&
+      pu.accountingStatus !== 'REVERSED' &&
+      usageMatchesOrder(pu, selectedOrder)
+    );
+
+    // Prefer fetching fresh canonical partUsages if state is incomplete or usages for this order are missing
+    if (!partUsagesLoaded || activeUsagesInState.length === 0) {
+      try {
+        const fetchRes = await fetchOrMigrateRepairPartUsages();
+        if (fetchRes.success && fetchRes.partUsages) {
+          currentPartUsages = fetchRes.partUsages;
+          persistLocalUsages(fetchRes.partUsages);
+        }
+      } catch (err) {
+        console.warn("⚠️ [handleRemovePartUsage] Notice fetching fresh usages:", err);
+      }
+    }
+
+    // Safely resolve canonical usage record using stable identifiers
+    const resolved = resolveCanonicalRepairPartUsage({
+      clickedId: usageId,
+      deviceIdx,
+      selectedOrder,
+      products,
+      partUsages: currentPartUsages
+    });
+
+    if (!resolved.usage) {
+      dialog.alert({
+        message: resolved.error || "تعذر تحديد كود قطعة الغيار المطلوب إرجاعها من أمر الصيانة.",
+        variant: resolved.isAmbiguous ? "warning" : "error"
+      });
+      return;
+    }
+
+    const canonicalUsage = resolved.usage;
+
+    if (canonicalUsage.accountingStatus === 'RETURNED' || canonicalUsage.accountingStatus === 'REVERSED') {
+      dialog.alert({
+        message: "قطعة الغيار هذه ملغاة أو مرجعة بالفعل.",
+        variant: "info"
+      });
+      return;
+    }
+
+    const targetInventoryItemId = canonicalUsage.inventoryItemId;
+
+    if (busyProductIds.has(targetInventoryItemId)) return;
+
+    setBusyProductIds(prev => new Set(prev).add(targetInventoryItemId));
 
     try {
       const res = await executeRemovePartUsageTransaction({
-        usageId,
+        usageId: canonicalUsage.id,
         deviceIdx,
         removeQty,
         selectedOrder,
         products,
-        partUsages
+        partUsages: currentPartUsages
       });
 
       if (!res.success) {
@@ -736,9 +784,9 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
         return;
       }
 
-      // UI updates ONLY AFTER all three persistence operations succeed
+      // UI updates ONLY AFTER all persistence operations succeed
       if (res.updatedProducts) {
-        const prod = res.updatedProducts.find(p => p.id === usage.inventoryItemId);
+        const prod = res.updatedProducts.find(p => p.id === targetInventoryItemId || p.id === canonicalUsage.inventoryItemId);
         if (prod) setProductLocal(prod);
       }
       if (res.updatedPartUsages) {
@@ -757,7 +805,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     } finally {
       setBusyProductIds(prev => {
         const next = new Set(prev);
-        next.delete(usage.inventoryItemId);
+        next.delete(targetInventoryItemId);
         return next;
       });
     }

@@ -556,6 +556,67 @@ export async function updateRepairOrderInSupabase(
 }
 
 /**
+ * Strict version of updateRepairOrderInSupabase that checks for Supabase save errors
+ */
+export async function updateRepairOrderInSupabaseStrict(
+  order: RepairOrder,
+  currentUser?: User
+): Promise<{ success: boolean; updatedOrder?: RepairOrder; error?: string }> {
+  const localList = getLocalRepairOrdersBackup();
+
+  if (!isSupabaseConfigured) {
+    const idx = localList.findIndex(o => o.id === order.id);
+    if (idx !== -1) localList[idx] = order;
+    else localList.unshift(order);
+    saveLocalRepairOrdersBackup(localList, true);
+    return { success: true, updatedOrder: order };
+  }
+
+  const nowIso = new Date().toISOString();
+  const firstDevice = order.devices?.[0];
+
+  const payload: Record<string, any> = {
+    order_number: order.id,
+    customer_id: isUuid(order.customerId) ? order.customerId : null,
+    status: mapUiStatusToDbStatus(order.status),
+    tracking_token: order.trackingToken,
+    updated_at: nowIso,
+    estimated_cost: Number(order.totalEstimatedCost || order.finalRepairPrice || 0),
+    final_cost: Number(order.finalRepairPrice || order.totalEstimatedCost || 0),
+    device_type: firstDevice?.type || null,
+    device_model: firstDevice?.model || null,
+    serial_number: firstDevice?.serialNumber || null,
+    delivered_at: order.deliveredAt || null,
+    reopened_at: order.reopenedAt || null,
+    notes: JSON.stringify(order)
+  };
+
+  try {
+    const { data, error } = await supabase
+      .from('repair_orders')
+      .update(payload)
+      .or(`order_number.eq.${order.id}${isUuid(order.id) ? `,id.eq.${order.id}` : ''}`)
+      .select()
+      .maybeSingle();
+
+    if (error) {
+      console.error("⚠️ [updateRepairOrderInSupabaseStrict] Error updating repair order in Supabase:", error.message);
+      return { success: false, error: `فشل تحديث أمر الصيانة في Supabase: ${error.message}` };
+    }
+
+    const updated = data ? mapRowToRepairOrder(data) : order;
+    const idx = localList.findIndex(o => o.id === updated.id);
+    if (idx !== -1) localList[idx] = updated;
+    else localList.unshift(updated);
+    saveLocalRepairOrdersBackup(localList, true);
+    return { success: true, updatedOrder: updated };
+  } catch (err: any) {
+    console.error("⚠️ [updateRepairOrderInSupabaseStrict] Exception:", err);
+    return { success: false, error: err?.message || 'فشل تحديث أمر الصيانة في Supabase' };
+  }
+}
+
+/**
  * Deletes a repair order from Supabase
  */
 export async function deleteRepairOrderFromSupabase(

@@ -2,7 +2,8 @@ import { Product, RepairOrder, RepairPartUsage, SelectedRepairItem, WorkOwnershi
 import { db } from './db';
 import { ensureProductUuidInSupabase, updateProductQuantityInSupabase, addInventoryMovementToSupabase } from './supabaseProducts';
 import { addRepairPartUsageToSupabase, updateRepairPartUsageInSupabase } from './supabasePartUsages';
-import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabase } from './supabaseRepairOrders';
+import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabase, updateRepairOrderInSupabaseStrict } from './supabaseRepairOrders';
+import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { getUsageSellingUnitPrice, calculateSuggestedPriceForFaults } from './repairOrderCalculations';
 import { usageMatchesOrder, usageMatchesDevice } from './accountingEngineV2';
 import { addAuditLogRecordHelper, addTimelineEventHelper } from './repairLogging';
@@ -62,22 +63,32 @@ export async function executeAddPartUsageTransaction(
   else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) owner = 'ABDO';
 
   let createdUsage: RepairPartUsage | null = null;
+  let createdUsageId: string | null = null;
+  let createdMovementId: string | null = null;
   let isNewUsageCreated = false;
-  let productUuid = product.id;
-  let repairOrderUuid = selectedOrder.id;
+  let isStockUpdated = false;
+  let productUuid: string = product.id;
+  let repairOrderUuid: string = selectedOrder.id;
 
   try {
-    const [resolvedProdUuid, resolvedOrderUuid] = await Promise.all([
-      ensureProductUuidInSupabase(product).then(val => val || product.id),
-      ensureRepairOrderUuidInSupabase(selectedOrder).then(val => val || selectedOrder.id)
-    ]);
+    // STEP A: Ensure canonical product exists remotely
+    const resolvedProdUuid = await ensureProductUuidInSupabase(product);
+    if (!resolvedProdUuid) {
+      throw new Error("فشل الربط بقاعدة بيانات المنتجات في الخادم Supabase");
+    }
     productUuid = resolvedProdUuid;
+
+    // Ensure repair order exists remotely
+    const resolvedOrderUuid = await ensureRepairOrderUuidInSupabase(selectedOrder);
+    if (!resolvedOrderUuid) {
+      throw new Error("فشل الربط بقاعدة بيانات أوامر الصيانة في الخادم Supabase");
+    }
     repairOrderUuid = resolvedOrderUuid;
 
     // Check existing active usage for same product on this order & device
     const allUsages = [...partUsages];
     const existingUsage = allUsages.find(
-      pu => pu.inventoryItemId === product.id &&
+      pu => (pu.inventoryItemId === product.id || pu.inventoryItemId === productUuid) &&
             pu.accountingStatus !== 'RETURNED' &&
             pu.accountingStatus !== 'REVERSED' &&
             usageMatchesOrder(pu, selectedOrder) &&
@@ -86,6 +97,7 @@ export async function executeAddPartUsageTransaction(
 
     let updatedUsageList: RepairPartUsage[] = [];
 
+    // STEP B: Insert or update repair_part_usage with canonical remote product ID
     if (existingUsage) {
       const effectiveUnitCost = unitPurchaseCost > 0 ? unitPurchaseCost : (existingUsage.unitCost || 0);
       const newUsageQty = existingUsage.quantity + qty;
@@ -101,7 +113,7 @@ export async function executeAddPartUsageTransaction(
 
       const ok = await updateRepairPartUsageInSupabase(existingUsage.id, usageUpdate);
       if (!ok) {
-        throw new Error("فشل تحديث سجل قطعة الغيار بفي قاعدة البيانات");
+        throw new Error("فشل تحديث سجل قطعة الغيار في قاعدة البيانات Supabase");
       }
 
       createdUsage = {
@@ -111,7 +123,11 @@ export async function executeAddPartUsageTransaction(
       updatedUsageList = allUsages.map(pu => pu.id === existingUsage.id ? createdUsage! : pu);
     } else {
       isNewUsageCreated = true;
+      const generatedUsageId = crypto.randomUUID();
+      createdUsageId = generatedUsageId;
+
       const usageToInsert = {
+        id: generatedUsageId,
         repairOrderId: repairOrderUuid,
         inventoryItemId: productUuid,
         partName: product.nameAr || product.name,
@@ -129,13 +145,17 @@ export async function executeAddPartUsageTransaction(
 
       createdUsage = await addRepairPartUsageToSupabase(usageToInsert);
       if (!createdUsage || !createdUsage.id) {
-        throw new Error("فشل إنشاء سجل قطعة الغيار بقاعدة البيانات");
+        throw new Error("فشل إنشاء سجل قطعة الغيار بقاعدة البيانات Supabase");
       }
       updatedUsageList = [...allUsages, createdUsage];
     }
 
-    // Step 2: Create inventory movement
+    // STEP C: Insert REPAIR_USAGE inventory movement
+    const generatedMovementId = crypto.randomUUID();
+    createdMovementId = generatedMovementId;
+
     const movementOk = await addInventoryMovementToSupabase({
+      id: generatedMovementId,
       productId: productUuid,
       productNameSnapshot: product.nameAr || product.name,
       movementType: 'REPAIR_USAGE',
@@ -153,20 +173,21 @@ export async function executeAddPartUsageTransaction(
     });
 
     if (!movementOk) {
-      throw new Error("فشل تسكيل حركة صرف المخزون بقاعدة البيانات");
+      throw new Error("فشل تسجيل حركة صرف المخزون بقاعدة البيانات Supabase");
     }
 
-    // Step 3: Update Product Quantity
+    // STEP D: Update remote product stock quantity
     const stockOk = await updateProductQuantityInSupabase(productUuid, newQty);
     if (!stockOk) {
-      throw new Error("فشل خصم الكمية من المخزون بقاعدة البيانات");
+      throw new Error("فشل خصم الكمية من المخزون بقاعدة البيانات Supabase");
     }
+    isStockUpdated = true;
 
-    // Step 4: Add persisted part to device.selectedRepairItems using REAL persisted usage id
+    // STEP E: Persist repair order snapshot
     const itemToPut: SelectedRepairItem = {
       id: createdUsage.id,
       usageId: createdUsage.id,
-      productId: product.id,
+      productId: productUuid,
       name: product.nameAr || product.name,
       quantity: createdUsage.quantity,
       costPrice: unitPurchaseCost,
@@ -237,7 +258,7 @@ export async function executeAddPartUsageTransaction(
       "ADD_PART",
       `قطع غيار جهاز ${currentDevice.type}`,
       null,
-      `${product.name} (سعر البيع: ${unitSellingPrice} ج.م | كمية: ${qty})`,
+      `${product.nameAr || product.name} (سعر البيع: ${unitSellingPrice} ج.م | كمية: ${qty})`,
       "صرف قطعة غيار من المخزون وتوثيق حركة السحب",
       currentUserForAction,
       currentDevice.id
@@ -246,48 +267,61 @@ export async function executeAddPartUsageTransaction(
     updatedOrder = addTimelineEventHelper(
       updatedOrder,
       "PART_ADDED",
-      `صرف قطعة غيار من المخزون: ${product.name} (كمية ${qty} بسعر بيع ${unitSellingPrice} ج.م)`,
+      `صرف قطعة غيار من المخزون: ${product.nameAr || product.name} (كمية ${qty} بسعر بيع ${unitSellingPrice} ج.م)`,
       currentUserForAction,
       currentDevice.id
     );
 
-    // Step 5: Await updateRepairOrderInSupabase and verify success
-    const orderSaveOk = await updateRepairOrderInSupabase(updatedOrder);
-    if (!orderSaveOk) {
-      throw new Error("فشل حفظ بيانات أمر الصيانة والتحديثات بجدول الصيانة في الخادم");
+    const orderSaveRes = await updateRepairOrderInSupabaseStrict(updatedOrder);
+    if (!orderSaveRes.success) {
+      throw new Error(`فشل حفظ بيانات أمر الصيانة بجدول الصيانة في الخادم Supabase: ${orderSaveRes.error || "خطأ غير معروف"}`);
     }
+    const finalOrder = orderSaveRes.updatedOrder || updatedOrder;
 
     // Success: Update local DB collections
-    const updatedProductsList = products.map(p => p.id === product.id ? { ...p, quantity: newQty } : p);
+    const updatedProductsList = products.map(p => (p.id === product.id || p.id === productUuid) ? { ...p, id: productUuid, quantity: newQty } : p);
     db.saveProducts(updatedProductsList);
     db.saveRepairPartUsages(updatedUsageList);
 
     const allOrders = db.getRepairOrders();
-    const updatedOrdersList = allOrders.map(o => o.id === updatedOrder.id || o.uuid === updatedOrder.uuid ? updatedOrder : o);
+    const updatedOrdersList = allOrders.map(o => o.id === finalOrder.id || o.uuid === finalOrder.uuid ? finalOrder : o);
     db.saveRepairOrders(updatedOrdersList);
 
     return {
       success: true,
       updatedProducts: updatedProductsList,
       updatedPartUsages: updatedUsageList,
-      updatedOrder,
+      updatedOrder: finalOrder,
       createdUsage
     };
 
   } catch (err: any) {
     console.error("❌ Add part transaction failed, executing rollback:", err);
 
-    // Rollback stock in Supabase
-    try {
-      await updateProductQuantityInSupabase(productUuid, product.quantity);
-    } catch (rbErr) {
-      console.warn("⚠️ Rollback stock failed:", rbErr);
+    // SAFE ROLLBACK IN REVERSE ORDER:
+
+    // Rollback Step D: Product Quantity
+    if (isStockUpdated) {
+      try {
+        await updateProductQuantityInSupabase(productUuid, product.quantity);
+      } catch (rbErr) {
+        console.warn("⚠️ Rollback stock failed:", rbErr);
+      }
     }
 
-    // Rollback created usage if new
-    if (isNewUsageCreated && createdUsage?.id) {
+    // Rollback Step C: Inventory Movement
+    if (createdMovementId && isSupabaseConfigured) {
       try {
-        await updateRepairPartUsageInSupabase(createdUsage.id, { accountingStatus: 'REVERSED' });
+        await supabase.from('inventory_movements').delete().eq('id', createdMovementId);
+      } catch (rbErr) {
+        console.warn("⚠️ Rollback movement failed:", rbErr);
+      }
+    }
+
+    // Rollback Step B: Repair Part Usage
+    if (createdUsageId && isNewUsageCreated && isSupabaseConfigured) {
+      try {
+        await supabase.from('repair_part_usages').delete().eq('id', createdUsageId);
       } catch (rbErr) {
         console.warn("⚠️ Rollback usage failed:", rbErr);
       }
