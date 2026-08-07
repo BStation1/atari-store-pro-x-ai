@@ -278,7 +278,10 @@ export const authStore = {
     }
 
     const now = new Date().toISOString();
-    const finalProfileId = (authUserId && !authUserId.startsWith("U-")) ? authUserId : crypto.randomUUID();
+    if (!authUserId) {
+      return { success: false, error: "تعذر إنشاء أو ربط حساب المالك مع نظام المصادقة Supabase Auth." };
+    }
+    const finalProfileId = authUserId;
 
     const ownerUser: AuthUser = {
       id: finalProfileId,
@@ -337,6 +340,7 @@ export const authStore = {
   clearSession() {
     if (typeof window === "undefined") return;
     localStorage.removeItem("atari_active_user_session");
+    localStorage.removeItem("atari_current_session_v1");
     localStorage.removeItem(CURRENT_SESSION_KEY);
     localStorage.removeItem("atari_current_user");
     window.dispatchEvent(new Event("atari_auth_changed"));
@@ -547,32 +551,6 @@ export const authStore = {
       return { user: activeUser };
     } catch (err: any) {
       console.warn("⚠️ Exception during validateAndSyncSession:", err);
-      // Ensure valid session is NOT cleared on exception
-      try {
-        const { data: { session: fallbackSession } } = await supabase.auth.getSession();
-        if (fallbackSession?.user) {
-          const fallbackUser: AuthUser = {
-            id: fallbackSession.user.id,
-            fullName: fallbackSession.user.user_metadata?.full_name || fallbackSession.user.email?.split("@")[0] || "مستخدم",
-            name: fallbackSession.user.user_metadata?.full_name || fallbackSession.user.email?.split("@")[0] || "مستخدم",
-            username: (fallbackSession.user.email || "user").split("@")[0],
-            email: fallbackSession.user.email || "",
-            phone: "",
-            roleId: "OWNER",
-            role: "owner",
-            permissions: ALL_PERMISSIONS,
-            isActive: true,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80"
-          };
-          this.setActiveUser(fallbackUser);
-          return { user: fallbackUser };
-        }
-      } catch (e) {
-        console.warn("⚠️ Error getting fallback session:", e);
-      }
-
       this.clearSession();
       return { user: null, error: err?.message || "حدث خطأ غير متوقع أثناء الاتصال بالخادم." };
     }

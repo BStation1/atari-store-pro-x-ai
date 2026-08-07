@@ -147,9 +147,9 @@ function MainApp() {
   }, []);
 
   const handleNavigate = (view: string, params: any = null) => {
-    // If navigating to internal page and not logged in, redirect to login
+    // If navigating to internal page and not logged in with valid Supabase session, redirect to login
     const isPublic = view === "tracking" || view === "login" || view === "setup" || view === "unauthorized";
-    if (!isPublic && !currentLoggedUser) {
+    if (!isPublic && (!hasSupabaseSession || !currentLoggedUser)) {
       setPostLoginRedirect(view);
       setCurrentView("login");
       return;
@@ -163,8 +163,9 @@ function MainApp() {
     setCmdSearchQuery("");
   };
 
-  const handleLogout = () => {
-    authStore.logout();
+  const handleLogout = async () => {
+    await authStore.logout();
+    setHasSupabaseSession(false);
     setIsUserMenuOpen(false);
     setIsProfileModalOpen(false);
     setCurrentView("login");
@@ -206,6 +207,7 @@ function MainApp() {
   // Check if system has an owner & verify session from Supabase
   const [hasOwner, setHasOwner] = useState<boolean>(true); // Default to true so setup screen NEVER flashes accidentally
   const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
+  const [hasSupabaseSession, setHasSupabaseSession] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
   const checkAuthAndOwner = async () => {
@@ -216,6 +218,7 @@ function MainApp() {
       if (!isSupabaseConfigured) {
         // If Supabase environment variables are missing, fallback to local operational mode without crash
         setHasOwner(true);
+        setHasSupabaseSession(false);
         setIsAuthChecking(false);
         return;
       }
@@ -228,19 +231,25 @@ function MainApp() {
           ? "تعذر الاتصال بقاعدة البيانات Supabase. يرجى التحقق من إعدادات VITE_SUPABASE_URL و VITE_SUPABASE_PUBLISHABLE_KEY في Vercel ثم إعادة النشر (Redeploy)."
           : sessionRes.error;
         setAuthError(cleanErr);
+        setHasSupabaseSession(false);
         setIsAuthChecking(false);
         return;
       }
 
       // 2. If no user session exists, check if system has an owner in Supabase
       if (!sessionRes.user) {
+        setHasSupabaseSession(false);
+        authStore.clearSession();
         const ownerExists = await authStore.checkHasOwnerInSupabase();
         setHasOwner(ownerExists);
       } else {
+        setHasSupabaseSession(true);
         setHasOwner(true);
       }
     } catch (err: any) {
       console.warn("⚠️ Error verifying auth and owner in Supabase:", err);
+      setHasSupabaseSession(false);
+      authStore.clearSession();
       const raw = String(err?.message || err || '');
       if (raw.includes('fetch') || raw.includes('TypeError')) {
         setAuthError("تعذر الاتصال بقاعدة البيانات Supabase (TypeError: Failed to fetch). يرجى التأكد من ضبط VITE_SUPABASE_URL و VITE_SUPABASE_PUBLISHABLE_KEY في إعدادات Vercel ثم إعادة النشر.");
@@ -257,17 +266,39 @@ function MainApp() {
 
     checkAuthAndOwner();
 
-    const handleAuthChanged = () => {
-      if (isMounted) {
-        authStore.checkHasOwnerInSupabase().then(res => {
-          if (isMounted) setHasOwner(res);
-        });
+    // Subscribe to Supabase Auth state changes directly
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!isMounted) return;
+      if (event === "SIGNED_OUT" || !session) {
+        authStore.clearSession();
+        setHasSupabaseSession(false);
+      } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || session?.user) {
+        const syncRes = await authStore.validateAndSyncSession();
+        if (isMounted) {
+          setHasSupabaseSession(Boolean(syncRes.user));
+        }
       }
+    });
+
+    const handleAuthChanged = () => {
+      if (!isMounted) return;
+      supabase.auth.getSession().then(({ data }) => {
+        if (!isMounted) return;
+        const currentUser = authStore.getCurrentUser();
+        setHasSupabaseSession(Boolean(data.session && currentUser));
+      }).catch(() => {
+        if (isMounted) setHasSupabaseSession(false);
+      });
+
+      authStore.checkHasOwnerInSupabase().then(res => {
+        if (isMounted) setHasOwner(res);
+      });
     };
 
     window.addEventListener("atari_auth_changed", handleAuthChanged);
     return () => {
       isMounted = false;
+      subscription.unsubscribe();
       window.removeEventListener("atari_auth_changed", handleAuthChanged);
     };
   }, []);
@@ -391,11 +422,12 @@ function MainApp() {
     );
   }
 
-  // If user is not logged in, render Login View
-  if (!currentLoggedUser || currentView === "login") {
+  // If user is not logged in or missing valid Supabase session, render Login View
+  if (!hasSupabaseSession || !currentLoggedUser || currentView === "login") {
     return (
       <Login
         onSuccess={() => {
+          setHasSupabaseSession(true);
           const target = postLoginRedirect || "dashboard";
           setCurrentView(target);
         }}
