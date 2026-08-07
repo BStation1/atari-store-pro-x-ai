@@ -63,7 +63,7 @@ export function mapRowToProduct(row: Record<string, any>): Product {
     category: row.category_name || meta.category || 'قطع غيار صيانة',
     barcode: row.barcode || '',
     sku: row.sku || '',
-    purchasePrice: typeof row.cost_price === 'number' ? row.cost_price : Number(row.cost_price || 0),
+    purchasePrice: Number(row.cost_price ?? row.purchase_price ?? row.cost_price_snapshot ?? row.unit_cost ?? row.buy_price ?? row.costPrice ?? row.purchasePrice ?? 0),
     sellPrice: typeof row.selling_price === 'number' ? row.selling_price : Number(row.selling_price || 0),
     quantity: typeof row.quantity === 'number' ? row.quantity : Number(row.quantity || 0),
     minStock: typeof row.min_quantity === 'number' ? row.min_quantity : Number(row.min_quantity || 5),

@@ -484,14 +484,46 @@ export function resolveOrderPartsAccounting(
     if (linkedUsages.length > 0) {
       const parts = linkedUsages.map((usage, index) => {
         const quantity = Math.max(0, Number(usage.quantity) || 0);
-        const unitCost = money(usage.unitCost || 0);
+        let unitCost = money(usage.unitCost || 0);
+
+        // Fallback 1: Check inventory movement for snapshotted cost price
+        if (unitCost === 0 && movements && movements.length > 0) {
+          const matchingMov = movements.find(m =>
+            isOutgoingMovement(m) &&
+            movementMatchesOrder(m, order) &&
+            (m.productId === usage.inventoryItemId || (m as any).sku === usage.sku)
+          );
+          if (matchingMov) {
+            const movCost = movementCost(matchingMov);
+            if (movCost.unitCost > 0) {
+              unitCost = movCost.unitCost;
+            }
+          }
+        }
+
+        // Fallback 2: Check order devices selectedRepairItems for costPrice
+        if (unitCost === 0 && order.devices) {
+          for (const dev of order.devices) {
+            const items = dev.selectedRepairItems || [];
+            const item = items.find(i => i.usageId === usage.id || i.id === usage.id || i.productId === usage.inventoryItemId);
+            if (item && Number(item.costPrice || 0) > 0) {
+              unitCost = money(item.costPrice);
+              break;
+            }
+          }
+        }
+
         const explicitTotal = Number(usage.totalCost);
+        const totalPurchaseCost = (unitCost > 0 && (!explicitTotal || explicitTotal === 0))
+          ? money(quantity * unitCost)
+          : (Number.isFinite(explicitTotal) && explicitTotal > 0 ? money(explicitTotal) : money(quantity * unitCost));
+
         return {
           id: clean(usage.id) || `usage-${order.id}-${index}`,
           partName: clean(usage.partName) || clean(usage.sku) || 'صنف غير معروف',
           quantity,
           unitPurchaseCost: unitCost,
-          totalPurchaseCost: Number.isFinite(explicitTotal) && explicitTotal >= 0 ? money(explicitTotal) : money(quantity * unitCost),
+          totalPurchaseCost,
           source: 'REPAIR_PART_USAGE' as const
         };
       });
@@ -624,7 +656,7 @@ export function calculateOrderAccountingV2(
     netProfit,
     ahmedShare,
     abdoShare,
-    amountDueFromAbdo: party === 'ABDO' ? ahmedShare : 0,
+    amountDueFromAbdo: party === 'ABDO' ? money(purchaseCost + ahmedShare) : 0,
     partsQuantity: partsAccounting.partsQuantity,
     parts: partsAccounting.parts,
     costSource: partsAccounting.costSource,

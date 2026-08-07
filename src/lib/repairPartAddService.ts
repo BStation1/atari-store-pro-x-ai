@@ -42,7 +42,16 @@ export async function executeAddPartUsageTransaction(
 
   const currentDevice = selectedOrder.devices[deviceIdx];
   const newQty = product.quantity - qty;
-  const unitPurchaseCost = Number(product.purchasePrice || (product as any).costPrice || (product as any).cost || 0);
+  const resolvedProd = products.find(p => p.id === product.id) || product;
+  const unitPurchaseCost = Number(
+    product.purchasePrice ||
+    (product as any).costPrice ||
+    (product as any).cost_price ||
+    resolvedProd.purchasePrice ||
+    (resolvedProd as any).costPrice ||
+    (resolvedProd as any).cost_price ||
+    0
+  );
   const unitSellingPrice = Number(product.sellPrice || (product as any).price || (product as any).sellingPrice || unitPurchaseCost);
   const totalCost = unitPurchaseCost * qty;
   const sellingTotal = unitSellingPrice * qty;
@@ -78,12 +87,13 @@ export async function executeAddPartUsageTransaction(
     let updatedUsageList: RepairPartUsage[] = [];
 
     if (existingUsage) {
+      const effectiveUnitCost = unitPurchaseCost > 0 ? unitPurchaseCost : (existingUsage.unitCost || 0);
       const newUsageQty = existingUsage.quantity + qty;
-      const newUsageTotalCost = newUsageQty * unitPurchaseCost;
+      const newUsageTotalCost = newUsageQty * effectiveUnitCost;
       const newUsageSellingTotal = newUsageQty * unitSellingPrice;
       const usageUpdate = {
         quantity: newUsageQty,
-        unitCost: unitPurchaseCost,
+        unitCost: effectiveUnitCost,
         totalCost: newUsageTotalCost,
         sellingPrice: unitSellingPrice,
         sellingTotal: newUsageSellingTotal

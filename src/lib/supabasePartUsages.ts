@@ -28,25 +28,33 @@ export async function fetchOrMigrateRepairPartUsages(): Promise<{
       return { success: true, partUsages: localUsages };
     }
 
-    const remoteUsages: RepairPartUsage[] = data.map((r: any) => ({
-      id: String(r.id),
-      repairOrderId: String(r.repair_order_id || r.repairOrderId || ''),
-      inventoryItemId: String(r.inventory_item_id || r.inventoryItemId || ''),
-      partName: String(r.part_name_snapshot || r.part_name || r.partName || ''),
-      sku: String(r.sku || ''),
-      quantity: Number(r.quantity || 0),
-      unitCost: Number(r.cost_price_snapshot ?? r.unit_cost ?? r.unitCost ?? 0),
-      totalCost: Number(r.total_cost ?? r.totalCost ?? 0),
-      sellingPrice: Number(r.selling_price_snapshot ?? r.selling_unit_price_snapshot ?? r.sellingPrice ?? 0),
-      sellingTotal: Number(r.selling_total ?? r.sellingTotal ?? (Number(r.quantity || 0) * Number(r.selling_price_snapshot ?? r.sellingPrice ?? 0))),
-      ownershipType: (r.ownership_type || r.ownershipType || 'CUSTOMER_SHARED') as any,
-      responsiblePartnerId: String(r.responsible_partner_id || r.responsiblePartnerId || 'SHOP'),
-      accountingStatus: (r.accounting_status || r.accountingStatus || 'CONSUMED') as any,
-      createdAt: r.created_at || r.createdAt || new Date().toISOString(),
-      employeeName: r.employee_name || r.employeeName,
-      warehouse: r.warehouse,
-      notes: r.notes
-    }));
+    const remoteUsages: RepairPartUsage[] = data.map((r: any) => {
+      const q = Number(r.quantity || 0);
+      const uCost = Number(r.cost_price_snapshot || r.unit_cost || r.unitCost || 0);
+      const tCost = Number(r.total_cost || r.totalCost || (q * uCost));
+      const sPrice = Number(r.selling_price_snapshot ?? r.selling_unit_price_snapshot ?? r.sellingPrice ?? 0);
+      const sTotal = Number(r.selling_total ?? r.sellingTotal ?? (q * sPrice));
+
+      return {
+        id: String(r.id),
+        repairOrderId: String(r.repair_order_id || r.repairOrderId || ''),
+        inventoryItemId: String(r.inventory_item_id || r.inventoryItemId || ''),
+        partName: String(r.part_name_snapshot || r.part_name || r.partName || ''),
+        sku: String(r.sku || ''),
+        quantity: q,
+        unitCost: uCost,
+        totalCost: tCost,
+        sellingPrice: sPrice,
+        sellingTotal: sTotal,
+        ownershipType: (r.ownership_type || r.ownershipType || 'CUSTOMER_SHARED') as any,
+        responsiblePartnerId: String(r.responsible_partner_id || r.responsiblePartnerId || 'SHOP'),
+        accountingStatus: (r.accounting_status || r.accountingStatus || 'CONSUMED') as any,
+        createdAt: r.created_at || r.createdAt || new Date().toISOString(),
+        employeeName: r.employee_name || r.employeeName,
+        warehouse: r.warehouse,
+        notes: r.notes
+      };
+    });
 
     const mergedMap = new Map<string, RepairPartUsage>();
     remoteUsages.forEach(u => mergedMap.set(u.id, u));
@@ -188,7 +196,10 @@ export async function updateRepairPartUsageInSupabase(id: string, updates: Parti
       if (updates.accountingStatus) rowUpdates.accounting_status = updates.accountingStatus;
       if (updates.notes !== undefined) rowUpdates.notes = updates.notes;
       if (updates.quantity !== undefined) rowUpdates.quantity = updates.quantity;
-      if (updates.unitCost !== undefined) rowUpdates.unit_cost = updates.unitCost;
+      if (updates.unitCost !== undefined) {
+        rowUpdates.unit_cost = updates.unitCost;
+        rowUpdates.cost_price_snapshot = updates.unitCost;
+      }
       if (updates.totalCost !== undefined) rowUpdates.total_cost = updates.totalCost;
       if (updates.sellingPrice !== undefined) rowUpdates.selling_price_snapshot = updates.sellingPrice;
       if (updates.sellingTotal !== undefined) rowUpdates.selling_total = updates.sellingTotal;
