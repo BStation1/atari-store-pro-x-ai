@@ -421,60 +421,91 @@ export const authStore = {
         return { user: null };
       }
 
-      // 2. Query user profile from profiles table in Supabase
-      const { data: profile, error: profileErr } = await supabase
+      // Look up local user record if present for metadata fallback
+      const localUsers = this.getUsers();
+      const localUser = localUsers.find(
+        u => u.id === session.user.id || (u.email && session.user.email && u.email.toLowerCase() === session.user.email.toLowerCase())
+      );
+
+      // 2. Query user profile from profiles table in Supabase by ID
+      let profile: any = null;
+      const { data: profileById, error: profileErr } = await supabase
         .from("profiles")
         .select("*")
         .eq("id", session.user.id)
         .maybeSingle();
 
       if (profileErr) {
-        console.warn("⚠️ Error fetching user profile from Supabase:", profileErr);
-        this.clearSession();
-        return { user: null, error: "خطأ أثناء قراءة ملف المستخدم من قاعدة البيانات: " + profileErr.message };
+        console.warn("⚠️ Error fetching user profile by ID from Supabase:", profileErr);
       }
 
+      if (profileById) {
+        profile = profileById;
+      } else if (session.user.email) {
+        // Search profile by email to detect if profile was created under a different ID
+        const { data: profileByEmail, error: emailErr } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("email", session.user.email)
+          .maybeSingle();
+
+        if (emailErr) {
+          console.warn("⚠️ Error searching profile by email:", emailErr);
+        }
+
+        if (profileByEmail) {
+          console.log(`ℹ️ Found existing profile for ${session.user.email} with ID (${profileByEmail.id}). Linking/migrating ID to ${session.user.id}...`);
+          try {
+            const { data: updatedProfile, error: updateErr } = await supabase
+              .from("profiles")
+              .update({ id: session.user.id, updated_at: new Date().toISOString() })
+              .eq("email", session.user.email)
+              .select("*")
+              .maybeSingle();
+
+            if (!updateErr && updatedProfile) {
+              profile = updatedProfile;
+            } else {
+              profile = { ...profileByEmail, id: session.user.id };
+            }
+          } catch (e) {
+            console.warn("⚠️ Exception updating profile ID:", e);
+            profile = { ...profileByEmail, id: session.user.id };
+          }
+        }
+      }
+
+      // 3. If profile is still missing, create or upsert profile
       if (!profile) {
-        console.warn("⚠️ Profile not found for session user:", session.user.id);
-        // Fallback: create or sync profile in public.profiles so user profile is preserved
-        const metaRole = String(session.user.user_metadata?.role || "OWNER").toUpperCase();
-        const fallbackRole: UserRole = (metaRole === "OWNER" || metaRole === "ADMIN") ? "OWNER" : (metaRole as UserRole);
+        console.warn("⚠️ Profile not found for session user, auto-creating profile row:", session.user.id);
+        const rawRole = String(session.user.user_metadata?.role || localUser?.roleId || "OWNER").toUpperCase();
+        const roleId: UserRole = (rawRole === "OWNER" || rawRole === "ADMIN") ? "OWNER" : (rawRole === "TECHNICIAN" || rawRole === "ENGINEER") ? "TECHNICIAN" : (rawRole as UserRole) === "RECEPTIONIST" || rawRole === "RECEPTION" ? "RECEPTIONIST" : "RECEPTIONIST";
+        const dbRole = roleId === "OWNER" ? "OWNER" : roleId === "TECHNICIAN" ? "ENGINEER" : "RECEPTION";
+        const fullName = session.user.user_metadata?.full_name || localUser?.fullName || session.user.email?.split("@")[0] || "مستخدم";
 
         const newProfileData = {
           id: session.user.id,
           email: session.user.email || "",
-          full_name: session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "مستخدم",
-          role: fallbackRole === "OWNER" ? "OWNER" : fallbackRole === "TECHNICIAN" ? "ENGINEER" : "RECEPTION"
+          full_name: fullName,
+          role: dbRole,
+          is_active: true
         };
 
         try {
-          await supabase.from("profiles").upsert(newProfileData, { onConflict: "id" });
+          const { data: upsertedProfile } = await supabase
+            .from("profiles")
+            .upsert(newProfileData, { onConflict: "id" })
+            .select("*")
+            .maybeSingle();
+
+          profile = upsertedProfile || newProfileData;
         } catch (e) {
           console.warn("⚠️ Fallback profile upsert error:", e);
+          profile = newProfileData;
         }
-
-        // Re-read or construct profile
-        const activeUser: AuthUser = {
-          id: session.user.id,
-          fullName: newProfileData.full_name,
-          name: newProfileData.full_name,
-          username: (session.user.email || "user").split("@")[0],
-          email: session.user.email || "",
-          phone: "",
-          roleId: fallbackRole,
-          role: fallbackRole.toLowerCase(),
-          permissions: ALL_PERMISSIONS,
-          isActive: true,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80"
-        };
-
-        this.setActiveUser(activeUser);
-        return { user: activeUser };
       }
 
-      if (profile.is_active === false) {
+      if (profile && profile.is_active === false) {
         console.warn("⚠️ Account is disabled:", session.user.id);
         await supabase.auth.signOut().catch(() => {});
         this.clearSession();
@@ -482,30 +513,30 @@ export const authStore = {
       }
 
       // Map profile to AuthUser
-      const roleUpper = String(profile.role || "RECEPTION").toUpperCase();
-      const roleId: UserRole = (roleUpper === "OWNER" || roleUpper === "ADMIN") ? "OWNER" : (roleUpper as UserRole);
+      const roleUpper = String(profile?.role || session.user.user_metadata?.role || localUser?.roleId || "OWNER").toUpperCase();
+      const roleId: UserRole = (roleUpper === "OWNER" || roleUpper === "ADMIN") ? "OWNER" : (roleUpper === "TECHNICIAN" || roleUpper === "ENGINEER") ? "TECHNICIAN" : roleUpper === "RECEPTIONIST" || roleUpper === "RECEPTION" ? "RECEPTIONIST" : "RECEPTIONIST";
 
       const activeUser: AuthUser = {
         id: session.user.id,
-        fullName: profile.full_name || session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "مستخدم",
-        name: profile.full_name || session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "مستخدم",
+        fullName: profile?.full_name || session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "مستخدم",
+        name: profile?.full_name || session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "مستخدم",
         username: (session.user.email || "user").split("@")[0],
-        email: session.user.email || profile.email || "",
-        phone: profile.phone || "",
+        email: session.user.email || profile?.email || "",
+        phone: profile?.phone || "",
         roleId: roleId,
         role: roleId.toLowerCase(),
         permissions: ALL_PERMISSIONS,
         isActive: true,
-        createdAt: profile.created_at || new Date().toISOString(),
-        updatedAt: profile.updated_at || new Date().toISOString(),
-        avatarUrl: profile.avatar_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80"
+        createdAt: profile?.created_at || new Date().toISOString(),
+        updatedAt: profile?.updated_at || new Date().toISOString(),
+        avatarUrl: profile?.avatar_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80"
       };
 
       this.setActiveUser(activeUser);
 
       // Keep local users list updated
       const users = this.getUsers();
-      const idx = users.findIndex(u => u.id === activeUser.id || u.email.toLowerCase() === activeUser.email.toLowerCase());
+      const idx = users.findIndex(u => u.id === activeUser.id || (u.email && activeUser.email && u.email.toLowerCase() === activeUser.email.toLowerCase()));
       if (idx !== -1) {
         users[idx] = activeUser;
       } else {
@@ -516,6 +547,32 @@ export const authStore = {
       return { user: activeUser };
     } catch (err: any) {
       console.warn("⚠️ Exception during validateAndSyncSession:", err);
+      // Ensure valid session is NOT cleared on exception
+      try {
+        const { data: { session: fallbackSession } } = await supabase.auth.getSession();
+        if (fallbackSession?.user) {
+          const fallbackUser: AuthUser = {
+            id: fallbackSession.user.id,
+            fullName: fallbackSession.user.user_metadata?.full_name || fallbackSession.user.email?.split("@")[0] || "مستخدم",
+            name: fallbackSession.user.user_metadata?.full_name || fallbackSession.user.email?.split("@")[0] || "مستخدم",
+            username: (fallbackSession.user.email || "user").split("@")[0],
+            email: fallbackSession.user.email || "",
+            phone: "",
+            roleId: "OWNER",
+            role: "owner",
+            permissions: ALL_PERMISSIONS,
+            isActive: true,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80"
+          };
+          this.setActiveUser(fallbackUser);
+          return { user: fallbackUser };
+        }
+      } catch (e) {
+        console.warn("⚠️ Error getting fallback session:", e);
+      }
+
       this.clearSession();
       return { user: null, error: err?.message || "حدث خطأ غير متوقع أثناء الاتصال بالخادم." };
     }
