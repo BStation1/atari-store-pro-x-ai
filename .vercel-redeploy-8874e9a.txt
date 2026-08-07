@@ -1,2 +1,0 @@
-Redeploy marker for stable commit 8874e9aa4d3bee3340f3c3f9fec16c5b59b2ec8a.
-No application code was changed.

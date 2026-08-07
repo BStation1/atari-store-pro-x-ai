@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import { useDialog } from "../context/DialogContext";
 import {
   Wrench,
@@ -52,12 +52,10 @@ import CancelWarrantyModal from "./CancelWarrantyModal";
 import { canDeliverDevice, canReopenDeliveredOrder, canCancelWarranty } from "../lib/authPermissions";
 import { db } from "../lib/data";
 import { addInventoryMovementToSupabase, ensureProductUuidInSupabase, updateProductQuantityInSupabase } from "../lib/supabaseProducts";
-import { addRepairPartUsageToSupabase, fetchRepairPartUsagesForOrderId, isUuid, updateRepairPartUsageInSupabase } from "../lib/supabasePartUsages";
+import { addRepairPartUsageToSupabase, updateRepairPartUsageInSupabase } from "../lib/supabasePartUsages";
 import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabase } from "../lib/supabaseRepairOrders";
 import { executeRemovePartUsageTransaction } from "../lib/repairPartRemovalService";
 import { executeAddPartUsageTransaction } from "../lib/repairPartAddService";
-import { findProductForRepairUsage } from "../lib/productIdentity";
-import { formatDateSafe } from "../utils/dateFormat";
 import { usageMatchesOrder, usageMatchesDevice, syncOrderSelectedRepairItemsFromUsages, getActiveRepairUsagesForDevice, getActiveRepairUsagesForOrder } from "../lib/accountingEngineV2";
 import { sendRepairNotificationWorkflow } from "../lib/whatsapp";
 import { 
@@ -68,12 +66,19 @@ import {
 } from "../lib/repairLogging";
 
 export function getUsageSellingUnitPrice(pu: RepairPartUsage, productsList: Product[]): number {
-  if (pu.sellingPrice && pu.sellingPrice > 0) return pu.sellingPrice;
-  const prod = productsList.find(p => p.id === pu.inventoryItemId || (p.nameAr || p.name) === pu.partName);
-  if (prod && Number(prod.sellPrice || (prod as any).price) > 0) {
-    return Number(prod.sellPrice || (prod as any).price);
+  if (pu.sellingPrice !== undefined && pu.sellingPrice !== null) {
+    return Number(pu.sellingPrice);
   }
-  return pu.unitCost || 0;
+  const prod = productsList.find(p =>
+    p.id === pu.inventoryItemId ||
+    (p as any).uuid === pu.inventoryItemId ||
+    p.sku === pu.sku ||
+    (p.nameAr || p.name) === pu.partName
+  );
+  if (prod && prod.sellPrice !== undefined && prod.sellPrice !== null) {
+    return Number(prod.sellPrice);
+  }
+  return pu.unitCost ?? 0;
 }
 
 export function isProductCompatibleWithDevice(product: Product, deviceType?: string, deviceModel?: string): boolean {
@@ -126,7 +131,6 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
   const [selectedOrder, setSelectedOrder] = useState<RepairOrder | null>(
     initialOrderId ? orders.find(o => o.id === initialOrderId) || null : null
   );
-  const partAddLockRef = useRef(false);
 
   useEffect(() => {
     if (selectedOrder && partUsagesLoaded) {
@@ -651,7 +655,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
     if (!selectedOrder) return;
 
-    if (partAddLockRef.current || busyProductIds.size > 0) {
+    if (busyProductIds.has(productId)) {
       console.log(`[AddPart] Product ${productId} is busy. Ignoring click.`);
       return;
     }
@@ -665,10 +669,6 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
       return;
     }
 
-    // Different products could previously be added concurrently, causing the
-    // last order save to overwrite the other line. Lock the whole order part
-    // operation synchronously, before React state has time to re-render.
-    partAddLockRef.current = true;
     setBusyProductIds(prev => new Set(prev).add(productId));
 
     try {
@@ -700,7 +700,6 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
         variant: "error"
       });
     } finally {
-      partAddLockRef.current = false;
       setBusyProductIds(prev => {
         const next = new Set(prev);
         next.delete(productId);
@@ -709,40 +708,10 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
     }
   };
 
-  const handleRemovePartUsage = async (requestedUsage: RepairPartUsage, deviceIdx: number, removeQty: number = 1) => {
+  const handleRemovePartUsage = async (usageId: string, deviceIdx: number, removeQty: number = 1) => {
     if (!selectedOrder) return;
-
-    let effectivePartUsages = partUsages;
-    let usage = effectivePartUsages.find(pu => pu.id === requestedUsage.id);
-
-    // The order snapshot can render before the canonical usages hook finishes.
-    // Resolve this order on demand so the first remove click is never ignored.
-    if (!usage) {
-      const anyOrder = selectedOrder as any;
-      let remoteOrderId = [selectedOrder.databaseId, selectedOrder.uuid, anyOrder.database_id, selectedOrder.id]
-        .find(value => isUuid(String(value || '')));
-      if (!remoteOrderId) {
-        remoteOrderId = await ensureRepairOrderUuidInSupabase(selectedOrder);
-      }
-
-      if (remoteOrderId) {
-        const scoped = await fetchRepairPartUsagesForOrderId(String(remoteOrderId));
-        if (scoped.success) {
-          const usagesOutsideOrder = partUsages.filter(pu => !usageMatchesOrder(pu, selectedOrder));
-          effectivePartUsages = [...usagesOutsideOrder, ...scoped.partUsages];
-          usage = scoped.partUsages.find(pu =>
-            pu.id === requestedUsage.id ||
-            (requestedUsage.inventoryItemId && pu.inventoryItemId === requestedUsage.inventoryItemId)
-          );
-          persistLocalUsages(effectivePartUsages);
-        }
-      }
-    }
-
-    if (!usage) {
-      dialog.alert({ message: "تعذر تحميل سجل قطعة الغيار. حاول فتح الطلب مرة أخرى.", variant: "error" });
-      return;
-    }
+    const usage = partUsages.find(pu => pu.id === usageId);
+    if (!usage) return;
 
     if (usage.accountingStatus === 'RETURNED') return;
     if (busyProductIds.has(usage.inventoryItemId)) return;
@@ -751,12 +720,12 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
     try {
       const res = await executeRemovePartUsageTransaction({
-        usageId: usage.id,
+        usageId,
         deviceIdx,
         removeQty,
         selectedOrder,
         products,
-        partUsages: effectivePartUsages
+        partUsages
       });
 
       if (!res.success) {
@@ -769,7 +738,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
       // UI updates ONLY AFTER all three persistence operations succeed
       if (res.updatedProducts) {
-        const prod = findProductForRepairUsage(res.updatedProducts, usage);
+        const prod = res.updatedProducts.find(p => p.id === usage.inventoryItemId);
         if (prod) setProductLocal(prod);
       }
       if (res.updatedPartUsages) {
@@ -1416,7 +1385,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                       ownershipType: selectedOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED,
                       responsiblePartnerId: 'SHOP',
                       accountingStatus: 'CONSUMED',
-                      createdAt: selectedOrder.receivedDate || new Date().toISOString()
+                      createdAt: selectedOrder.createdAt || new Date().toISOString()
                     }));
 
                 const matchedOrderUsages = getActiveRepairUsagesForOrder(selectedOrder, partUsages);
@@ -1768,9 +1737,9 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                   deviceLinkedUsages.map((pu) => {
                                     const unitSellPrice = getUsageSellingUnitPrice(pu, products);
                                     const lineTotal = pu.quantity * unitSellPrice;
-                                    const matchedProd = findProductForRepairUsage(products, pu);
+                                    const matchedProd = products.find(p => p.id === pu.inventoryItemId);
                                     const stockAvail = matchedProd ? matchedProd.quantity : 0;
-                                    const isBusy = busyProductIds.has(pu.inventoryItemId) || Boolean(matchedProd && busyProductIds.has(matchedProd.id));
+                                    const isBusy = busyProductIds.has(pu.inventoryItemId);
 
                                     return (
                                       <tr key={pu.id} className="hover:bg-[#181b2a] transition-colors">
@@ -1794,7 +1763,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                             <button
                                               type="button"
                                               disabled={isBusy}
-                                              onClick={() => handleRemovePartUsage(pu, devIdx, 1)}
+                                              onClick={() => handleRemovePartUsage(pu.id, devIdx, 1)}
                                               className="w-7 h-7 flex items-center justify-center bg-gray-800 hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-md font-bold text-base transition cursor-pointer"
                                               title="خصم قطعة (-)"
                                             >
@@ -1808,7 +1777,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                             <button
                                               type="button"
                                               disabled={stockAvail <= 0 || isBusy}
-                                              onClick={() => matchedProd && handleAddPartToDevice(devIdx, matchedProd.id, 1)}
+                                              onClick={() => handleAddPartToDevice(devIdx, pu.inventoryItemId, 1)}
                                               className="w-7 h-7 flex items-center justify-center bg-indigo-600 hover:bg-indigo-500 text-white rounded-md font-bold text-base transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                                               title={stockAvail <= 0 ? "المخزون نفذ" : "إضافة قطعة (+)"}
                                             >
@@ -1825,7 +1794,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                                           <button
                                             type="button"
                                             disabled={isBusy}
-                                            onClick={() => handleRemovePartUsage(pu, devIdx, -1)}
+                                            onClick={() => handleRemovePartUsage(pu.id, devIdx, -1)}
                                             className="p-1.5 bg-rose-500/10 hover:bg-rose-600 disabled:opacity-30 disabled:cursor-not-allowed text-rose-400 hover:text-white rounded-lg transition cursor-pointer"
                                             title="حذف القطعة"
                                           >
@@ -1864,11 +1833,7 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
                             <div className="flex justify-between">
                               <span className="text-gray-400">تاريخ الاستلام:</span>
                               <span className="font-mono text-white">
-                                {formatDateSafe(selectedOrder.receivedDate, {
-                                  year: "numeric",
-                                  month: "numeric",
-                                  day: "numeric"
-                                })}
+                                {new Date(selectedOrder.createdAt).toLocaleDateString('ar-EG')}
                               </span>
                             </div>
                             <div className="flex justify-between">

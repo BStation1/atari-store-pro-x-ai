@@ -1,13 +1,12 @@
 import { Product, RepairOrder, RepairPartUsage, SelectedRepairItem, WorkOwnershipType } from '../types';
 import { db } from './db';
 import { ensureProductUuidInSupabase, updateProductQuantityInSupabase, addInventoryMovementToSupabase } from './supabaseProducts';
-import { addRepairPartUsageToSupabase, fetchRepairPartUsagesForOrderId, updateRepairPartUsageInSupabase } from './supabasePartUsages';
+import { addRepairPartUsageToSupabase, updateRepairPartUsageInSupabase } from './supabasePartUsages';
 import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabase } from './supabaseRepairOrders';
 import { getUsageSellingUnitPrice, calculateSuggestedPriceForFaults } from './repairOrderCalculations';
 import { usageMatchesOrder, usageMatchesDevice } from './accountingEngineV2';
 import { addAuditLogRecordHelper, addTimelineEventHelper } from './repairLogging';
 import { getDeviceDisplayName } from './customerDisplayHelper';
-import { productMatchesRepairUsage } from './productIdentity';
 
 export interface ExecuteAddPartUsageOptions {
   product: Product;
@@ -43,8 +42,8 @@ export async function executeAddPartUsageTransaction(
 
   const currentDevice = selectedOrder.devices[deviceIdx];
   const newQty = product.quantity - qty;
-  const unitPurchaseCost = Number(product.purchasePrice || 0);
-  const unitSellingPrice = Number(product.sellPrice || unitPurchaseCost);
+  const unitPurchaseCost = Number(product.purchasePrice || (product as any).costPrice || (product as any).cost || 0);
+  const unitSellingPrice = Number(product.sellPrice || (product as any).price || (product as any).sellingPrice || unitPurchaseCost);
   const totalCost = unitPurchaseCost * qty;
   const sellingTotal = unitSellingPrice * qty;
 
@@ -66,17 +65,10 @@ export async function executeAddPartUsageTransaction(
     productUuid = resolvedProdUuid;
     repairOrderUuid = resolvedOrderUuid;
 
-    // Refresh immediately before deciding whether to reuse a usage. The order
-    // screen may still hold a pre-removal snapshot, especially after another
-    // tab/device returned the part. Reusing that stale row can increment a
-    // RETURNED usage and resurrect deleted invoice lines.
-    const canonicalUsageResult = await fetchRepairPartUsagesForOrderId(repairOrderUuid);
-    const usagesOutsideOrder = partUsages.filter(pu => !usageMatchesOrder(pu, selectedOrder));
-    const allUsages = canonicalUsageResult.success
-      ? [...usagesOutsideOrder, ...canonicalUsageResult.partUsages]
-      : [...partUsages];
+    // Check existing active usage for same product on this order & device
+    const allUsages = [...partUsages];
     const existingUsage = allUsages.find(
-      pu => productMatchesRepairUsage(product, pu) &&
+      pu => pu.inventoryItemId === product.id &&
             pu.accountingStatus !== 'RETURNED' &&
             pu.accountingStatus !== 'REVERSED' &&
             usageMatchesOrder(pu, selectedOrder) &&
@@ -97,7 +89,7 @@ export async function executeAddPartUsageTransaction(
         sellingTotal: newUsageSellingTotal
       };
 
-      const ok = await updateRepairPartUsageInSupabase(existingUsage.id, usageUpdate, existingUsage);
+      const ok = await updateRepairPartUsageInSupabase(existingUsage.id, usageUpdate);
       if (!ok) {
         throw new Error("فشل تحديث سجل قطعة الغيار بفي قاعدة البيانات");
       }
@@ -160,34 +152,39 @@ export async function executeAddPartUsageTransaction(
       throw new Error("فشل خصم الكمية من المخزون بقاعدة البيانات");
     }
 
-    // Step 4: Rebuild the complete device snapshot from canonical active
-    // usages. Never append to the React snapshot because two quick additions
-    // may have started from the same old order object.
+    // Step 4: Add persisted part to device.selectedRepairItems using REAL persisted usage id
+    const itemToPut: SelectedRepairItem = {
+      id: createdUsage.id,
+      usageId: createdUsage.id,
+      productId: product.id,
+      name: product.nameAr || product.name,
+      quantity: createdUsage.quantity,
+      costPrice: unitPurchaseCost,
+      repairPrice: unitSellingPrice,
+      salePrice: unitSellingPrice,
+      deviceId: currentDevice.id,
+      deviceIndex: deviceIdx
+    };
+
+    const existingItems = currentDevice.selectedRepairItems || [];
+    const existingItemIdx = existingItems.findIndex(
+      i => i.usageId === createdUsage!.id || i.id === createdUsage!.id || (i.productId && (i.productId === product.id || i.productId === productUuid))
+    );
+
+    let nextSelectedRepairItems: SelectedRepairItem[];
+    if (existingItemIdx >= 0) {
+      nextSelectedRepairItems = existingItems.map((item, idx) => idx === existingItemIdx ? itemToPut : item);
+    } else {
+      nextSelectedRepairItems = [...existingItems, itemToPut];
+    }
+
+    // Recalculate partsCost and order totals
     const activeUsagesForDevice = updatedUsageList.filter(
       pu => usageMatchesOrder(pu, selectedOrder) &&
             pu.accountingStatus !== 'RETURNED' &&
             pu.accountingStatus !== 'REVERSED' &&
             usageMatchesDevice(pu, currentDevice, deviceIdx, selectedOrder.devices.length)
     );
-
-    const nextSelectedRepairItems: SelectedRepairItem[] = activeUsagesForDevice.map(pu => {
-      const matchedProduct = products.find(candidate => productMatchesRepairUsage(candidate, pu));
-      const sellPrice = getUsageSellingUnitPrice(pu, products);
-      return {
-        id: pu.id,
-        usageId: pu.id,
-        productId: matchedProduct?.id || pu.inventoryItemId,
-        name: pu.partName,
-        quantity: pu.quantity,
-        costPrice: pu.unitCost,
-        repairPrice: sellPrice,
-        salePrice: sellPrice,
-        deviceId: currentDevice.id,
-        deviceIndex: deviceIdx
-      };
-    });
-
-    // Recalculate partsCost and order totals
 
     const newPartsCost = activeUsagesForDevice.reduce((sum, pu) => {
       const sellP = getUsageSellingUnitPrice(pu, products);
@@ -280,7 +277,7 @@ export async function executeAddPartUsageTransaction(
     // Rollback created usage if new
     if (isNewUsageCreated && createdUsage?.id) {
       try {
-        await updateRepairPartUsageInSupabase(createdUsage.id, { accountingStatus: 'REVERSED' }, createdUsage);
+        await updateRepairPartUsageInSupabase(createdUsage.id, { accountingStatus: 'REVERSED' });
       } catch (rbErr) {
         console.warn("⚠️ Rollback usage failed:", rbErr);
       }

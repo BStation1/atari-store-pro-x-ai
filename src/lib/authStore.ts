@@ -54,16 +54,6 @@ const USERS_STORAGE_KEY = "atari_erp_users_v2";
 const SESSIONS_STORAGE_KEY = "atari_erp_sessions_v2";
 const LOGIN_ATTEMPTS_STORAGE_KEY = "atari_login_attempts_v2";
 
-function normalizeProfileRole(role: unknown): UserRole {
-  const normalized = String(role || "RECEPTION").toUpperCase();
-  if (normalized === "OWNER" || normalized === "ADMIN") return "OWNER";
-  if (normalized === "ENGINEER") return "TECHNICIAN";
-  if (normalized === "RECEPTION") return "RECEPTIONIST";
-  return normalized in DEFAULT_ROLE_PERMISSIONS
-    ? normalized as UserRole
-    : "RECEPTIONIST";
-}
-
 // Simple secure string hash for demonstration client environment
 export function hashPassword(plain: string): string {
   let hash = 0;
@@ -178,7 +168,8 @@ export const authStore = {
         const now = new Date().toISOString();
 
         profiles.forEach((p: any) => {
-          const normRoleId = normalizeProfileRole(p.role);
+          const pRole = String(p.role || "RECEPTION").toUpperCase();
+          const normRoleId: UserRole = (pRole === "OWNER" || pRole === "ADMIN") ? "OWNER" : (pRole as UserRole);
           const existingIdx = existingUsers.findIndex(u => u.id === p.id || u.email.toLowerCase() === (p.email || "").toLowerCase());
 
           const syncedUser: AuthUser = {
@@ -457,15 +448,8 @@ export const authStore = {
       }
 
       // Map profile to AuthUser
-      const roleId = normalizeProfileRole(profile.role);
-      const profilePermissions = Array.isArray(profile.custom_permissions)
-        ? profile.custom_permissions.filter((permission: unknown): permission is string => typeof permission === "string")
-        : [];
-      const effectivePermissions = roleId === "OWNER"
-        ? ALL_PERMISSIONS
-        : profilePermissions.length > 0
-          ? profilePermissions
-          : (DEFAULT_ROLE_PERMISSIONS[roleId] || []);
+      const roleUpper = String(profile.role || "RECEPTION").toUpperCase();
+      const roleId: UserRole = (roleUpper === "OWNER" || roleUpper === "ADMIN") ? "OWNER" : (roleUpper as UserRole);
 
       const activeUser: AuthUser = {
         id: session.user.id,
@@ -476,7 +460,7 @@ export const authStore = {
         phone: profile.phone || "",
         roleId: roleId,
         role: roleId.toLowerCase(),
-        permissions: effectivePermissions,
+        permissions: ALL_PERMISSIONS,
         isActive: true,
         createdAt: profile.created_at || new Date().toISOString(),
         updatedAt: profile.updated_at || new Date().toISOString(),
@@ -647,27 +631,12 @@ export const authStore = {
 
 // Listen to Supabase Auth state changes automatically for real-time session verification
 if (typeof window !== "undefined") {
-  let authSyncTimer: number | undefined;
-
-  supabase.auth.onAuthStateChange((event, session) => {
-    // Supabase warns against making async Supabase calls from inside this
-    // callback because it can deadlock the client. Defer the complete sync so
-    // getSession() and the profiles query run after the callback has returned.
-    if (authSyncTimer !== undefined) {
-      window.clearTimeout(authSyncTimer);
+  supabase.auth.onAuthStateChange(async (event, session) => {
+    if (event === "SIGNED_OUT" || !session) {
+      authStore.clearSession();
+    } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || session?.user) {
+      await authStore.validateAndSyncSession();
     }
-
-    authSyncTimer = window.setTimeout(() => {
-      authSyncTimer = undefined;
-
-      if (event === "SIGNED_OUT" || !session) {
-        authStore.clearSession();
-        return;
-      }
-
-      if (event === "INITIAL_SESSION" || event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || event === "USER_UPDATED") {
-        void authStore.validateAndSyncSession();
-      }
-    }, 0);
   });
 }
+

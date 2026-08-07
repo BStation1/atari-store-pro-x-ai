@@ -101,7 +101,9 @@ function useDbTrigger(watchedKeys?: string[]) {
   useEffect(() => {
     const normalizeKey = (value?: string) => {
       if (!value) return '';
-      return value.startsWith('atari_') ? value : `atari_${value}`;
+      let k = value.startsWith('atari_') ? value : `atari_${value}`;
+      if (k === 'atari_store_settings') return 'atari_settings';
+      return k;
     };
 
     const handleDbChange = (event?: Event) => {
@@ -628,17 +630,36 @@ export function useExpenses() {
   return { expenses, addExpense };
 }
 
+function isSameSettings(s1?: SystemSettings | null, s2?: SystemSettings | null): boolean {
+  if (s1 === s2) return true;
+  if (!s1 || !s2) return false;
+  return (
+    s1.companyName === s2.companyName &&
+    s1.phone === s2.phone &&
+    s1.address === s2.address &&
+    s1.logoUrl === s2.logoUrl &&
+    s1.receiptHeader === s2.receiptHeader &&
+    s1.receiptFooter === s2.receiptFooter &&
+    s1.whatsAppTemplateReceived === s2.whatsAppTemplateReceived &&
+    s1.whatsAppTemplateReady === s2.whatsAppTemplateReady &&
+    s1.whatsAppTemplateInvoice === s2.whatsAppTemplateInvoice &&
+    s1.taxRate === s2.taxRate &&
+    s1.currency === s2.currency
+  );
+}
+
 export function useSettings() {
   const trigger = useDbTrigger(['atari_settings']);
   const [settings, setSettings] = useState<SystemSettings>(db.getSettings());
 
   useEffect(() => {
     let active = true;
-    setSettings(db.getSettings());
+    const local = db.getSettings();
+    setSettings(prev => isSameSettings(prev, local) ? prev : local);
 
     fetchOrMigrateStoreSettings().then(spSettings => {
       if (active && spSettings) {
-        setSettings(spSettings);
+        setSettings(prev => isSameSettings(prev, spSettings) ? prev : spSettings);
       }
     });
 

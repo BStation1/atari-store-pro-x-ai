@@ -88,49 +88,84 @@ function setLocalSettings(settings: SystemSettings, dispatchEvent = true) {
   }
 }
 
+let cachedSettings: SystemSettings | null = null;
+let settingsFetchPromise: Promise<SystemSettings> | null = null;
+let lastFetchTime = 0;
+const SETTINGS_CACHE_TTL = 60000; // 60 seconds memory cache window
+
+export function invalidateSettingsCache(): void {
+  cachedSettings = null;
+  settingsFetchPromise = null;
+  lastFetchTime = 0;
+}
+
 /**
  * Step 1-4: Fetch store_settings from Supabase.
  * - If settings exist in Supabase, use them and sync to local storage.
- * - If not in Supabase, keep the safe local defaults until an authorized owner
- *   explicitly saves the settings.
+ * - If not in Supabase, take local settings and migrate/upload them to Supabase once.
  * - Leaves all other collections untouched.
  */
-export async function fetchOrMigrateStoreSettings(): Promise<SystemSettings> {
-  const localSettings = getLocalSettings();
-
-  try {
-    // Public pages use the local defaults. Avoid querying a protected table
-    // anonymously and avoid the noisy, expected RLS rejection on every load.
-    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-    if (sessionError || !session?.user) {
-      return localSettings;
-    }
-
-    const { data, error } = await supabase.from('store_settings').select('*').limit(1);
-
-    if (error) {
-      console.warn('⚠️ Could not fetch store_settings from Supabase:', error.message);
-      return localSettings;
-    }
-
-    if (data && data.length > 0) {
-      // 2. Data exists in Supabase -> Use it!
-      const supabaseRow = data[0];
-      const settingsFromSupabase = mapRowToSettings(supabaseRow);
-
-      // Save to localStorage so local state is synchronized
-      setLocalSettings(settingsFromSupabase, false);
-      console.log('✅ Loaded store_settings directly from Supabase');
-      return settingsFromSupabase;
-    }
-
-    // Never write from the public tracking/login pages. Writing defaults here
-    // caused an expected RLS rejection on every anonymous page load.
-    return localSettings;
-  } catch (err: any) {
-    console.error('❌ Error during store_settings migration:', err);
-    return localSettings;
+export async function fetchOrMigrateStoreSettings(forceRefresh = false): Promise<SystemSettings> {
+  if (!forceRefresh && cachedSettings && (Date.now() - lastFetchTime < SETTINGS_CACHE_TTL)) {
+    return cachedSettings;
   }
+
+  if (!forceRefresh && settingsFetchPromise) {
+    return settingsFetchPromise;
+  }
+
+  settingsFetchPromise = (async () => {
+    const localSettings = getLocalSettings();
+
+    try {
+      const { data, error } = await supabase.from('store_settings').select('*').limit(1);
+
+      if (error) {
+        console.warn('⚠️ Could not fetch store_settings from Supabase:', error.message);
+        cachedSettings = localSettings;
+        return localSettings;
+      }
+
+      if (data && data.length > 0) {
+        // 2. Data exists in Supabase -> Use it!
+        const supabaseRow = data[0];
+        const settingsFromSupabase = mapRowToSettings(supabaseRow);
+
+        // Save to localStorage so local state is synchronized
+        setLocalSettings(settingsFromSupabase, false);
+        if (!cachedSettings) {
+          console.log('✅ Loaded store_settings directly from Supabase');
+        }
+        cachedSettings = settingsFromSupabase;
+        lastFetchTime = Date.now();
+        return settingsFromSupabase;
+      } else {
+        // 3. Data does NOT exist in Supabase -> Use localStorage once and upload to Supabase!
+        console.log('🔄 Uploading store_settings from localStorage to Supabase...');
+        const rowToInsert = mapSettingsToRow(localSettings);
+
+        const insertRes = await supabase.from('store_settings').upsert([rowToInsert]);
+
+        if (insertRes.error) {
+          console.warn('⚠️ Failed to migrate store_settings to Supabase:', insertRes.error.message);
+        } else {
+          console.log('✅ Store settings migrated from localStorage to Supabase successfully!');
+        }
+
+        cachedSettings = localSettings;
+        lastFetchTime = Date.now();
+        return localSettings;
+      }
+    } catch (err: any) {
+      console.error('❌ Error during store_settings migration:', err);
+      cachedSettings = localSettings;
+      return localSettings;
+    } finally {
+      settingsFetchPromise = null;
+    }
+  })();
+
+  return settingsFetchPromise;
 }
 
 /**
@@ -139,14 +174,10 @@ export async function fetchOrMigrateStoreSettings(): Promise<SystemSettings> {
 export async function saveStoreSettingsToSupabase(newSettings: SystemSettings): Promise<void> {
   // Always update local storage first so the app is instantly responsive
   setLocalSettings(newSettings);
+  cachedSettings = newSettings;
+  lastFetchTime = Date.now();
 
   try {
-    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-    if (sessionError || !session?.user) {
-      console.warn('⚠️ Skipping store_settings sync because no authenticated session is available.');
-      return;
-    }
-
     const { data } = await supabase.from('store_settings').select('*').limit(1);
     const existingRow = data && data.length > 0 ? data[0] : undefined;
 

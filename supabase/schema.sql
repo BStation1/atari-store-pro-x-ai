@@ -498,9 +498,6 @@ CREATE INDEX IF NOT EXISTS idx_products_sku ON public.products(sku);
 CREATE INDEX IF NOT EXISTS idx_products_barcode ON public.products(barcode);
 CREATE INDEX IF NOT EXISTS idx_products_category ON public.products(category_id);
 CREATE INDEX IF NOT EXISTS idx_inventory_movements_prod ON public.inventory_movements(product_id);
-CREATE UNIQUE INDEX IF NOT EXISTS inventory_movements_one_opening_balance_per_product
-ON public.inventory_movements(product_id)
-WHERE reference_id = 'OPENING_BALANCE';
 CREATE INDEX IF NOT EXISTS idx_customers_phone ON public.customers(phone);
 CREATE INDEX IF NOT EXISTS idx_invoices_number ON public.invoices(invoice_number);
 CREATE INDEX IF NOT EXISTS idx_invoices_customer ON public.invoices(customer_id);
@@ -784,10 +781,8 @@ CREATE POLICY "Authenticated users view profiles" ON public.profiles FOR SELECT 
 CREATE POLICY "Authenticated users manage profiles" ON public.profiles FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
 -- 7.2 STORE SETTINGS
-CREATE POLICY "Authenticated users view store settings" ON public.store_settings FOR SELECT TO authenticated USING (true);
-CREATE POLICY "Owners insert store settings" ON public.store_settings FOR INSERT TO authenticated WITH CHECK (public.is_owner());
-CREATE POLICY "Owners update store settings" ON public.store_settings FOR UPDATE TO authenticated USING (public.is_owner()) WITH CHECK (public.is_owner());
-CREATE POLICY "Owners delete store settings" ON public.store_settings FOR DELETE TO authenticated USING (public.is_owner());
+CREATE POLICY "Anyone can view store settings" ON public.store_settings FOR SELECT TO public USING (true);
+CREATE POLICY "Authenticated users edit store settings" ON public.store_settings FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
 -- 7.3 OPERATIONAL CATALOGS & PRODUCTS
 CREATE POLICY "Authenticated users manage categories" ON public.categories FOR ALL TO authenticated USING (true) WITH CHECK (true);

@@ -5,7 +5,6 @@ import { updateRepairOrderInSupabase } from './supabaseRepairOrders';
 import { calculateSuggestedPriceForFaults, getUsageSellingUnitPrice } from './repairOrderCalculations';
 import { usageMatchesDevice, usageMatchesOrder } from './accountingEngineV2';
 import { db } from './db';
-import { findProductForRepairUsage } from './productIdentity';
 
 export interface ExecuteRemovePartUsageOptions {
   usageId: string;
@@ -30,13 +29,6 @@ export interface RemovePartUsageResult {
   returnMovementRow?: any;
 }
 
-/**
- * Repair usages may store the remote Supabase UUID while the UI still holds a
- * local product id. Match all stable identifiers so a full removal can always
- * restore the correct stock item.
- */
-export { findProductForRepairUsage } from './productIdentity';
-
 export async function executeRemovePartUsageTransaction(
   options: ExecuteRemovePartUsageOptions
 ): Promise<RemovePartUsageResult> {
@@ -46,7 +38,37 @@ export async function executeRemovePartUsageTransaction(
     return { success: false, error: 'لم يتم تحديد أمر الصيانة.' };
   }
 
-  const usage = partUsages.find(pu => pu.id === usageId);
+  let usage = partUsages.find(pu => pu.id === usageId);
+  if (!usage) {
+    usage = partUsages.find(pu =>
+      (pu.inventoryItemId === usageId || pu.id === usageId || pu.sku === usageId) &&
+      usageMatchesOrder(pu, selectedOrder)
+    );
+  }
+
+  if (!usage) {
+    const dev = selectedOrder.devices[deviceIdx];
+    const item = dev?.selectedRepairItems?.find(i => i.id === usageId || i.usageId === usageId || i.productId === usageId);
+    if (item) {
+      usage = {
+        id: item.usageId || item.id || usageId,
+        sku: (item as any).sku || item.productId || item.id || usageId,
+        repairOrderId: selectedOrder.uuid || selectedOrder.id,
+        inventoryItemId: item.productId || item.id,
+        partName: item.name,
+        quantity: item.quantity || 1,
+        unitCost: item.costPrice || 0,
+        totalCost: (item.quantity || 1) * (item.costPrice || 0),
+        sellingPrice: item.repairPrice ?? item.salePrice ?? 0,
+        sellingTotal: (item.quantity || 1) * (item.repairPrice ?? item.salePrice ?? 0),
+        ownershipType: selectedOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED,
+        responsiblePartnerId: 'SHOP',
+        accountingStatus: 'CONSUMED',
+        createdAt: new Date().toISOString()
+      };
+    }
+  }
+
   if (!usage) {
     return { success: false, error: 'لم يتم العثور على استخدام قطعة الغيار.' };
   }
@@ -63,13 +85,7 @@ export async function executeRemovePartUsageTransaction(
     };
   }
 
-  const product = findProductForRepairUsage(products, usage);
-  if (!product) {
-    return {
-      success: false,
-      error: `تعذر العثور على قطعة المخزون المرتبطة (${usage.sku || usage.partName}). لم يتم حذفها حتى لا تضيع كمية المخزون.`
-    };
-  }
+  const product = products.find(p => p.id === usage.inventoryItemId);
   const qtyToReturn = Math.min(usage.quantity, Math.max(1, removeQty === -1 ? usage.quantity : removeQty));
   const isFullRemove = usage.quantity <= qtyToReturn || removeQty === -1;
   const actualReturnedQty = isFullRemove ? usage.quantity : qtyToReturn;
@@ -88,7 +104,7 @@ export async function executeRemovePartUsageTransaction(
 
   const returnMovementPayload = {
     id: `MOV-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
-    productId: usage.inventoryItemId || (product as Product & { uuid?: string }).uuid || product.id,
+    productId: usage.inventoryItemId,
     productNameSnapshot: usage.partName,
     movementType: 'RETURN' as const,
     usageType: 'REPAIR_USAGE_RETURN' as const,
@@ -108,14 +124,16 @@ export async function executeRemovePartUsageTransaction(
   // STEP A: Restore product stock
   let stockUpdateResult: any = { ok: true };
   let stockOk = true;
-  stockOk = await updateProductQuantityInSupabase(product.id, newProductQuantity, product);
-  stockUpdateResult = { ok: stockOk, newQuantity: newProductQuantity };
-  if (!stockOk) {
-    return {
-      success: false,
-      error: 'فشل إرجاع الكمية إلى المخزون في Supabase. لم يتم حذف القطعة من أمر الصيانة.',
-      stockUpdateResult
-    };
+  if (product) {
+    stockOk = await updateProductQuantityInSupabase(product.id, newProductQuantity);
+    stockUpdateResult = { ok: stockOk, newQuantity: newProductQuantity };
+    if (!stockOk) {
+      return {
+        success: false,
+        error: 'فشل تحديث مخزون المنتج في Supabase.',
+        stockUpdateResult
+      };
+    }
   }
 
   // STEP B: Mark usage RETURNED or update quantity
@@ -131,10 +149,9 @@ export async function executeRemovePartUsageTransaction(
     };
   }
 
-  const usageOk = await updateRepairPartUsageInSupabase(usageId, usageUpdates, usage);
+  const usageOk = await updateRepairPartUsageInSupabase(usageId, usageUpdates);
   const usageUpdateResult = { ok: usageOk, updates: usageUpdates };
   if (!usageOk) {
-    await updateProductQuantityInSupabase(product.id, previousProductQty, product);
     return {
       success: false,
       error: 'فشل تحديث حالة استخدام قطعة الغيار إلى RETURNED في Supabase.',
@@ -147,14 +164,6 @@ export async function executeRemovePartUsageTransaction(
   const movementOk = await addInventoryMovementToSupabase(returnMovementPayload);
   const movementInsertResult = { ok: movementOk, movement: returnMovementPayload };
   if (!movementOk) {
-    await updateRepairPartUsageInSupabase(usageId, {
-      quantity: usage.quantity,
-      totalCost: usage.totalCost,
-      sellingPrice: usage.sellingPrice,
-      sellingTotal: usage.sellingTotal,
-      accountingStatus: usage.accountingStatus
-    }, usage);
-    await updateProductQuantityInSupabase(product.id, previousProductQty, product);
     return {
       success: false,
       error: 'فشل تسجيل حركة إرجاع المخزون REPAIR_USAGE_RETURN في Supabase.',
@@ -166,7 +175,9 @@ export async function executeRemovePartUsageTransaction(
 
   // ALL THREE SUCCEEDED -> NOW RECALCULATE LOCAL STATE & PERSIST ORDER
   let updatedProducts = products;
-  updatedProducts = products.map(p => p.id === product.id ? { ...p, quantity: newProductQuantity } : p);
+  if (product) {
+    updatedProducts = products.map(p => p.id === product.id ? { ...p, quantity: newProductQuantity } : p);
+  }
 
   let updatedPartUsages: RepairPartUsage[] = [];
   if (isFullRemove) {
@@ -234,7 +245,9 @@ export async function executeRemovePartUsageTransaction(
   }
 
   // Sync to local storage db
-  db.saveProducts(updatedProducts);
+  if (product) {
+    db.saveProducts(updatedProducts);
+  }
   db.saveRepairPartUsages(updatedPartUsages);
   db.saveRepairOrders(
     db.getRepairOrders().map(o => o.id === updatedOrder.id ? updatedOrder : o)
