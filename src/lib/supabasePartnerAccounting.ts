@@ -1,6 +1,11 @@
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { PartnerTransaction, PartnerLedgerEntry, PartnerSettlement } from '../types';
 import { db } from './db';
+import { applySettlementSafetyPatch } from './settlementSafetyPatch';
+
+// Keep the legacy db API used by the UI, but replace the known-bad settlement internals
+// with UUID/order-number-safe matching and the agreed private-work accounting rule.
+applySettlementSafetyPatch(db);
 
 export async function fetchOrMigratePartnerTransactions(): Promise<{
   success: boolean;
