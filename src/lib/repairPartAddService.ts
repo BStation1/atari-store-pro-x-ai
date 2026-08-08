@@ -29,7 +29,37 @@ export interface ExecuteAddPartUsageResult {
   createdUsage?: RepairPartUsage;
 }
 
-export async function executeAddPartUsageTransaction(
+// A synchronous in-memory lock prevents two rapid clicks for the same order/device/product
+// from starting overlapping Supabase transactions with the same stale local snapshot.
+// Concurrent callers share the first transaction result instead of creating duplicate usages.
+const activeAddPartTransactions = new Map<string, Promise<ExecuteAddPartUsageResult>>();
+
+export function executeAddPartUsageTransaction(
+  options: ExecuteAddPartUsageOptions
+): Promise<ExecuteAddPartUsageResult> {
+  const { product, deviceIdx, selectedOrder } = options;
+  const orderKey = String((selectedOrder as any)?.uuid || (selectedOrder as any)?.databaseId || selectedOrder?.id || 'unknown-order');
+  const deviceKey = String(selectedOrder?.devices?.[deviceIdx]?.id || deviceIdx);
+  const productKey = String((product as any)?.uuid || product?.id || product?.sku || 'unknown-product');
+  const lockKey = `${orderKey}::${deviceKey}::${productKey}`;
+
+  const active = activeAddPartTransactions.get(lockKey);
+  if (active) {
+    console.log(`[AddPart] Reusing active transaction for ${lockKey}; duplicate rapid click ignored.`);
+    return active;
+  }
+
+  const transaction = executeAddPartUsageTransactionUnlocked(options);
+  activeAddPartTransactions.set(lockKey, transaction);
+
+  return transaction.finally(() => {
+    if (activeAddPartTransactions.get(lockKey) === transaction) {
+      activeAddPartTransactions.delete(lockKey);
+    }
+  });
+}
+
+async function executeAddPartUsageTransactionUnlocked(
   options: ExecuteAddPartUsageOptions
 ): Promise<ExecuteAddPartUsageResult> {
   const { product, deviceIdx, qty, selectedOrder, products, partUsages, currentUserForAction } = options;
