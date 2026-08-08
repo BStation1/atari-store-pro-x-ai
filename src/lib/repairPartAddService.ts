@@ -1,7 +1,7 @@
 import { Product, RepairOrder, RepairPartUsage, SelectedRepairItem, WorkOwnershipType } from '../types';
 import { db } from './db';
 import { ensureProductUuidInSupabase, updateProductQuantityInSupabase, addInventoryMovementToSupabase } from './supabaseProducts';
-import { addRepairPartUsageToSupabase, updateRepairPartUsageInSupabase } from './supabasePartUsages';
+import { addRepairPartUsageToSupabase } from './supabasePartUsages';
 import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabaseStrict } from './supabaseRepairOrders';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { getUsageSellingUnitPrice, calculateSuggestedPriceForFaults } from './repairOrderCalculations';
@@ -74,22 +74,18 @@ export async function executeAddPartUsageTransaction(
   let updatedExistingUsageId: string | null = null;
 
   try {
-    // STEP A: Ensure canonical product exists remotely
     const resolvedProdUuid = await ensureProductUuidInSupabase(product);
     if (!resolvedProdUuid) {
       throw new Error("فشل الربط بقاعدة بيانات المنتجات في الخادم Supabase");
     }
     productUuid = resolvedProdUuid;
 
-    // Ensure repair order exists remotely
     const resolvedOrderUuid = await ensureRepairOrderUuidInSupabase(selectedOrder);
     if (!resolvedOrderUuid) {
       throw new Error("فشل الربط بقاعدة بيانات أوامر الصيانة في الخادم Supabase");
     }
     repairOrderUuid = resolvedOrderUuid;
 
-    // Start with the local cache, but NEVER trust it as the authority for deciding whether to INSERT.
-    // A stale local cache was the source of duplicate repair_part_usages rows in production.
     const allUsages = [...partUsages];
     let existingUsage = allUsages.find(
       pu => (pu.inventoryItemId === product.id || pu.inventoryItemId === productUuid) &&
@@ -99,9 +95,6 @@ export async function executeAddPartUsageTransaction(
             usageMatchesDevice(pu, currentDevice, deviceIdx, selectedOrder.devices.length)
     );
 
-    // Server-side duplicate guard: query the actual production table before any INSERT.
-    // The live schema does not store a device id, so the canonical uniqueness scope is
-    // repair_order_id + inventory_item_id for active (quantity > 0) usage rows.
     if (isSupabaseConfigured) {
       const { data: remoteUsageRows, error: remoteUsageError } = await supabase
         .from('repair_part_usages')
@@ -147,14 +140,12 @@ export async function executeAddPartUsageTransaction(
           allUsages.push(remoteUsage);
         }
       } else {
-        // No active remote row means a stale local row must never prevent a clean INSERT decision.
         existingUsage = undefined;
       }
     }
 
     let updatedUsageList: RepairPartUsage[] = [];
 
-    // STEP B: Insert or update repair_part_usage with canonical remote product ID
     if (existingUsage) {
       previousExistingUsage = { ...existingUsage };
       updatedExistingUsageId = existingUsage.id;
@@ -171,9 +162,24 @@ export async function executeAddPartUsageTransaction(
         sellingTotal: newUsageSellingTotal
       };
 
-      const ok = await updateRepairPartUsageInSupabase(existingUsage.id, usageUpdate);
-      if (!ok) {
-        throw new Error("فشل تحديث سجل قطعة الغيار في قاعدة البيانات Supabase");
+      if (isSupabaseConfigured) {
+        const { data: updatedUsageRow, error: usageUpdateError } = await supabase
+          .from('repair_part_usages')
+          .update({
+            quantity: newUsageQty,
+            cost_price_snapshot: effectiveUnitCost,
+            selling_price_snapshot: unitSellingPrice
+          })
+          .eq('id', existingUsage.id)
+          .select('id,repair_order_id,inventory_item_id,quantity,cost_price_snapshot,selling_price_snapshot')
+          .maybeSingle();
+
+        if (usageUpdateError) {
+          throw new Error(`Supabase رفض تحديث سجل قطعة الغيار: ${usageUpdateError.message}`);
+        }
+        if (!updatedUsageRow) {
+          throw new Error(`Supabase لم يُرجع سجل قطعة الغيار بعد التحديث (usage id: ${existingUsage.id})`);
+        }
       }
 
       createdUsage = {
@@ -215,7 +221,6 @@ export async function executeAddPartUsageTransaction(
       updatedUsageList = [...allUsages, createdUsage];
     }
 
-    // STEP C: Insert REPAIR_USAGE inventory movement
     const generatedMovementId = crypto.randomUUID();
     createdMovementId = generatedMovementId;
 
@@ -241,14 +246,12 @@ export async function executeAddPartUsageTransaction(
       throw new Error("فشل تسجيل حركة صرف المخزون بقاعدة البيانات Supabase");
     }
 
-    // STEP D: Update remote product stock quantity
     const stockOk = await updateProductQuantityInSupabase(productUuid, newQty);
     if (!stockOk) {
       throw new Error("فشل خصم الكمية من المخزون بقاعدة البيانات Supabase");
     }
     isStockUpdated = true;
 
-    // STEP E: Persist repair order snapshot
     const itemToPut: SelectedRepairItem = {
       id: createdUsage.id,
       usageId: createdUsage.id,
@@ -274,7 +277,6 @@ export async function executeAddPartUsageTransaction(
       nextSelectedRepairItems = [...existingItems, itemToPut];
     }
 
-    // Recalculate partsCost and order totals. Device partsCost is a sale-price total for UI pricing.
     const activeUsagesForDevice = updatedUsageList.filter(
       pu => usageMatchesOrder(pu, selectedOrder) &&
             pu.accountingStatus !== 'RETURNED' &&
@@ -361,7 +363,6 @@ export async function executeAddPartUsageTransaction(
       parts_cost_total: canonicalPartsCostTotal
     } as RepairOrder;
 
-    // Success: Update local DB collections
     const updatedProductsList = products.map(p => (p.id === product.id || p.id === productUuid) ? { ...p, id: productUuid, quantity: newQty } : p);
     db.saveProducts(updatedProductsList);
     db.saveRepairPartUsages(updatedUsageList);
@@ -381,9 +382,6 @@ export async function executeAddPartUsageTransaction(
   } catch (err: any) {
     console.error("❌ Add part transaction failed, executing rollback:", err);
 
-    // SAFE ROLLBACK IN REVERSE ORDER:
-
-    // Rollback Step D: Product Quantity
     if (isStockUpdated) {
       try {
         await updateProductQuantityInSupabase(productUuid, product.quantity);
@@ -392,7 +390,6 @@ export async function executeAddPartUsageTransaction(
       }
     }
 
-    // Rollback Step C: Inventory Movement
     if (createdMovementId && isSupabaseConfigured) {
       try {
         await supabase.from('inventory_movements').delete().eq('id', createdMovementId);
@@ -401,23 +398,24 @@ export async function executeAddPartUsageTransaction(
       }
     }
 
-    // Roll back an existing usage quantity/cost if this transaction updated it before a later step failed.
-    if (updatedExistingUsageId && previousExistingUsage) {
+    if (updatedExistingUsageId && previousExistingUsage && isSupabaseConfigured) {
       try {
-        await updateRepairPartUsageInSupabase(updatedExistingUsageId, {
-          quantity: previousExistingUsage.quantity,
-          unitCost: previousExistingUsage.unitCost,
-          totalCost: previousExistingUsage.totalCost,
-          sellingPrice: previousExistingUsage.sellingPrice,
-          sellingTotal: previousExistingUsage.sellingTotal,
-          accountingStatus: previousExistingUsage.accountingStatus
-        });
+        const { error: rollbackUsageError } = await supabase
+          .from('repair_part_usages')
+          .update({
+            quantity: previousExistingUsage.quantity,
+            cost_price_snapshot: previousExistingUsage.unitCost,
+            selling_price_snapshot: previousExistingUsage.sellingPrice
+          })
+          .eq('id', updatedExistingUsageId);
+        if (rollbackUsageError) {
+          console.warn("⚠️ Rollback existing usage failed:", rollbackUsageError.message);
+        }
       } catch (rbErr) {
         console.warn("⚠️ Rollback existing usage failed:", rbErr);
       }
     }
 
-    // Rollback Step B: Repair Part Usage if this transaction created a brand-new row.
     if (createdUsageId && isNewUsageCreated && isSupabaseConfigured) {
       try {
         await supabase.from('repair_part_usages').delete().eq('id', createdUsageId);
