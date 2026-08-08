@@ -70,6 +70,8 @@ export async function executeAddPartUsageTransaction(
   let isStockUpdated = false;
   let productUuid: string = product.id;
   let repairOrderUuid: string = selectedOrder.id;
+  let previousExistingUsage: RepairPartUsage | null = null;
+  let updatedExistingUsageId: string | null = null;
 
   try {
     // STEP A: Ensure canonical product exists remotely
@@ -86,9 +88,10 @@ export async function executeAddPartUsageTransaction(
     }
     repairOrderUuid = resolvedOrderUuid;
 
-    // Check existing active usage for same product on this order & device
+    // Start with the local cache, but NEVER trust it as the authority for deciding whether to INSERT.
+    // A stale local cache was the source of duplicate repair_part_usages rows in production.
     const allUsages = [...partUsages];
-    const existingUsage = allUsages.find(
+    let existingUsage = allUsages.find(
       pu => (pu.inventoryItemId === product.id || pu.inventoryItemId === productUuid) &&
             pu.accountingStatus !== 'RETURNED' &&
             pu.accountingStatus !== 'REVERSED' &&
@@ -96,10 +99,66 @@ export async function executeAddPartUsageTransaction(
             usageMatchesDevice(pu, currentDevice, deviceIdx, selectedOrder.devices.length)
     );
 
+    // Server-side duplicate guard: query the actual production table before any INSERT.
+    // The live schema does not store a device id, so the canonical uniqueness scope is
+    // repair_order_id + inventory_item_id for active (quantity > 0) usage rows.
+    if (isSupabaseConfigured) {
+      const { data: remoteUsageRows, error: remoteUsageError } = await supabase
+        .from('repair_part_usages')
+        .select('id,repair_order_id,inventory_item_id,part_name_snapshot,quantity,cost_price_snapshot,selling_price_snapshot,stock_ownership_snapshot,created_at')
+        .eq('repair_order_id', repairOrderUuid)
+        .eq('inventory_item_id', productUuid)
+        .gt('quantity', 0)
+        .order('created_at', { ascending: true });
+
+      if (remoteUsageError) {
+        throw new Error(`تعذر التحقق من سجلات استخدام قطعة الغيار الحالية في Supabase: ${remoteUsageError.message}`);
+      }
+
+      if ((remoteUsageRows || []).length > 1) {
+        throw new Error('يوجد أكثر من سجل استخدام نشط لنفس قطعة الغيار في أمر الصيانة. تم إيقاف الإضافة لمنع تكرار إضافي. يلزم تنظيف السجلات المكررة أولاً.');
+      }
+
+      if (remoteUsageRows && remoteUsageRows.length === 1) {
+        const row: any = remoteUsageRows[0];
+        const remoteUsage: RepairPartUsage = {
+          id: String(row.id),
+          repairOrderId: String(row.repair_order_id),
+          inventoryItemId: String(row.inventory_item_id),
+          partName: String(row.part_name_snapshot || product.nameAr || product.name || ''),
+          sku: product.sku || product.id,
+          quantity: Number(row.quantity || 0),
+          unitCost: Number(row.cost_price_snapshot || unitPurchaseCost || 0),
+          totalCost: Number(row.quantity || 0) * Number(row.cost_price_snapshot || unitPurchaseCost || 0),
+          sellingPrice: Number(row.selling_price_snapshot || unitSellingPrice || 0),
+          sellingTotal: Number(row.quantity || 0) * Number(row.selling_price_snapshot || unitSellingPrice || 0),
+          ownershipType: ownership,
+          responsiblePartnerId: owner === 'AHMED' ? 'P-001' : owner === 'ABDO' ? 'P-002' : 'SHOP',
+          accountingStatus: 'CONSUMED',
+          createdAt: row.created_at || new Date().toISOString(),
+          notes: `deviceId:${currentDevice.id || deviceIdx}`
+        } as RepairPartUsage;
+
+        existingUsage = remoteUsage;
+        const localIdx = allUsages.findIndex(pu => pu.id === remoteUsage.id);
+        if (localIdx >= 0) {
+          allUsages[localIdx] = { ...allUsages[localIdx], ...remoteUsage };
+        } else {
+          allUsages.push(remoteUsage);
+        }
+      } else {
+        // No active remote row means a stale local row must never prevent a clean INSERT decision.
+        existingUsage = undefined;
+      }
+    }
+
     let updatedUsageList: RepairPartUsage[] = [];
 
     // STEP B: Insert or update repair_part_usage with canonical remote product ID
     if (existingUsage) {
+      previousExistingUsage = { ...existingUsage };
+      updatedExistingUsageId = existingUsage.id;
+
       const effectiveUnitCost = unitPurchaseCost > 0 ? unitPurchaseCost : (existingUsage.unitCost || 0);
       const newUsageQty = existingUsage.quantity + qty;
       const newUsageTotalCost = newUsageQty * effectiveUnitCost;
@@ -121,7 +180,12 @@ export async function executeAddPartUsageTransaction(
         ...existingUsage,
         ...usageUpdate
       };
-      updatedUsageList = allUsages.map(pu => pu.id === existingUsage.id ? createdUsage! : pu);
+      const existingLocalIdx = allUsages.findIndex(pu => pu.id === existingUsage.id);
+      if (existingLocalIdx >= 0) {
+        updatedUsageList = allUsages.map(pu => pu.id === existingUsage!.id ? createdUsage! : pu);
+      } else {
+        updatedUsageList = [...allUsages, createdUsage];
+      }
     } else {
       isNewUsageCreated = true;
       const generatedUsageId = crypto.randomUUID();
@@ -337,7 +401,23 @@ export async function executeAddPartUsageTransaction(
       }
     }
 
-    // Rollback Step B: Repair Part Usage
+    // Roll back an existing usage quantity/cost if this transaction updated it before a later step failed.
+    if (updatedExistingUsageId && previousExistingUsage) {
+      try {
+        await updateRepairPartUsageInSupabase(updatedExistingUsageId, {
+          quantity: previousExistingUsage.quantity,
+          unitCost: previousExistingUsage.unitCost,
+          totalCost: previousExistingUsage.totalCost,
+          sellingPrice: previousExistingUsage.sellingPrice,
+          sellingTotal: previousExistingUsage.sellingTotal,
+          accountingStatus: previousExistingUsage.accountingStatus
+        });
+      } catch (rbErr) {
+        console.warn("⚠️ Rollback existing usage failed:", rbErr);
+      }
+    }
+
+    // Rollback Step B: Repair Part Usage if this transaction created a brand-new row.
     if (createdUsageId && isNewUsageCreated && isSupabaseConfigured) {
       try {
         await supabase.from('repair_part_usages').delete().eq('id', createdUsageId);
