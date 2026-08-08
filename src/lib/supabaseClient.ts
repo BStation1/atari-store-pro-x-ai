@@ -50,6 +50,47 @@ export const supabase = createClient(
 );
 
 /**
+ * Production safety circuit breaker for the app-wide wildcard Realtime channel.
+ *
+ * useData.ts currently subscribes to every change in the public schema and then
+ * dispatches local refetch events. A single repair transaction touches several
+ * tables, so the wildcard subscription can echo those writes back into many
+ * hooks at once and create a browser request storm. Chrome then starts failing
+ * otherwise-valid Supabase requests with net::ERR_INSUFFICIENT_RESOURCES.
+ *
+ * Keep global wildcard realtime OFF by default. Local mutation events still
+ * update the current browser immediately. Realtime can be explicitly re-enabled
+ * later after the subscription is replaced with table-scoped/debounced channels.
+ */
+const enableGlobalRealtime = String(
+  metaEnv.VITE_ENABLE_GLOBAL_REALTIME || procEnv.VITE_ENABLE_GLOBAL_REALTIME || 'false'
+).toLowerCase() === 'true';
+
+if (!enableGlobalRealtime) {
+  const originalChannel = supabase.channel.bind(supabase);
+
+  (supabase as any).channel = (topic: string, params?: any) => {
+    if (topic !== 'public-realtime-db') {
+      return originalChannel(topic, params);
+    }
+
+    let subscribeCallback: ((status: string) => void) | undefined;
+    const disabledChannel: any = {
+      on: () => disabledChannel,
+      subscribe: (callback?: (status: string) => void) => {
+        subscribeCallback = callback;
+        queueMicrotask(() => subscribeCallback?.('SUBSCRIBED'));
+        console.info('🛡️ Global Supabase Realtime wildcard disabled to prevent request storms');
+        return disabledChannel;
+      },
+      unsubscribe: async () => 'ok',
+    };
+
+    return disabledChannel;
+  };
+}
+
+/**
  * Utility function to test Supabase database connectivity.
  */
 export async function testSupabaseConnection(): Promise<{ success: boolean; message: string; data?: any }> {
