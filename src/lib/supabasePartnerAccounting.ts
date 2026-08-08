@@ -1,3 +1,4 @@
+import './egressPaginationGuard';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { PartnerTransaction, PartnerLedgerEntry, PartnerSettlement } from '../types';
 import { db } from './db';
