@@ -2,12 +2,13 @@ import { Product, RepairOrder, RepairPartUsage, SelectedRepairItem, WorkOwnershi
 import { db } from './db';
 import { ensureProductUuidInSupabase, updateProductQuantityInSupabase, addInventoryMovementToSupabase } from './supabaseProducts';
 import { addRepairPartUsageToSupabase, updateRepairPartUsageInSupabase } from './supabasePartUsages';
-import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabase, updateRepairOrderInSupabaseStrict } from './supabaseRepairOrders';
+import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabaseStrict } from './supabaseRepairOrders';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { getUsageSellingUnitPrice, calculateSuggestedPriceForFaults } from './repairOrderCalculations';
 import { usageMatchesOrder, usageMatchesDevice } from './accountingEngineV2';
 import { addAuditLogRecordHelper, addTimelineEventHelper } from './repairLogging';
 import { getDeviceDisplayName } from './customerDisplayHelper';
+import { calculateActiveRepairPartsCostTotal, syncRepairOrderPartsCostTotal } from './repairOrderPartsCostSync';
 
 export interface ExecuteAddPartUsageOptions {
   product: Product;
@@ -209,7 +210,7 @@ export async function executeAddPartUsageTransaction(
       nextSelectedRepairItems = [...existingItems, itemToPut];
     }
 
-    // Recalculate partsCost and order totals
+    // Recalculate partsCost and order totals. Device partsCost is a sale-price total for UI pricing.
     const activeUsagesForDevice = updatedUsageList.filter(
       pu => usageMatchesOrder(pu, selectedOrder) &&
             pu.accountingStatus !== 'RETURNED' &&
@@ -221,6 +222,8 @@ export async function executeAddPartUsageTransaction(
       const sellP = getUsageSellingUnitPrice(pu, products);
       return sum + (pu.quantity * sellP);
     }, 0);
+
+    const canonicalPartsCostTotal = calculateActiveRepairPartsCostTotal(updatedUsageList, selectedOrder, repairOrderUuid);
 
     const tags = currentDevice.selectedQuickFaults || (currentDevice.issue ? currentDevice.issue.split(" - ").map(s => s.trim()) : []);
     const faultsCost = currentDevice.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(tags);
@@ -250,8 +253,10 @@ export async function executeAddPartUsageTransaction(
       ...selectedOrder,
       devices: updatedDevices,
       totalEstimatedCost: totalFinal,
-      finalRepairPrice: totalFinal
-    };
+      finalRepairPrice: totalFinal,
+      partsCostTotal: canonicalPartsCostTotal,
+      parts_cost_total: canonicalPartsCostTotal
+    } as RepairOrder;
 
     updatedOrder = addAuditLogRecordHelper(
       updatedOrder,
@@ -276,7 +281,21 @@ export async function executeAddPartUsageTransaction(
     if (!orderSaveRes.success) {
       throw new Error(`فشل حفظ بيانات أمر الصيانة بجدول الصيانة في الخادم Supabase: ${orderSaveRes.error || "خطأ غير معروف"}`);
     }
-    const finalOrder = orderSaveRes.updatedOrder || updatedOrder;
+
+    const costSync = await syncRepairOrderPartsCostTotal({
+      repairOrderUuid,
+      orderNumber: selectedOrder.id,
+      partsCostTotal: canonicalPartsCostTotal
+    });
+    if (!costSync.success) {
+      throw new Error(`فشل حفظ إجمالي تكلفة قطع الغيار في أمر الصيانة: ${costSync.error || "خطأ غير معروف"}`);
+    }
+
+    const finalOrder = {
+      ...(orderSaveRes.updatedOrder || updatedOrder),
+      partsCostTotal: canonicalPartsCostTotal,
+      parts_cost_total: canonicalPartsCostTotal
+    } as RepairOrder;
 
     // Success: Update local DB collections
     const updatedProductsList = products.map(p => (p.id === product.id || p.id === productUuid) ? { ...p, id: productUuid, quantity: newQty } : p);
