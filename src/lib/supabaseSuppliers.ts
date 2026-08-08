@@ -3,6 +3,7 @@ import { Supplier, User } from '../types';
 import { getAuthenticatedUserRole } from './authPermissions';
 
 const SUPPLIERS_STORAGE_KEY = 'atari_suppliers';
+const SUPPLIER_SELECT = 'id, name, phone, company, email, address, notes, balance, is_active, is_archived, created_at, updated_at';
 
 export const DEFAULT_SUPPLIERS: Supplier[] = [];
 
@@ -81,10 +82,11 @@ export async function fetchOrMigrateSuppliers(): Promise<{
   const localSuppliers = getLocalSuppliersBackup();
 
   try {
-    // Query suppliers directly from Supabase
+    // Query only the supplier fields used by the UI. The shared Supabase fetch
+    // layer deduplicates/caches this full snapshot for 60 seconds.
     const { data: dbRows, error: fetchErr } = await supabase
       .from('suppliers')
-      .select('*')
+      .select(SUPPLIER_SELECT)
       .order('created_at', { ascending: false });
 
     if (fetchErr) {
@@ -140,7 +142,6 @@ export async function addSupplierToSupabase(
   }
 
   const cleanPhone = String(supplierData.phone || '').trim();
-  const cleanName = String(supplierData.name || '').trim();
 
   // Check duplicate supplier
   if (cleanPhone) {
@@ -166,7 +167,7 @@ export async function addSupplierToSupabase(
   const { data: inserted, error } = await supabase
     .from('suppliers')
     .insert(row)
-    .select()
+    .select(SUPPLIER_SELECT)
     .single();
 
   if (error || !inserted) {
@@ -200,7 +201,7 @@ export async function updateSupplierInSupabase(
     .from('suppliers')
     .update(row)
     .eq('id', supplier.id)
-    .select()
+    .select(SUPPLIER_SELECT)
     .single();
 
   if (error || !updated) {
@@ -246,7 +247,7 @@ export async function deleteSupplierFromSupabase(
   if (isLinked) {
     const { data: existing } = await supabase
       .from('suppliers')
-      .select('*')
+      .select(SUPPLIER_SELECT)
       .eq('id', id)
       .single();
 
@@ -270,7 +271,7 @@ export async function deleteSupplierFromSupabase(
   if (error) {
     const { data: existing } = await supabase
       .from('suppliers')
-      .select('*')
+      .select(SUPPLIER_SELECT)
       .eq('id', id)
       .single();
 
