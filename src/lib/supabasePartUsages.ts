@@ -3,6 +3,12 @@ import { RepairPartUsage } from '../types';
 import { db } from './db';
 import { isRepairPartMutationPending } from './repairPartOptimisticBridge';
 
+// Realtime/local mutation events can fire several times for one user action. Pulling the
+// complete usage table on every event caused a large amount of duplicate Supabase egress.
+// Within this short window the local store is intentionally treated as the freshest cache.
+const REPAIR_PART_USAGE_FETCH_MIN_INTERVAL_MS = 15_000;
+let lastRepairPartUsageRemoteFetchAt = 0;
+
 export async function fetchOrMigrateRepairPartUsages(): Promise<{
   success: boolean;
   partUsages: RepairPartUsage[];
@@ -22,9 +28,18 @@ export async function fetchOrMigrateRepairPartUsages(): Promise<{
       return { success: true, partUsages: localUsages };
     }
 
+    const now = Date.now();
+    if (now - lastRepairPartUsageRemoteFetchAt < REPAIR_PART_USAGE_FETCH_MIN_INTERVAL_MS) {
+      return { success: true, partUsages: localUsages };
+    }
+
+    // Mark the attempt before awaiting the network request so simultaneous React/realtime
+    // triggers cannot start multiple identical full-table reads at the same time.
+    lastRepairPartUsageRemoteFetchAt = now;
+
     const { data, error } = await supabase
       .from('repair_part_usages')
-      .select('*')
+      .select('id,repair_order_id,inventory_item_id,part_name_snapshot,quantity,cost_price_snapshot,selling_price_snapshot,stock_ownership_snapshot,created_at')
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -38,29 +53,29 @@ export async function fetchOrMigrateRepairPartUsages(): Promise<{
 
     const remoteUsages: RepairPartUsage[] = data.map((r: any) => {
       const q = Number(r.quantity || 0);
-      const uCost = Number(r.cost_price_snapshot || r.unit_cost || r.unitCost || 0);
-      const tCost = Number(r.total_cost || r.totalCost || (q * uCost));
-      const sPrice = Number(r.selling_price_snapshot ?? r.selling_unit_price_snapshot ?? r.sellingPrice ?? 0);
-      const sTotal = Number(r.selling_total ?? r.sellingTotal ?? (q * sPrice));
+      const uCost = Number(r.cost_price_snapshot || 0);
+      const sPrice = Number(r.selling_price_snapshot ?? 0);
+      const ownership = String(r.stock_ownership_snapshot || 'SHARED').toUpperCase();
 
       return {
         id: String(r.id),
-        repairOrderId: String(r.repair_order_id || r.repairOrderId || ''),
-        inventoryItemId: String(r.inventory_item_id || r.inventoryItemId || ''),
-        partName: String(r.part_name_snapshot || r.part_name || r.partName || ''),
-        sku: String(r.sku || ''),
+        repairOrderId: String(r.repair_order_id || ''),
+        inventoryItemId: String(r.inventory_item_id || ''),
+        partName: String(r.part_name_snapshot || ''),
+        sku: '',
         quantity: q,
         unitCost: uCost,
-        totalCost: tCost,
+        totalCost: q * uCost,
         sellingPrice: sPrice,
-        sellingTotal: sTotal,
-        ownershipType: (r.ownership_type || r.ownershipType || 'CUSTOMER_SHARED') as any,
-        responsiblePartnerId: String(r.responsible_partner_id || r.responsiblePartnerId || 'SHOP'),
-        accountingStatus: (q <= 0 ? 'RETURNED' : (r.accounting_status || r.accountingStatus || 'CONSUMED')) as any,
-        createdAt: r.created_at || r.createdAt || new Date().toISOString(),
-        employeeName: r.employee_name || r.employeeName,
-        warehouse: r.warehouse,
-        notes: r.notes
+        sellingTotal: q * sPrice,
+        ownershipType: (ownership === 'AHMED'
+          ? 'PARTNER_1_PRIVATE'
+          : ownership === 'ABDO'
+            ? 'PARTNER_2_PRIVATE'
+            : 'CUSTOMER_SHARED') as any,
+        responsiblePartnerId: ownership === 'AHMED' ? 'P-001' : ownership === 'ABDO' ? 'P-002' : 'SHOP',
+        accountingStatus: (q <= 0 ? 'RETURNED' : 'CONSUMED') as any,
+        createdAt: r.created_at || new Date().toISOString()
       };
     });
 
@@ -159,7 +174,7 @@ export async function addRepairPartUsageToSupabase(
   const { data: insertedRow, error } = await supabase
     .from('repair_part_usages')
     .insert([row])
-    .select()
+    .select('id,repair_order_id,inventory_item_id,part_name_snapshot,quantity,cost_price_snapshot,selling_price_snapshot,stock_ownership_snapshot,created_at')
     .single();
 
   if (error) {
