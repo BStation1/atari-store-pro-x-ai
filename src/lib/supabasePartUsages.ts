@@ -48,7 +48,8 @@ export async function fetchOrMigrateRepairPartUsages(): Promise<{
         sellingTotal: sTotal,
         ownershipType: (r.ownership_type || r.ownershipType || 'CUSTOMER_SHARED') as any,
         responsiblePartnerId: String(r.responsible_partner_id || r.responsiblePartnerId || 'SHOP'),
-        accountingStatus: (r.accounting_status || r.accountingStatus || 'CONSUMED') as any,
+        // Production does not have accounting_status. A zero-quantity row is the canonical removed state.
+        accountingStatus: (q <= 0 ? 'RETURNED' : (r.accounting_status || r.accountingStatus || 'CONSUMED')) as any,
         createdAt: r.created_at || r.createdAt || new Date().toISOString(),
         employeeName: r.employee_name || r.employeeName,
         warehouse: r.warehouse,
@@ -64,7 +65,7 @@ export async function fetchOrMigrateRepairPartUsages(): Promise<{
       }
     });
 
-    const mergedUsages = Array.from(mergedMap.values()).sort((a, b) => 
+    const mergedUsages = Array.from(mergedMap.values()).sort((a, b) =>
       new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
     );
 
@@ -88,7 +89,6 @@ export async function addRepairPartUsageToSupabase(
     return db.addRepairPartUsage(partUsage);
   }
 
-  // 1. Resolve repair_order_id UUID in Supabase if a custom order number like 'ATR-10001' was passed
   let resolvedOrderUuid = partUsage.repairOrderId;
   if (!isUuid(resolvedOrderUuid)) {
     try {
@@ -110,7 +110,6 @@ export async function addRepairPartUsageToSupabase(
     throw new Error(`تعذر ربط أمر الصيانة بقاعدة البيانات Supabase (المعرف ${partUsage.repairOrderId} غير موجود/غير صالح)`);
   }
 
-  // 2. Resolve inventory_item_id UUID in Supabase if needed
   let resolvedItemUuid = partUsage.inventoryItemId;
   if (resolvedItemUuid && !isUuid(resolvedItemUuid)) {
     try {
@@ -123,8 +122,8 @@ export async function addRepairPartUsageToSupabase(
       if (existingProd?.id && isUuid(existingProd.id)) {
         resolvedItemUuid = existingProd.id;
       }
-    } catch (err) {
-      // ignore
+    } catch {
+      // handled by validation below
     }
   }
 
@@ -132,7 +131,6 @@ export async function addRepairPartUsageToSupabase(
     throw new Error(`تعذر ربط قطعة الغيار بقاعدة البيانات Supabase (المعرف ${partUsage.inventoryItemId} غير موجود/غير صالح)`);
   }
 
-  // Map ownership
   let ownershipEnum: 'AHMED' | 'ABDO' | 'SHARED' = 'SHARED';
   if (partUsage.ownershipType === 'PARTNER_1_PRIVATE' || (partUsage.ownershipType as any) === 'AHMED') {
     ownershipEnum = 'AHMED';
@@ -173,35 +171,136 @@ export async function addRepairPartUsageToSupabase(
   } as any);
 }
 
-export async function updateRepairPartUsageInSupabase(id: string, updates: Partial<RepairPartUsage>): Promise<boolean> {
-  const all = db.getRepairPartUsages();
-  const index = all.findIndex(pu => pu.id === id);
-  if (index !== -1) {
-    all[index] = { ...all[index], ...updates };
-    db.saveRepairPartUsages(all);
-  }
+async function syncPartsCostTotalForRepairOrder(repairOrderId: string): Promise<boolean> {
+  try {
+    const { data: usages, error: usagesError } = await supabase
+      .from('repair_part_usages')
+      .select('quantity,cost_price_snapshot')
+      .eq('repair_order_id', repairOrderId);
 
-  if (isSupabaseConfigured) {
-    try {
-      const rowUpdates: any = {};
-      if (updates.accountingStatus) rowUpdates.accounting_status = updates.accountingStatus;
-      if (updates.notes !== undefined) rowUpdates.notes = updates.notes;
-      if (updates.quantity !== undefined) rowUpdates.quantity = updates.quantity;
-      if (updates.unitCost !== undefined) {
-        rowUpdates.unit_cost = updates.unitCost;
-        rowUpdates.cost_price_snapshot = updates.unitCost;
-      }
-      if (updates.totalCost !== undefined) rowUpdates.total_cost = updates.totalCost;
-      if (updates.sellingPrice !== undefined) rowUpdates.selling_price_snapshot = updates.sellingPrice;
-      if (updates.sellingTotal !== undefined) rowUpdates.selling_total = updates.sellingTotal;
-
-      const { error } = await supabase.from('repair_part_usages').update(rowUpdates).eq('id', id);
-      if (error) {
-        console.warn("⚠️ Notice updating repair_part_usages in Supabase:", error.message);
-      }
-    } catch (err) {
-      console.warn("⚠️ Exception updating repair_part_usages in Supabase:", err);
+    if (usagesError) {
+      console.warn('⚠️ Failed to read usages while syncing parts_cost_total:', usagesError.message);
+      return false;
     }
+
+    const total = (usages || []).reduce((sum: number, row: any) => {
+      const qty = Math.max(0, Number(row.quantity || 0));
+      const unitCost = Math.max(0, Number(row.cost_price_snapshot || 0));
+      return sum + (qty * unitCost);
+    }, 0);
+
+    const { error: orderError } = await supabase
+      .from('repair_orders')
+      .update({ parts_cost_total: total, updated_at: new Date().toISOString() })
+      .eq('id', repairOrderId);
+
+    if (orderError) {
+      console.warn('⚠️ Failed to sync repair_orders.parts_cost_total:', orderError.message);
+      return false;
+    }
+
+    return true;
+  } catch (err) {
+    console.warn('⚠️ Exception syncing repair_orders.parts_cost_total:', err);
+    return false;
   }
-  return true;
+}
+
+export async function updateRepairPartUsageInSupabase(id: string, updates: Partial<RepairPartUsage>): Promise<boolean> {
+  const localUsages = db.getRepairPartUsages();
+  const localIndex = localUsages.findIndex(pu => pu.id === id);
+  const existingLocal = localIndex !== -1 ? localUsages[localIndex] : undefined;
+
+  if (!isSupabaseConfigured) {
+    if (localIndex !== -1) {
+      localUsages[localIndex] = { ...localUsages[localIndex], ...updates };
+      db.saveRepairPartUsages(localUsages);
+    }
+    return true;
+  }
+
+  try {
+    const { data: previousRow, error: previousError } = await supabase
+      .from('repair_part_usages')
+      .select('id,repair_order_id,quantity,cost_price_snapshot,selling_price_snapshot')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (previousError || !previousRow) {
+      console.warn('⚠️ Could not resolve repair_part_usage before update:', previousError?.message || id);
+      return false;
+    }
+
+    const isFullReturn = updates.accountingStatus === 'RETURNED' || updates.accountingStatus === 'REVERSED';
+    const rowUpdates: any = {};
+
+    // Production schema has no accounting_status column. Full removal is represented by quantity = 0.
+    if (isFullReturn) {
+      rowUpdates.quantity = 0;
+    } else if (updates.quantity !== undefined) {
+      rowUpdates.quantity = Math.max(0, Number(updates.quantity));
+    }
+
+    if (updates.unitCost !== undefined) {
+      rowUpdates.cost_price_snapshot = Math.max(0, Number(updates.unitCost));
+    }
+    if (updates.sellingPrice !== undefined) {
+      rowUpdates.selling_price_snapshot = Math.max(0, Number(updates.sellingPrice));
+    }
+
+    if (Object.keys(rowUpdates).length === 0) {
+      if (localIndex !== -1) {
+        localUsages[localIndex] = { ...localUsages[localIndex], ...updates };
+        db.saveRepairPartUsages(localUsages);
+      }
+      return true;
+    }
+
+    const { data: updatedRow, error } = await supabase
+      .from('repair_part_usages')
+      .update(rowUpdates)
+      .eq('id', id)
+      .select('id,repair_order_id,quantity,cost_price_snapshot,selling_price_snapshot')
+      .maybeSingle();
+
+    if (error || !updatedRow) {
+      console.warn('⚠️ Failed updating repair_part_usages in Supabase:', error?.message || 'No matching row');
+      return false;
+    }
+
+    const costSyncOk = await syncPartsCostTotalForRepairOrder(String(updatedRow.repair_order_id));
+    if (!costSyncOk) {
+      // Roll the usage row back if the order cost cannot be kept consistent.
+      const { error: rollbackError } = await supabase
+        .from('repair_part_usages')
+        .update({
+          quantity: previousRow.quantity,
+          cost_price_snapshot: previousRow.cost_price_snapshot,
+          selling_price_snapshot: previousRow.selling_price_snapshot
+        })
+        .eq('id', id);
+
+      if (rollbackError) {
+        console.error('❌ Failed to rollback repair_part_usage after parts_cost_total sync failure:', rollbackError.message);
+      }
+      return false;
+    }
+
+    if (localIndex !== -1) {
+      localUsages[localIndex] = {
+        ...localUsages[localIndex],
+        ...updates,
+        quantity: Number(updatedRow.quantity ?? localUsages[localIndex].quantity),
+        accountingStatus: (Number(updatedRow.quantity || 0) <= 0 ? 'RETURNED' : (updates.accountingStatus || localUsages[localIndex].accountingStatus)) as any
+      };
+      db.saveRepairPartUsages(localUsages);
+    } else if (existingLocal) {
+      db.saveRepairPartUsages([...localUsages, { ...existingLocal, ...updates }]);
+    }
+
+    return true;
+  } catch (err) {
+    console.warn('⚠️ Exception updating repair_part_usages in Supabase:', err);
+    return false;
+  }
 }
