@@ -42,31 +42,67 @@ if (!isSupabaseConfigured) {
 /**
  * Browser-side read deduplication for Supabase REST.
  *
- * Several UI hooks can ask for the same full products / repair_orders snapshot within
- * a few milliseconds after one local mutation. Without a guard every identical GET
- * reaches Supabase and the complete payload is billed again as egress.
- *
- * - Only GET requests are cached/deduplicated.
- * - Mutations, RPC calls and auth requests are never cached.
- * - Cache is deliberately short (12s) so UI stays fresh while request storms collapse
- *   into one network read.
- * - In-flight identical GETs share the same response body instead of racing separately.
+ * Several UI hooks can ask for the same snapshots repeatedly after one mutation.
+ * We collapse identical reads and keep a short cache for frequently-read core data.
+ * Opening-balance existence checks are especially expensive because the product
+ * migration flow performs one inventory_movements lookup per product (N+1).
+ * Those lookups are safe to cache longer and are explicitly invalidated on writes.
  */
-const READ_CACHE_TTL_MS = 12_000;
+const DEFAULT_READ_CACHE_TTL_MS = 12_000;
+const OPENING_BALANCE_CACHE_TTL_MS = 10 * 60_000;
 const readResponseCache = new Map<string, { expiresAt: number; response: Response }>();
 const inFlightReads = new Map<string, Promise<Response>>();
+
+function isOpeningBalanceLookup(url: string): boolean {
+  return url.includes('/rest/v1/inventory_movements') &&
+    (url.includes('OPENING_BALANCE') || url.includes('reference_id=eq.OPENING_BALANCE'));
+}
 
 function shouldDedupeRead(url: string, method: string): boolean {
   if (method !== 'GET') return false;
   return url.includes('/rest/v1/products') ||
     url.includes('/rest/v1/repair_orders') ||
-    url.includes('/rest/v1/repair_part_usages');
+    url.includes('/rest/v1/repair_part_usages') ||
+    isOpeningBalanceLookup(url);
+}
+
+function readCacheTtlForUrl(url: string): number {
+  return isOpeningBalanceLookup(url)
+    ? OPENING_BALANCE_CACHE_TTL_MS
+    : DEFAULT_READ_CACHE_TTL_MS;
+}
+
+function invalidateReadCacheForMutation(url: string): void {
+  const tableMatch = url.match(/\/rest\/v1\/([^?]+)/);
+  const table = tableMatch?.[1];
+  if (!table) return;
+
+  for (const key of readResponseCache.keys()) {
+    if (key.includes(`/rest/v1/${table}`)) {
+      readResponseCache.delete(key);
+    }
+  }
+
+  // Product writes can affect subsequent migration/opening-balance verification.
+  // Inventory movement writes must invalidate the long-lived opening-balance cache.
+  if (table === 'products' || table === 'inventory_movements') {
+    for (const key of readResponseCache.keys()) {
+      if (key.includes('/rest/v1/inventory_movements')) {
+        readResponseCache.delete(key);
+      }
+    }
+  }
 }
 
 const dedupingFetch: typeof fetch = async (input, init) => {
   const request = input instanceof Request ? input : null;
   const url = request?.url || String(input);
   const method = String(init?.method || request?.method || 'GET').toUpperCase();
+
+  if (method !== 'GET') {
+    invalidateReadCacheForMutation(url);
+    return fetch(input as any, init);
+  }
 
   if (!shouldDedupeRead(url, method)) {
     return fetch(input as any, init);
@@ -95,7 +131,7 @@ const dedupingFetch: typeof fetch = async (input, init) => {
   const networkPromise = fetch(input as any, init).then(response => {
     if (response.ok) {
       readResponseCache.set(cacheKey, {
-        expiresAt: Date.now() + READ_CACHE_TTL_MS,
+        expiresAt: Date.now() + readCacheTtlForUrl(url),
         response: response.clone(),
       });
     }
