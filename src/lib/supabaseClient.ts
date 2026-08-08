@@ -57,9 +57,9 @@ if (!isSupabaseConfigured) {
  * fetchOrMigrateInvoices(). Cache both for 60 seconds as one logical dataset so
  * repeated invoice/report mounts do not redownload the same history twice.
  *
- * customers, expenses, and partner accounting are also loaded as full-table history
- * snapshots by their hooks. Cache those reads for 60 seconds and invalidate them on
- * any write to the same table so normal edits remain immediately fresh.
+ * customers, suppliers, expenses, and partner accounting are also loaded as
+ * full-table snapshots by their hooks. Cache those reads for 60 seconds and
+ * invalidate them on any write to the same table so edits stay immediately fresh.
  */
 const DEFAULT_READ_CACHE_TTL_MS = 12_000;
 const HEAVY_HISTORY_CACHE_TTL_MS = 60_000;
@@ -82,6 +82,7 @@ function isInvoiceHistoryRead(url: string): boolean {
 
 function isBusinessHistoryRead(url: string): boolean {
   return url.includes('/rest/v1/customers') ||
+    url.includes('/rest/v1/suppliers') ||
     url.includes('/rest/v1/expenses') ||
     url.includes('/rest/v1/partner_transactions') ||
     url.includes('/rest/v1/partner_ledger') ||
