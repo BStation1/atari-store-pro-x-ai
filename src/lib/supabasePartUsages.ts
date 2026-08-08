@@ -48,7 +48,6 @@ export async function fetchOrMigrateRepairPartUsages(): Promise<{
         sellingTotal: sTotal,
         ownershipType: (r.ownership_type || r.ownershipType || 'CUSTOMER_SHARED') as any,
         responsiblePartnerId: String(r.responsible_partner_id || r.responsiblePartnerId || 'SHOP'),
-        // Production does not have accounting_status. A zero-quantity row is the canonical removed state.
         accountingStatus: (q <= 0 ? 'RETURNED' : (r.accounting_status || r.accountingStatus || 'CONSUMED')) as any,
         createdAt: r.created_at || r.createdAt || new Date().toISOString(),
         employeeName: r.employee_name || r.employeeName,
@@ -57,20 +56,16 @@ export async function fetchOrMigrateRepairPartUsages(): Promise<{
       };
     });
 
-    const mergedMap = new Map<string, RepairPartUsage>();
-    remoteUsages.forEach(u => mergedMap.set(u.id, u));
-    localUsages.forEach(u => {
-      if (!mergedMap.has(u.id)) {
-        mergedMap.set(u.id, u);
-      }
-    });
-
-    const mergedUsages = Array.from(mergedMap.values()).sort((a, b) =>
+    // When Supabase is configured it is the source of truth. Do not merge local-only
+    // usages back into the fetched list: a local-only row can be a usage that was
+    // legitimately deleted remotely during a full part return. Re-merging it makes
+    // deleted parts reappear and can create duplicate-looking rows in the workshop UI.
+    const authoritativeUsages = [...remoteUsages].sort((a, b) =>
       new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
     );
 
-    db.saveRepairPartUsages(mergedUsages);
-    return { success: true, partUsages: mergedUsages };
+    db.saveRepairPartUsages(authoritativeUsages);
+    return { success: true, partUsages: authoritativeUsages };
   } catch (err: any) {
     console.warn("⚠️ [fetchOrMigrateRepairPartUsages] Exception:", err?.message || err);
     return { success: false, error: err?.message, partUsages: localUsages };
@@ -234,7 +229,6 @@ export async function updateRepairPartUsageInSupabase(id: string, updates: Parti
     const isFullReturn = updates.accountingStatus === 'RETURNED' || updates.accountingStatus === 'REVERSED';
     const rowUpdates: any = {};
 
-    // Production schema has no accounting_status column. Full removal is represented by quantity = 0.
     if (isFullReturn) {
       rowUpdates.quantity = 0;
     } else if (updates.quantity !== undefined) {
@@ -270,7 +264,6 @@ export async function updateRepairPartUsageInSupabase(id: string, updates: Parti
 
     const costSyncOk = await syncPartsCostTotalForRepairOrder(String(updatedRow.repair_order_id));
     if (!costSyncOk) {
-      // Roll the usage row back if the order cost cannot be kept consistent.
       const { error: rollbackError } = await supabase
         .from('repair_part_usages')
         .update({
