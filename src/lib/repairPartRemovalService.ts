@@ -144,73 +144,7 @@ export async function executeRemovePartUsageTransaction(options: ExecuteRemovePa
     sellingTotal: newUsageQty * usageSellPrice
   };
 
-  let usageMutationOk = false;
-  let deletedSnapshot: RepairPartUsage | undefined;
-  if (isFullRemove) {
-    const deleteResult = await deleteRepairPartUsageInSupabase(usage.id);
-    usageMutationOk = deleteResult.success;
-    deletedSnapshot = deleteResult.deleted || usage;
-  } else {
-    usageMutationOk = await updateRepairPartUsageInSupabase(usage.id, partialUsageUpdates);
-  }
-
-  const usageUpdateResult = { ok: usageMutationOk, mode: isFullRemove ? 'DELETE' : 'UPDATE', updates: isFullRemove ? undefined : partialUsageUpdates };
-  if (!usageMutationOk) {
-    return {
-      success: false,
-      error: isFullRemove ? 'فشل حذف سجل استخدام قطعة الغيار من Supabase.' : 'فشل تحديث كمية استخدام قطعة الغيار في Supabase.',
-      usageUpdateResult
-    };
-  }
-
-  const rollbackUsage = async () => {
-    if (isFullRemove) {
-      await restoreRepairPartUsageInSupabase(deletedSnapshot || usage);
-    } else {
-      await updateRepairPartUsageInSupabase(usage.id, {
-        quantity: usage.quantity,
-        unitCost: usage.unitCost,
-        totalCost: usage.totalCost,
-        sellingPrice: usage.sellingPrice,
-        sellingTotal: usage.sellingTotal
-      });
-    }
-  };
-
-  const stockOk = await updateProductQuantityInSupabase(product.id, newProductQuantity);
-  const stockUpdateResult = { ok: stockOk, newQuantity: newProductQuantity };
-  if (!stockOk) {
-    await rollbackUsage();
-    return { success: false, error: 'فشل إرجاع الكمية إلى المخزون في Supabase، وتم التراجع عن تعديل الاستخدام.', stockUpdateResult, usageUpdateResult };
-  }
-
-  const returnMovementPayload = {
-    id: crypto.randomUUID(),
-    productId: usage.inventoryItemId || product.id,
-    productNameSnapshot: usage.partName,
-    movementType: 'RETURN' as const,
-    usageType: 'REPAIR_USAGE_RETURN' as const,
-    quantityChange: actualReturnedQty,
-    previousQuantity: previousProductQty,
-    newQuantity: newProductQuantity,
-    costPriceSnapshot: usage.unitCost,
-    sellingPriceSnapshot: 0,
-    totalCost: usage.unitCost * actualReturnedQty,
-    referenceId: selectedOrder.id,
-    repairOrderId: (selectedOrder as any).uuid || (selectedOrder as any).databaseId || selectedOrder.id,
-    owner,
-    notes: `إرجاع قطعة غيار صيانة للمخزن: ${usage.partName}`,
-    createdAt: new Date().toISOString()
-  };
-
-  const movementOk = await addInventoryMovementToSupabase(returnMovementPayload);
-  const movementInsertResult = { ok: movementOk, movement: returnMovementPayload };
-  if (!movementOk) {
-    await updateProductQuantityInSupabase(product.id, previousProductQty);
-    await rollbackUsage();
-    return { success: false, error: 'فشل تسجيل حركة إرجاع المخزون في Supabase، وتم التراجع عن التغييرات.', stockUpdateResult, usageUpdateResult, movementInsertResult };
-  }
-
+  // Build the final local state BEFORE waiting on Supabase. This makes the UI react immediately.
   const updatedProducts = products.map(p => p.id === product.id ? { ...p, quantity: newProductQuantity } : p);
   const updatedPartUsages = isFullRemove
     ? partUsages.filter(pu => pu.id !== usage.id)
@@ -255,6 +189,95 @@ export async function executeRemovePartUsageTransaction(options: ExecuteRemovePa
     } as RepairOrder;
   }
 
+  const previousLocalProducts = products;
+  const previousLocalUsages = partUsages;
+  const previousLocalOrder = selectedOrder;
+
+  const saveLocalOptimisticState = () => {
+    db.saveProducts(updatedProducts);
+    db.saveRepairPartUsages(updatedPartUsages);
+    db.saveRepairOrders(db.getRepairOrders().map(o => o.id === updatedOrder.id ? updatedOrder : o));
+  };
+
+  const rollbackLocalOptimisticState = () => {
+    db.saveProducts(previousLocalProducts);
+    db.saveRepairPartUsages(previousLocalUsages);
+    db.saveRepairOrders(db.getRepairOrders().map(o => o.id === previousLocalOrder.id ? previousLocalOrder : o));
+  };
+
+  // Optimistic UI: publish the expected result immediately. Remote work continues below.
+  saveLocalOptimisticState();
+
+  let usageMutationOk = false;
+  let deletedSnapshot: RepairPartUsage | undefined;
+  if (isFullRemove) {
+    const deleteResult = await deleteRepairPartUsageInSupabase(usage.id);
+    usageMutationOk = deleteResult.success;
+    deletedSnapshot = deleteResult.deleted || usage;
+  } else {
+    usageMutationOk = await updateRepairPartUsageInSupabase(usage.id, partialUsageUpdates);
+  }
+
+  const usageUpdateResult = { ok: usageMutationOk, mode: isFullRemove ? 'DELETE' : 'UPDATE', updates: isFullRemove ? undefined : partialUsageUpdates };
+  if (!usageMutationOk) {
+    rollbackLocalOptimisticState();
+    return {
+      success: false,
+      error: isFullRemove ? 'فشل حذف سجل استخدام قطعة الغيار من Supabase.' : 'فشل تحديث كمية استخدام قطعة الغيار في Supabase.',
+      usageUpdateResult
+    };
+  }
+
+  const rollbackUsage = async () => {
+    if (isFullRemove) {
+      await restoreRepairPartUsageInSupabase(deletedSnapshot || usage);
+    } else {
+      await updateRepairPartUsageInSupabase(usage.id, {
+        quantity: usage.quantity,
+        unitCost: usage.unitCost,
+        totalCost: usage.totalCost,
+        sellingPrice: usage.sellingPrice,
+        sellingTotal: usage.sellingTotal
+      });
+    }
+  };
+
+  const stockOk = await updateProductQuantityInSupabase(product.id, newProductQuantity);
+  const stockUpdateResult = { ok: stockOk, newQuantity: newProductQuantity };
+  if (!stockOk) {
+    await rollbackUsage();
+    rollbackLocalOptimisticState();
+    return { success: false, error: 'فشل إرجاع الكمية إلى المخزون في Supabase، وتم التراجع عن تعديل الاستخدام.', stockUpdateResult, usageUpdateResult };
+  }
+
+  const returnMovementPayload = {
+    id: crypto.randomUUID(),
+    productId: usage.inventoryItemId || product.id,
+    productNameSnapshot: usage.partName,
+    movementType: 'RETURN' as const,
+    usageType: 'REPAIR_USAGE_RETURN' as const,
+    quantityChange: actualReturnedQty,
+    previousQuantity: previousProductQty,
+    newQuantity: newProductQuantity,
+    costPriceSnapshot: usage.unitCost,
+    sellingPriceSnapshot: 0,
+    totalCost: usage.unitCost * actualReturnedQty,
+    referenceId: selectedOrder.id,
+    repairOrderId: (selectedOrder as any).uuid || (selectedOrder as any).databaseId || selectedOrder.id,
+    owner,
+    notes: `إرجاع قطعة غيار صيانة للمخزن: ${usage.partName}`,
+    createdAt: new Date().toISOString()
+  };
+
+  const movementOk = await addInventoryMovementToSupabase(returnMovementPayload);
+  const movementInsertResult = { ok: movementOk, movement: returnMovementPayload };
+  if (!movementOk) {
+    await updateProductQuantityInSupabase(product.id, previousProductQty);
+    await rollbackUsage();
+    rollbackLocalOptimisticState();
+    return { success: false, error: 'فشل تسجيل حركة إرجاع المخزون في Supabase، وتم التراجع عن التغييرات.', stockUpdateResult, usageUpdateResult, movementInsertResult };
+  }
+
   const saveResult = await updateRepairOrderInSupabaseStrict(updatedOrder);
   if (!saveResult.success) {
     await updateProductQuantityInSupabase(product.id, previousProductQty);
@@ -277,12 +300,14 @@ export async function executeRemovePartUsageTransaction(options: ExecuteRemovePa
       notes: `عكس حركة إرجاع قطعة غيار بسبب فشل حفظ أمر الصيانة: ${usage.partName}`,
       createdAt: new Date().toISOString()
     });
+    rollbackLocalOptimisticState();
 
     return { success: false, error: saveResult.error || 'فشل حفظ أمر الصيانة بعد إرجاع القطعة، وتم التراجع عن العملية.', stockUpdateResult, usageUpdateResult, movementInsertResult };
   }
 
   if (saveResult.updatedOrder) updatedOrder = saveResult.updatedOrder;
 
+  // Re-save the canonical successful state in case Supabase hydration added fields.
   db.saveProducts(updatedProducts);
   db.saveRepairPartUsages(updatedPartUsages);
   db.saveRepairOrders(db.getRepairOrders().map(o => o.id === updatedOrder.id ? updatedOrder : o));
