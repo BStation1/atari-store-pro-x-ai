@@ -47,19 +47,22 @@ function buildProductIdentitySet(product: Product, products: Product[], extraId?
   push((product as any).barcode);
   push(extraId);
 
-  const relatedProducts = products.filter(candidate => {
-    const candidateValues = [candidate.id, (candidate as any).uuid, candidate.sku, (candidate as any).barcode]
-      .map(normalizePartIdentity)
-      .filter(Boolean);
-    return candidateValues.some(value => ids.has(value));
-  });
-
-  relatedProducts.forEach(candidate => {
-    push(candidate.id);
-    push((candidate as any).uuid);
-    push(candidate.sku);
-    push((candidate as any).barcode);
-  });
+  let expanded = true;
+  while (expanded) {
+    expanded = false;
+    products.forEach(candidate => {
+      const candidateValues = [candidate.id, (candidate as any).uuid, candidate.sku, (candidate as any).barcode]
+        .map(normalizePartIdentity)
+        .filter(Boolean);
+      if (!candidateValues.some(value => ids.has(value))) return;
+      candidateValues.forEach(value => {
+        if (!ids.has(value)) {
+          ids.add(value);
+          expanded = true;
+        }
+      });
+    });
+  }
 
   return ids;
 }
@@ -78,6 +81,55 @@ function usageMatchesProductIdentity(usage: RepairPartUsage, product: Product, i
   const usageName = normalizePartIdentity(usage.partName || (usage as any).part_name_snapshot);
   const productName = normalizePartIdentity(product.nameAr || product.name);
   return Boolean(usageName && productName && usageName === productName);
+}
+
+function isSameTargetUsage(
+  usage: RepairPartUsage,
+  product: Product,
+  identities: Set<string>,
+  selectedOrder: RepairOrder,
+  currentDevice: any,
+  deviceIdx: number
+): boolean {
+  return usage.accountingStatus !== 'RETURNED' &&
+    usage.accountingStatus !== 'REVERSED' &&
+    usageMatchesOrder(usage, selectedOrder) &&
+    usageMatchesDevice(usage, currentDevice, deviceIdx, selectedOrder.devices.length) &&
+    usageMatchesProductIdentity(usage, product, identities);
+}
+
+function preferFreshUsageSnapshot(a: RepairPartUsage, b: RepairPartUsage): RepairPartUsage {
+  const aOptimistic = String(a.id || '').startsWith('optimistic-');
+  const bOptimistic = String(b.id || '').startsWith('optimistic-');
+  if (aOptimistic !== bOptimistic) return aOptimistic ? b : a;
+  const aTime = new Date(a.createdAt || 0).getTime();
+  const bTime = new Date(b.createdAt || 0).getTime();
+  if (aTime !== bTime) return bTime > aTime ? b : a;
+  return Number(b.quantity || 0) >= Number(a.quantity || 0) ? b : a;
+}
+
+function mergeFreshUsageSources(primary: RepairPartUsage[], secondary: RepairPartUsage[]): RepairPartUsage[] {
+  const byId = new Map<string, RepairPartUsage>();
+  [...secondary, ...primary].forEach(usage => {
+    const key = String(usage.id || '');
+    if (!key) return;
+    const existing = byId.get(key);
+    byId.set(key, existing ? preferFreshUsageSnapshot(existing, usage) : usage);
+  });
+  return Array.from(byId.values());
+}
+
+function replaceEquivalentUsageWithCanonical(
+  usages: RepairPartUsage[],
+  canonical: RepairPartUsage,
+  product: Product,
+  identities: Set<string>,
+  selectedOrder: RepairOrder,
+  currentDevice: any,
+  deviceIdx: number
+): RepairPartUsage[] {
+  const filtered = usages.filter(usage => !isSameTargetUsage(usage, product, identities, selectedOrder, currentDevice, deviceIdx));
+  return [...filtered, canonical];
 }
 
 const activeAddPartTransactions = new Map<string, Promise<ExecuteAddPartUsageResult>>();
@@ -151,16 +203,12 @@ async function executeAddPartUsageTransactionUnlocked(
   let previousExistingUsage: RepairPartUsage | null = null;
   let updatedExistingUsageId: string | null = null;
 
-  // A product can be represented locally by a legacy id while existing usages store the
-  // Supabase UUID. Build one alias set first so adding the same catalogue item never
-  // creates a second optimistic line merely because the identifiers use different forms.
+  // React state can lag one mutation behind while the optimistic bridge has already
+  // written a newer snapshot to local storage. Always start from the freshest union.
+  const freshPartUsages = mergeFreshUsageSources(db.getRepairPartUsages(), partUsages);
   const optimisticProductIdentities = buildProductIdentitySet(product, products);
-  const optimisticExisting = partUsages.find(pu =>
-    pu.accountingStatus !== 'RETURNED' &&
-    pu.accountingStatus !== 'REVERSED' &&
-    usageMatchesOrder(pu, selectedOrder) &&
-    usageMatchesDevice(pu, currentDevice, deviceIdx, selectedOrder.devices.length) &&
-    usageMatchesProductIdentity(pu, product, optimisticProductIdentities)
+  const optimisticExisting = freshPartUsages.find(pu =>
+    isSameTargetUsage(pu, product, optimisticProductIdentities, selectedOrder, currentDevice, deviceIdx)
   );
 
   const optimisticUsage: RepairPartUsage = optimisticExisting
@@ -190,9 +238,15 @@ async function executeAddPartUsageTransactionUnlocked(
         notes: `deviceId:${currentDevice.id || deviceIdx}`
       } as RepairPartUsage;
 
-  const optimisticUsages = optimisticExisting
-    ? partUsages.map(pu => pu.id === optimisticExisting.id ? optimisticUsage : pu)
-    : [...partUsages, optimisticUsage];
+  const optimisticUsages = replaceEquivalentUsageWithCanonical(
+    freshPartUsages,
+    optimisticUsage,
+    product,
+    optimisticProductIdentities,
+    selectedOrder,
+    currentDevice,
+    deviceIdx
+  );
 
   db.saveRepairPartUsages(optimisticUsages);
   beginRepairPartMutation();
@@ -210,14 +264,10 @@ async function executeAddPartUsageTransactionUnlocked(
     }
     repairOrderUuid = resolvedOrderUuid;
 
-    const allUsages = [...partUsages];
+    let allUsages = mergeFreshUsageSources(db.getRepairPartUsages(), freshPartUsages);
     const resolvedProductIdentities = buildProductIdentitySet(product, products, productUuid);
-    let existingUsage = allUsages.find(
-      pu => usageMatchesProductIdentity(pu, product, resolvedProductIdentities) &&
-            pu.accountingStatus !== 'RETURNED' &&
-            pu.accountingStatus !== 'REVERSED' &&
-            usageMatchesOrder(pu, selectedOrder) &&
-            usageMatchesDevice(pu, currentDevice, deviceIdx, selectedOrder.devices.length)
+    let existingUsage = allUsages.find(pu =>
+      isSameTargetUsage(pu, product, resolvedProductIdentities, selectedOrder, currentDevice, deviceIdx)
     );
 
     if (isSupabaseConfigured) {
@@ -258,13 +308,23 @@ async function executeAddPartUsageTransactionUnlocked(
         } as RepairPartUsage;
 
         existingUsage = remoteUsage;
-        const localIdx = allUsages.findIndex(pu => pu.id === remoteUsage.id);
-        if (localIdx >= 0) {
-          allUsages[localIdx] = { ...allUsages[localIdx], ...remoteUsage };
-        } else {
-          allUsages.push(remoteUsage);
-        }
+        // The remote row is canonical. Remove every stale/local/optimistic alias of the
+        // same product for this order/device before continuing, rather than appending it.
+        allUsages = replaceEquivalentUsageWithCanonical(
+          allUsages,
+          remoteUsage,
+          product,
+          resolvedProductIdentities,
+          selectedOrder,
+          currentDevice,
+          deviceIdx
+        );
       } else {
+        // No remote usage means any optimistic/local alias is only a temporary snapshot;
+        // remove it before inserting the first canonical server row.
+        allUsages = allUsages.filter(pu =>
+          !isSameTargetUsage(pu, product, resolvedProductIdentities, selectedOrder, currentDevice, deviceIdx)
+        );
         existingUsage = undefined;
       }
     }
@@ -311,12 +371,15 @@ async function executeAddPartUsageTransactionUnlocked(
         ...existingUsage,
         ...usageUpdate
       };
-      const existingLocalIdx = allUsages.findIndex(pu => pu.id === existingUsage.id);
-      if (existingLocalIdx >= 0) {
-        updatedUsageList = allUsages.map(pu => pu.id === existingUsage!.id ? createdUsage! : pu);
-      } else {
-        updatedUsageList = [...allUsages, createdUsage];
-      }
+      updatedUsageList = replaceEquivalentUsageWithCanonical(
+        allUsages,
+        createdUsage,
+        product,
+        resolvedProductIdentities,
+        selectedOrder,
+        currentDevice,
+        deviceIdx
+      );
     } else {
       isNewUsageCreated = true;
       const generatedUsageId = crypto.randomUUID();
@@ -343,7 +406,15 @@ async function executeAddPartUsageTransactionUnlocked(
       if (!createdUsage || !createdUsage.id) {
         throw new Error("فشل إنشاء سجل قطعة الغيار بقاعدة البيانات Supabase");
       }
-      updatedUsageList = [...allUsages, createdUsage];
+      updatedUsageList = replaceEquivalentUsageWithCanonical(
+        allUsages,
+        createdUsage,
+        product,
+        resolvedProductIdentities,
+        selectedOrder,
+        currentDevice,
+        deviceIdx
+      );
     }
 
     const generatedMovementId = crypto.randomUUID();
@@ -391,16 +462,19 @@ async function executeAddPartUsageTransactionUnlocked(
     };
 
     const existingItems = currentDevice.selectedRepairItems || [];
-    const existingItemIdx = existingItems.findIndex(
-      i => i.usageId === createdUsage!.id || i.id === createdUsage!.id || (i.productId && resolvedProductIdentities.has(normalizePartIdentity(i.productId)))
-    );
-
-    let nextSelectedRepairItems: SelectedRepairItem[];
-    if (existingItemIdx >= 0) {
-      nextSelectedRepairItems = existingItems.map((item, idx) => idx === existingItemIdx ? itemToPut : item);
-    } else {
-      nextSelectedRepairItems = [...existingItems, itemToPut];
-    }
+    // Remove every stale duplicate representation of the same product, then append the
+    // one canonical line. This guarantees the workshop table has one row with qty 2/3/…
+    // even if an older order snapshot already contained two aliases.
+    const nextSelectedRepairItems: SelectedRepairItem[] = [
+      ...existingItems.filter(item => {
+        if (item.usageId === createdUsage!.id || item.id === createdUsage!.id) return false;
+        if (item.productId && resolvedProductIdentities.has(normalizePartIdentity(item.productId))) return false;
+        const itemName = normalizePartIdentity((item as any).name || (item as any).partName);
+        const productName = normalizePartIdentity(product.nameAr || product.name);
+        return !(itemName && productName && itemName === productName);
+      }),
+      itemToPut
+    ];
 
     const activeUsagesForDevice = updatedUsageList.filter(
       pu => usageMatchesOrder(pu, selectedOrder) &&
