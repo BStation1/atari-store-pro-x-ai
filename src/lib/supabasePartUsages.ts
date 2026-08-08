@@ -1,6 +1,7 @@
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { RepairPartUsage } from '../types';
 import { db } from './db';
+import { isRepairPartMutationPending } from './repairPartOptimisticBridge';
 
 export async function fetchOrMigrateRepairPartUsages(): Promise<{
   success: boolean;
@@ -8,6 +9,13 @@ export async function fetchOrMigrateRepairPartUsages(): Promise<{
   error?: string;
 }> {
   const localUsages = db.getRepairPartUsages();
+
+  // While an add/remove transaction is still in flight, the local store contains the
+  // intentional optimistic snapshot. Returning it here prevents a fast refetch from
+  // replacing the UI with the older Supabase snapshot for a few seconds.
+  if (isRepairPartMutationPending()) {
+    return { success: true, partUsages: localUsages };
+  }
 
   try {
     if (!isSupabaseConfigured) {

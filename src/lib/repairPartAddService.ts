@@ -9,6 +9,7 @@ import { usageMatchesOrder, usageMatchesDevice } from './accountingEngineV2';
 import { addAuditLogRecordHelper, addTimelineEventHelper } from './repairLogging';
 import { getDeviceDisplayName } from './customerDisplayHelper';
 import { calculateActiveRepairPartsCostTotal, syncRepairOrderPartsCostTotal } from './repairOrderPartsCostSync';
+import { beginRepairPartMutation, endRepairPartMutation } from './repairPartOptimisticBridge';
 
 export interface ExecuteAddPartUsageOptions {
   product: Product;
@@ -29,9 +30,6 @@ export interface ExecuteAddPartUsageResult {
   createdUsage?: RepairPartUsage;
 }
 
-// A synchronous in-memory lock prevents two rapid clicks for the same order/device/product
-// from starting overlapping Supabase transactions with the same stale local snapshot.
-// Concurrent callers share the first transaction result instead of creating duplicate usages.
 const activeAddPartTransactions = new Map<string, Promise<ExecuteAddPartUsageResult>>();
 
 export function executeAddPartUsageTransaction(
@@ -102,6 +100,55 @@ async function executeAddPartUsageTransactionUnlocked(
   let repairOrderUuid: string = selectedOrder.id;
   let previousExistingUsage: RepairPartUsage | null = null;
   let updatedExistingUsageId: string | null = null;
+
+  // Publish an optimistic usage snapshot before the first network await. The hook will
+  // read this local snapshot while the mutation bridge is active, so the + button feels
+  // immediate without allowing a stale Supabase refetch to overwrite it mid-transaction.
+  const optimisticExisting = partUsages.find(pu =>
+    pu.accountingStatus !== 'RETURNED' &&
+    pu.accountingStatus !== 'REVERSED' &&
+    usageMatchesOrder(pu, selectedOrder) &&
+    usageMatchesDevice(pu, currentDevice, deviceIdx, selectedOrder.devices.length) &&
+    (
+      pu.inventoryItemId === product.id ||
+      (!!product.sku && pu.sku === product.sku) ||
+      pu.partName === (product.nameAr || product.name)
+    )
+  );
+
+  const optimisticUsage: RepairPartUsage = optimisticExisting
+    ? {
+        ...optimisticExisting,
+        quantity: Number(optimisticExisting.quantity || 0) + qty,
+        unitCost: unitPurchaseCost || optimisticExisting.unitCost || 0,
+        totalCost: (Number(optimisticExisting.quantity || 0) + qty) * (unitPurchaseCost || optimisticExisting.unitCost || 0),
+        sellingPrice: unitSellingPrice,
+        sellingTotal: (Number(optimisticExisting.quantity || 0) + qty) * unitSellingPrice
+      }
+    : {
+        id: `optimistic-${crypto.randomUUID()}`,
+        repairOrderId: selectedOrder.id,
+        inventoryItemId: product.id,
+        partName: product.nameAr || product.name,
+        sku: product.sku || product.id,
+        quantity: qty,
+        unitCost: unitPurchaseCost,
+        totalCost,
+        sellingPrice: unitSellingPrice,
+        sellingTotal,
+        ownershipType: ownership,
+        responsiblePartnerId: owner === 'AHMED' ? 'P-001' : owner === 'ABDO' ? 'P-002' : 'SHOP',
+        accountingStatus: 'CONSUMED',
+        createdAt: new Date().toISOString(),
+        notes: `deviceId:${currentDevice.id || deviceIdx}`
+      } as RepairPartUsage;
+
+  const optimisticUsages = optimisticExisting
+    ? partUsages.map(pu => pu.id === optimisticExisting.id ? optimisticUsage : pu)
+    : [...partUsages, optimisticUsage];
+
+  db.saveRepairPartUsages(optimisticUsages);
+  beginRepairPartMutation();
 
   try {
     const resolvedProdUuid = await ensureProductUuidInSupabase(product);
@@ -400,6 +447,7 @@ async function executeAddPartUsageTransactionUnlocked(
     const allOrders = db.getRepairOrders();
     const updatedOrdersList = allOrders.map(o => o.id === finalOrder.id || o.uuid === finalOrder.uuid ? finalOrder : o);
     db.saveRepairOrders(updatedOrdersList);
+    endRepairPartMutation();
 
     return {
       success: true,
@@ -453,6 +501,9 @@ async function executeAddPartUsageTransactionUnlocked(
         console.warn("⚠️ Rollback usage failed:", rbErr);
       }
     }
+
+    db.saveRepairPartUsages(partUsages);
+    endRepairPartMutation();
 
     return {
       success: false,
