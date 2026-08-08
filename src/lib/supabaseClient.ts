@@ -39,6 +39,76 @@ if (!isSupabaseConfigured) {
   );
 }
 
+/**
+ * Browser-side read deduplication for Supabase REST.
+ *
+ * Several UI hooks can ask for the same full products / repair_orders snapshot within
+ * a few milliseconds after one local mutation. Without a guard every identical GET
+ * reaches Supabase and the complete payload is billed again as egress.
+ *
+ * - Only GET requests are cached/deduplicated.
+ * - Mutations, RPC calls and auth requests are never cached.
+ * - Cache is deliberately short (12s) so UI stays fresh while request storms collapse
+ *   into one network read.
+ * - In-flight identical GETs share the same response body instead of racing separately.
+ */
+const READ_CACHE_TTL_MS = 12_000;
+const readResponseCache = new Map<string, { expiresAt: number; response: Response }>();
+const inFlightReads = new Map<string, Promise<Response>>();
+
+function shouldDedupeRead(url: string, method: string): boolean {
+  if (method !== 'GET') return false;
+  return url.includes('/rest/v1/products') ||
+    url.includes('/rest/v1/repair_orders') ||
+    url.includes('/rest/v1/repair_part_usages');
+}
+
+const dedupingFetch: typeof fetch = async (input, init) => {
+  const request = input instanceof Request ? input : null;
+  const url = request?.url || String(input);
+  const method = String(init?.method || request?.method || 'GET').toUpperCase();
+
+  if (!shouldDedupeRead(url, method)) {
+    return fetch(input as any, init);
+  }
+
+  const authHeader = String(
+    (init?.headers instanceof Headers ? init.headers.get('authorization') : undefined) ||
+    request?.headers.get('authorization') ||
+    ''
+  );
+  const cacheKey = `${method}:${url}:${authHeader}`;
+  const now = Date.now();
+  const cached = readResponseCache.get(cacheKey);
+
+  if (cached && cached.expiresAt > now) {
+    return cached.response.clone();
+  }
+  if (cached) readResponseCache.delete(cacheKey);
+
+  const existing = inFlightReads.get(cacheKey);
+  if (existing) {
+    const shared = await existing;
+    return shared.clone();
+  }
+
+  const networkPromise = fetch(input as any, init).then(response => {
+    if (response.ok) {
+      readResponseCache.set(cacheKey, {
+        expiresAt: Date.now() + READ_CACHE_TTL_MS,
+        response: response.clone(),
+      });
+    }
+    return response;
+  }).finally(() => {
+    inFlightReads.delete(cacheKey);
+  });
+
+  inFlightReads.set(cacheKey, networkPromise);
+  const response = await networkPromise;
+  return response.clone();
+};
+
 // Create a singleton Supabase client. Placeholder values are intentionally non-production;
 // all data services already check isSupabaseConfigured and can use local fallback where supported.
 export const supabase = createClient(
@@ -49,6 +119,9 @@ export const supabase = createClient(
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: true,
+    },
+    global: {
+      fetch: dedupingFetch,
     },
   }
 );
