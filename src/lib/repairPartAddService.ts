@@ -30,6 +30,56 @@ export interface ExecuteAddPartUsageResult {
   createdUsage?: RepairPartUsage;
 }
 
+function normalizePartIdentity(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function buildProductIdentitySet(product: Product, products: Product[], extraId?: string): Set<string> {
+  const ids = new Set<string>();
+  const push = (value: unknown) => {
+    const normalized = normalizePartIdentity(value);
+    if (normalized) ids.add(normalized);
+  };
+
+  push(product.id);
+  push((product as any).uuid);
+  push(product.sku);
+  push((product as any).barcode);
+  push(extraId);
+
+  const relatedProducts = products.filter(candidate => {
+    const candidateValues = [candidate.id, (candidate as any).uuid, candidate.sku, (candidate as any).barcode]
+      .map(normalizePartIdentity)
+      .filter(Boolean);
+    return candidateValues.some(value => ids.has(value));
+  });
+
+  relatedProducts.forEach(candidate => {
+    push(candidate.id);
+    push((candidate as any).uuid);
+    push(candidate.sku);
+    push((candidate as any).barcode);
+  });
+
+  return ids;
+}
+
+function usageMatchesProductIdentity(usage: RepairPartUsage, product: Product, identities: Set<string>): boolean {
+  const usageValues = [
+    usage.inventoryItemId,
+    (usage as any).inventory_item_id,
+    usage.sku,
+    (usage as any).productId,
+    (usage as any).product_id
+  ].map(normalizePartIdentity).filter(Boolean);
+
+  if (usageValues.some(value => identities.has(value))) return true;
+
+  const usageName = normalizePartIdentity(usage.partName || (usage as any).part_name_snapshot);
+  const productName = normalizePartIdentity(product.nameAr || product.name);
+  return Boolean(usageName && productName && usageName === productName);
+}
+
 const activeAddPartTransactions = new Map<string, Promise<ExecuteAddPartUsageResult>>();
 
 export function executeAddPartUsageTransaction(
@@ -101,19 +151,16 @@ async function executeAddPartUsageTransactionUnlocked(
   let previousExistingUsage: RepairPartUsage | null = null;
   let updatedExistingUsageId: string | null = null;
 
-  // Publish an optimistic usage snapshot before the first network await. The hook will
-  // read this local snapshot while the mutation bridge is active, so the + button feels
-  // immediate without allowing a stale Supabase refetch to overwrite it mid-transaction.
+  // A product can be represented locally by a legacy id while existing usages store the
+  // Supabase UUID. Build one alias set first so adding the same catalogue item never
+  // creates a second optimistic line merely because the identifiers use different forms.
+  const optimisticProductIdentities = buildProductIdentitySet(product, products);
   const optimisticExisting = partUsages.find(pu =>
     pu.accountingStatus !== 'RETURNED' &&
     pu.accountingStatus !== 'REVERSED' &&
     usageMatchesOrder(pu, selectedOrder) &&
     usageMatchesDevice(pu, currentDevice, deviceIdx, selectedOrder.devices.length) &&
-    (
-      pu.inventoryItemId === product.id ||
-      (!!product.sku && pu.sku === product.sku) ||
-      pu.partName === (product.nameAr || product.name)
-    )
+    usageMatchesProductIdentity(pu, product, optimisticProductIdentities)
   );
 
   const optimisticUsage: RepairPartUsage = optimisticExisting
@@ -164,8 +211,9 @@ async function executeAddPartUsageTransactionUnlocked(
     repairOrderUuid = resolvedOrderUuid;
 
     const allUsages = [...partUsages];
+    const resolvedProductIdentities = buildProductIdentitySet(product, products, productUuid);
     let existingUsage = allUsages.find(
-      pu => (pu.inventoryItemId === product.id || pu.inventoryItemId === productUuid) &&
+      pu => usageMatchesProductIdentity(pu, product, resolvedProductIdentities) &&
             pu.accountingStatus !== 'RETURNED' &&
             pu.accountingStatus !== 'REVERSED' &&
             usageMatchesOrder(pu, selectedOrder) &&
@@ -344,7 +392,7 @@ async function executeAddPartUsageTransactionUnlocked(
 
     const existingItems = currentDevice.selectedRepairItems || [];
     const existingItemIdx = existingItems.findIndex(
-      i => i.usageId === createdUsage!.id || i.id === createdUsage!.id || (i.productId && (i.productId === product.id || i.productId === productUuid))
+      i => i.usageId === createdUsage!.id || i.id === createdUsage!.id || (i.productId && resolvedProductIdentities.has(normalizePartIdentity(i.productId)))
     );
 
     let nextSelectedRepairItems: SelectedRepairItem[];
