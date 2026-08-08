@@ -1,6 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Access Supabase credentials from Vite environment variables or process.env safely
+// Access Supabase credentials from Vite environment variables or process.env safely.
+// Never fall back to a real project URL/key here: if Vercel env vars are missing,
+// silently connecting to an old Supabase project can create confusing 402 errors,
+// wrong-data reads, and unnecessary egress against the wrong backend.
 const metaEnv = ((typeof import.meta !== 'undefined' && (import.meta as any).env) || {}) as Record<string, string | undefined>;
 const procEnv = (typeof process !== 'undefined' && process.env) ? process.env : {};
 
@@ -9,37 +12,38 @@ const supabaseUrl =
   metaEnv.VITE_SUPABASE_PROJECT_URL ||
   procEnv.VITE_SUPABASE_URL ||
   procEnv.VITE_SUPABASE_PROJECT_URL ||
-  'https://sitypxfezcsyusivbufc.supabase.co';
+  '';
 
 const supabaseKey =
   metaEnv.VITE_SUPABASE_PUBLISHABLE_KEY ||
   metaEnv.VITE_SUPABASE_ANON_KEY ||
   procEnv.VITE_SUPABASE_PUBLISHABLE_KEY ||
   procEnv.VITE_SUPABASE_ANON_KEY ||
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNpdHlweGZlemNzeXVzaXZidWZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDA1MzQ1NjUsImV4cCI6MjA1NjExMDU2NX0.1S48M1Yx-VnThnSp01Xp4p9wW1_Lp9q2M3N4O5P6Q7R';
+  '';
 
 export const isSupabaseConfigured = Boolean(
   supabaseUrl &&
   supabaseKey &&
-  supabaseUrl !== 'https://placeholder.supabase.co' &&
+  /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(supabaseUrl) &&
   !supabaseUrl.includes('placeholder')
 );
 
 if (typeof window !== 'undefined') {
-  console.log("Supabase URL:", supabaseUrl);
+  console.log("Supabase configured:", isSupabaseConfigured);
   console.log("App Origin:", window.location.origin);
 }
 
 if (!isSupabaseConfigured) {
   console.warn(
-    '⚠️ Supabase credentials missing! Please configure VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in Vercel Environment Variables.'
+    '⚠️ Supabase credentials missing or invalid. Configure VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in Vercel Environment Variables.'
   );
 }
 
-// Create a singleton Supabase client
+// Create a singleton Supabase client. Placeholder values are intentionally non-production;
+// all data services already check isSupabaseConfigured and can use local fallback where supported.
 export const supabase = createClient(
-  supabaseUrl || 'https://placeholder.supabase.co',
-  supabaseKey || 'placeholder_key',
+  isSupabaseConfigured ? supabaseUrl : 'https://placeholder.supabase.co',
+  isSupabaseConfigured ? supabaseKey : 'placeholder_key',
   {
     auth: {
       persistSession: true,
@@ -95,7 +99,7 @@ if (!enableGlobalRealtime) {
  */
 export async function testSupabaseConnection(): Promise<{ success: boolean; message: string; data?: any }> {
   try {
-    if (!supabaseUrl || !supabaseKey) {
+    if (!isSupabaseConfigured) {
       return {
         success: false,
         message: 'Supabase credentials not configured in environment variables.',
