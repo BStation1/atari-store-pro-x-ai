@@ -13,11 +13,7 @@ import {
   TrendingUp,
   Settings,
   PlusCircle,
-  FileText,
   Search,
-  Bell,
-  CheckCircle2,
-  Menu,
   X,
   User as UserIcon,
   Smartphone,
@@ -25,22 +21,14 @@ import {
   PieChart,
   LogOut,
   ShieldCheck,
-  ChevronDown,
-  KeyRound,
   AlertCircle,
   RefreshCw
 } from "lucide-react";
 import { db } from "./lib/data";
 import { authStore } from "./lib/authStore";
 import { isSupabaseConfigured, supabase } from "./lib/supabaseClient";
-import { hasPermission, getViewRequiredPermission, ROLE_LABELS_AR } from "./lib/authPermissions";
-import { useCurrentUser, useSettings, useProducts, useRepairOrders } from "./hooks/useData";
-import { fetchOrMigrateRepairOrders } from "./lib/supabaseRepairOrders";
-import { fetchOrMigrateCustomers } from "./lib/supabaseCustomers";
-import { fetchOrMigrateProducts } from "./lib/supabaseProducts";
-import { fetchOrMigrateRepairPartUsages } from "./lib/supabasePartUsages";
-import { fetchOrMigrateInvoices } from "./lib/supabaseInvoices";
-import { fetchOrMigrateStoreSettings } from "./lib/supabaseSettings";
+import { hasPermission, getViewRequiredPermission } from "./lib/authPermissions";
+import { useCurrentUser, useSettings } from "./hooks/useData";
 
 // Views & Modals
 import { DialogProvider } from "./context/DialogContext";
@@ -66,7 +54,8 @@ import UserProfileModal from "./components/UserProfileModal";
 import AppShell from "./components/layout/AppShell";
 
 function MainApp() {
-  // Initialize Database once on boot & check URL parameters
+  // Initialize the local database once. Heavy Supabase business tables are deliberately
+  // NOT prefetched here; the owning screen/hook loads them only when that area is used.
   useEffect(() => {
     db.init();
 
@@ -82,17 +71,13 @@ function MainApp() {
         setCurrentView("unauthorized");
       } else if (queryView === "tracking" || trackId || pathname.includes("/track")) {
         setCurrentView("tracking");
-        if (trackId) {
-          setNavigationParams({ initialQuery: trackId });
-        }
+        if (trackId) setNavigationParams({ initialQuery: trackId });
       }
     }
   }, []);
 
   const { user: currentLoggedUser } = useCurrentUser();
   const { settings } = useSettings();
-  const { products } = useProducts();
-  const { orders } = useRepairOrders();
 
   // Navigation and view state
   const [currentView, setCurrentView] = useState<string>("dashboard");
@@ -101,27 +86,25 @@ function MainApp() {
 
   // Notifications Drawer state
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
-
-  // User Dropdown and Profile Modal states
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
-
-  // Responsive Sidebar state
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-
-  // Quick Command Search Modal (Ctrl+K)
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [cmdSearchQuery, setCmdSearchQuery] = useState("");
 
-  // Notifications calculation
+  // Notifications are calculated from the already-present local DB snapshot. Previously
+  // App mounted useProducts/useRepairOrders solely to refresh this memo, which caused two
+  // large Supabase table reads on every app boot even if the user never opened those pages.
   const [notificationsTick, setNotificationsTick] = useState(0);
   const handleRefreshNotifications = () => setNotificationsTick(prev => prev + 1);
-
-  const notificationsList = React.useMemo(() => {
-    return db.getNotifications();
-  }, [notificationsTick, products, orders]);
-
+  const notificationsList = React.useMemo(() => db.getNotifications(), [notificationsTick]);
   const totalNotifications = notificationsList.filter(n => !n.isRead).length;
+
+  useEffect(() => {
+    const handleDbChange = () => setNotificationsTick(prev => prev + 1);
+    window.addEventListener("atari_db_changed", handleDbChange);
+    return () => window.removeEventListener("atari_db_changed", handleDbChange);
+  }, []);
 
   // Keyboard Shortcuts Listeners (Ctrl+N, Ctrl+S, Ctrl+K)
   useEffect(() => {
@@ -141,13 +124,10 @@ function MainApp() {
     };
 
     window.addEventListener("keydown", handleShortcuts);
-    return () => {
-      window.removeEventListener("keydown", handleShortcuts);
-    };
+    return () => window.removeEventListener("keydown", handleShortcuts);
   }, []);
 
   const handleNavigate = (view: string, params: any = null) => {
-    // If navigating to internal page and not logged in with valid Supabase session, redirect to login
     const isPublic = view === "tracking" || view === "login" || view === "setup" || view === "unauthorized";
     if (!isPublic && (!hasSupabaseSession || !currentLoggedUser)) {
       setPostLoginRedirect(view);
@@ -172,13 +152,10 @@ function MainApp() {
   };
 
   const handleLogoutAllDevices = () => {
-    if (currentLoggedUser) {
-      authStore.logoutAllSessions(currentLoggedUser.id);
-    }
+    if (currentLoggedUser) authStore.logoutAllSessions(currentLoggedUser.id);
     handleLogout();
   };
 
-  // Full Menu Items Definitions
   const allMenuItems = [
     { id: "dashboard", label: "لوحة التحكم", icon: LayoutDashboard },
     { id: "reception", label: "الاستقبال وتسجيل الأجهزة", icon: PlusCircle },
@@ -195,17 +172,15 @@ function MainApp() {
     { id: "settings", label: "إعدادات النظام الفنية", icon: Settings }
   ];
 
-  // Filter menu items based on permissions (Requirement 17)
   const allowedMenuItems = allMenuItems.filter(item => {
-    if (item.id === "tracking") return true; // Public tracking page
+    if (item.id === "tracking") return true;
     if (!currentLoggedUser) return false;
     const reqPerm = getViewRequiredPermission(item.id);
     if (!reqPerm) return true;
     return hasPermission(currentLoggedUser.roleId, currentLoggedUser.permissions, reqPerm);
   });
 
-  // Check if system has an owner & verify session from Supabase
-  const [hasOwner, setHasOwner] = useState<boolean>(true); // Default to true so setup screen NEVER flashes accidentally
+  const [hasOwner, setHasOwner] = useState<boolean>(true);
   const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
   const [hasSupabaseSession, setHasSupabaseSession] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -216,16 +191,13 @@ function MainApp() {
 
     try {
       if (!isSupabaseConfigured) {
-        // If Supabase environment variables are missing, fallback to local operational mode without crash
         setHasOwner(true);
         setHasSupabaseSession(false);
         setIsAuthChecking(false);
         return;
       }
 
-      // 1. Verify Supabase Auth session first
       const sessionRes = await authStore.validateAndSyncSession();
-
       if (sessionRes.error) {
         const cleanErr = (sessionRes.error.includes('fetch') || sessionRes.error.includes('TypeError'))
           ? "تعذر الاتصال بقاعدة البيانات Supabase. يرجى التحقق من إعدادات VITE_SUPABASE_URL و VITE_SUPABASE_PUBLISHABLE_KEY في Vercel ثم إعادة النشر (Redeploy)."
@@ -236,7 +208,6 @@ function MainApp() {
         return;
       }
 
-      // 2. If no user session exists, check if system has an owner in Supabase
       if (!sessionRes.user) {
         setHasSupabaseSession(false);
         authStore.clearSession();
@@ -263,10 +234,8 @@ function MainApp() {
 
   useEffect(() => {
     let isMounted = true;
-
     checkAuthAndOwner();
 
-    // Subscribe to Supabase Auth state changes directly
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!isMounted) return;
       if (event === "SIGNED_OUT" || !session) {
@@ -274,9 +243,7 @@ function MainApp() {
         setHasSupabaseSession(false);
       } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || session?.user) {
         const syncRes = await authStore.validateAndSyncSession();
-        if (isMounted) {
-          setHasSupabaseSession(Boolean(syncRes.user));
-        }
+        if (isMounted) setHasSupabaseSession(Boolean(syncRes.user));
       }
     });
 
@@ -303,77 +270,15 @@ function MainApp() {
     };
   }, []);
 
-  // Initial Business Data Loading Gate
-  const [isInitialLoading, setIsInitialLoading] = useState<boolean>(false);
-  const [initialDataError, setInitialDataError] = useState<string | null>(null);
-  const loadedUserIdRef = React.useRef<string | null>(null);
-  const isInitialLoadInProgressRef = React.useRef<boolean>(false);
+  // IMPORTANT: The previous performInitialLoad() downloaded repair_orders, customers,
+  // products, repair_part_usages and invoices in parallel immediately after login. That
+  // generated a large Egress burst even while the user did nothing. Each feature screen
+  // already owns its data hook, so that redundant boot prefetch has been removed.
 
-  const performInitialLoad = async (userId: string) => {
-    if (isInitialLoadInProgressRef.current || loadedUserIdRef.current === userId) return;
-    isInitialLoadInProgressRef.current = true;
-    setIsInitialLoading(true);
-    setInitialDataError(null);
-
-    try {
-      // 1. AUTH READY GATE: Resolve current session once before loading protected data
-      if (isSupabaseConfigured) {
-        await supabase.auth.getSession();
-      }
-
-      // 2. Fetch essential datasets concurrently
-      const [ordersRes, custRes, prodRes, usagesRes, invRes] = await Promise.all([
-        fetchOrMigrateRepairOrders(),
-        fetchOrMigrateCustomers(),
-        fetchOrMigrateProducts(),
-        fetchOrMigrateRepairPartUsages(),
-        fetchOrMigrateInvoices(),
-        fetchOrMigrateStoreSettings()
-      ]);
-
-      const hasFatalError = (ordersRes && !ordersRes.success && ordersRes.error) ||
-                            (custRes && !custRes.success && custRes.error) ||
-                            (invRes && !invRes.success && invRes.error);
-
-      if (hasFatalError && isSupabaseConfigured) {
-        console.warn("⚠️ Initial data fetch encountered an error:", ordersRes?.error || custRes?.error || invRes?.error);
-        setInitialDataError("تعذر تحميل بيانات النظام");
-        setIsInitialLoading(false);
-        isInitialLoadInProgressRef.current = false;
-        return;
-      }
-
-      loadedUserIdRef.current = userId;
-      window.dispatchEvent(new CustomEvent("atari_db_changed"));
-      setIsInitialLoading(false);
-    } catch (err: any) {
-      console.error("❌ Exception during initial data load:", err);
-      setInitialDataError("تعذر تحميل بيانات النظام");
-      setIsInitialLoading(false);
-    } finally {
-      isInitialLoadInProgressRef.current = false;
-    }
-  };
-
-  useEffect(() => {
-    if (currentLoggedUser?.id) {
-      if (loadedUserIdRef.current !== currentLoggedUser.id) {
-        performInitialLoad(currentLoggedUser.id);
-      }
-    } else {
-      loadedUserIdRef.current = null;
-      isInitialLoadInProgressRef.current = false;
-      setIsInitialLoading(false);
-      setInitialDataError(null);
-    }
-  }, [currentLoggedUser?.id]);
-
-  // If viewing public tracking page, render directly without login wrapper
   if (currentView === "tracking") {
     return <TrackingPage initialQuery={navigationParams?.initialQuery} />;
   }
 
-  // Loading state while verifying session & owner status
   if (isAuthChecking) {
     return (
       <div className="min-h-screen bg-[#070913] text-gray-100 flex items-center justify-center p-4 font-sans dir-rtl">
@@ -385,7 +290,6 @@ function MainApp() {
     );
   }
 
-  // Error state during session verification
   if (authError) {
     return (
       <div className="min-h-screen bg-[#070913] text-gray-100 flex items-center justify-center p-4 font-sans dir-rtl">
@@ -407,7 +311,6 @@ function MainApp() {
     );
   }
 
-  // If setup flow is requested or system has no owner in Supabase
   if (currentView === "setup" || (!hasOwner && !currentLoggedUser && currentView !== "login")) {
     return (
       <InitialSetup
@@ -415,14 +318,11 @@ function MainApp() {
           setHasOwner(true);
           setCurrentView("dashboard");
         }}
-        onCancel={() => {
-          setCurrentView("login");
-        }}
+        onCancel={() => setCurrentView("login")}
       />
     );
   }
 
-  // If user is not logged in or missing valid Supabase session, render Login View
   if (!hasSupabaseSession || !currentLoggedUser || currentView === "login") {
     return (
       <Login
@@ -431,76 +331,17 @@ function MainApp() {
           const target = postLoginRedirect || "dashboard";
           setCurrentView(target);
         }}
-        onNavigateToSetup={() => {
-          setCurrentView("setup");
-        }}
+        onNavigateToSetup={() => setCurrentView("setup")}
       />
     );
   }
 
-  // Initial Data Loading Screen
-  if (isInitialLoading) {
-    return (
-      <div className="min-h-screen bg-[#070913] text-gray-100 flex items-center justify-center p-4 font-sans dir-rtl">
-        <div className="text-center space-y-4">
-          <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="text-xs text-gray-400 font-bold">جاري تحميل بيانات النظام واستزراع القواعد...</p>
-        </div>
-      </div>
-    );
-  }
-
-  // Initial Data Error Screen
-  if (initialDataError) {
-    return (
-      <div className="min-h-screen bg-[#070913] text-gray-100 flex items-center justify-center p-4 font-sans dir-rtl">
-        <div className="bg-[#11131e] border border-red-500/30 p-6 max-w-md w-full rounded-3xl shadow-2xl text-center space-y-4">
-          <div className="w-12 h-12 bg-red-500/10 border border-red-500/20 rounded-2xl flex items-center justify-center mx-auto text-red-400">
-            <AlertCircle className="w-6 h-6 text-red-400" />
-          </div>
-          <h2 className="text-base font-bold text-white font-sans">تعذر تحميل بيانات النظام</h2>
-          <p className="text-xs text-red-300 leading-relaxed">{initialDataError}</p>
-          <div className="flex gap-3 pt-2">
-            <button
-              onClick={() => {
-                loadedUserIdRef.current = null;
-                if (currentLoggedUser) {
-                  performInitialLoad(currentLoggedUser.id);
-                }
-              }}
-              className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl text-xs transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <RefreshCw className="w-4 h-4" />
-              <span>إعادة المحاولة</span>
-            </button>
-            <button
-              onClick={handleLogout}
-              className="flex-1 bg-red-600/20 hover:bg-red-600/30 text-red-300 font-bold py-3 px-4 rounded-xl text-xs transition-all border border-red-500/30 flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <LogOut className="w-4 h-4" />
-              <span>تسجيل الخروج</span>
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Check view permissions
   const requiredPerm = getViewRequiredPermission(currentView);
-  const isAuthorized =
-    !requiredPerm ||
-    hasPermission(currentLoggedUser.roleId, currentLoggedUser.permissions, requiredPerm);
+  const isAuthorized = !requiredPerm || hasPermission(currentLoggedUser.roleId, currentLoggedUser.permissions, requiredPerm);
 
-  // Render view router
   const renderViewContent = () => {
     if (!isAuthorized) {
-      return (
-        <Unauthorized
-          requiredPermission={requiredPerm}
-          onReturnHome={() => setCurrentView("dashboard")}
-        />
-      );
+      return <Unauthorized requiredPermission={requiredPerm} onReturnHome={() => setCurrentView("dashboard")} />;
     }
 
     switch (currentView) {
@@ -509,27 +350,11 @@ function MainApp() {
       case "reception":
         return <Reception prefillData={navigationParams?.prefillData} onNavigate={handleNavigate} />;
       case "customers":
-        return (
-          <CustomersList
-            initialOpenAddModal={navigationParams?.openAddModal}
-            initialFocusSearch={navigationParams?.focusSearch}
-          />
-        );
+        return <CustomersList initialOpenAddModal={navigationParams?.openAddModal} initialFocusSearch={navigationParams?.focusSearch} />;
       case "repair-center":
-        return (
-          <RepairCenter
-            initialStatusFilter={navigationParams?.status}
-            initialOrderId={navigationParams?.orderId}
-          />
-        );
+        return <RepairCenter initialStatusFilter={navigationParams?.status} initialOrderId={navigationParams?.orderId} />;
       case "ai-diagnostics":
-        return (
-          <AIDiagnostics
-            onNavigateToReception={prefillData =>
-              handleNavigate("reception", { prefillData })
-            }
-          />
-        );
+        return <AIDiagnostics onNavigateToReception={prefillData => handleNavigate("reception", { prefillData })} />;
       case "inventory":
         return <Inventory initialSearch={navigationParams?.search} />;
       case "accounting":
@@ -557,18 +382,13 @@ function MainApp() {
 
   return (
     <>
-      {/* Force Password Change Modal */}
       {currentLoggedUser.mustChangePassword && (
         <ForcePasswordChangeModal
           userId={currentLoggedUser.id}
-          onSuccess={() => {
-            // Trigger auth refresh
-            window.dispatchEvent(new Event("atari_auth_changed"));
-          }}
+          onSuccess={() => window.dispatchEvent(new Event("atari_auth_changed"))}
         />
       )}
 
-      {/* User Profile Modal */}
       <UserProfileModal
         user={currentLoggedUser}
         isOpen={isProfileModalOpen}
@@ -577,7 +397,6 @@ function MainApp() {
         onLogoutAllDevices={handleLogoutAllDevices}
       />
 
-      {/* 1. Global Command Palette Modal (Ctrl+K) */}
       {isSearchOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4">
           <div className="bg-[#11131e] border border-[#2a2d42] rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden text-right">
@@ -620,7 +439,6 @@ function MainApp() {
         </div>
       )}
 
-      {/* 2. RTL Application Shell */}
       <AppShell
         allowedMenuItems={allowedMenuItems}
         currentView={currentView}
@@ -649,7 +467,6 @@ function MainApp() {
         {renderViewContent()}
       </AppShell>
 
-      {/* Global Root-Level Notifications Drawer */}
       <NotificationsDrawer
         isOpen={isNotificationsOpen}
         onClose={() => setIsNotificationsOpen(false)}
