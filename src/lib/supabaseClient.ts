@@ -52,9 +52,13 @@ if (!isSupabaseConfigured) {
  * serialized repair order (devices, history, accounting metadata, etc). Keep that
  * snapshot for 60 seconds so repeated navigation/refetches do not download the same
  * large JSON again. Any repair_orders mutation invalidates this cache immediately.
+ *
+ * invoices + invoice_items are fetched as full historical snapshots together by
+ * fetchOrMigrateInvoices(). Cache both for 60 seconds as one logical dataset so
+ * repeated invoice/report mounts do not redownload the same history twice.
  */
 const DEFAULT_READ_CACHE_TTL_MS = 12_000;
-const REPAIR_ORDERS_CACHE_TTL_MS = 60_000;
+const HEAVY_HISTORY_CACHE_TTL_MS = 60_000;
 const OPENING_BALANCE_CACHE_TTL_MS = 10 * 60_000;
 const readResponseCache = new Map<string, { expiresAt: number; response: Response }>();
 const inFlightReads = new Map<string, Promise<Response>>();
@@ -68,17 +72,22 @@ function isRepairOrdersRead(url: string): boolean {
   return url.includes('/rest/v1/repair_orders');
 }
 
+function isInvoiceHistoryRead(url: string): boolean {
+  return url.includes('/rest/v1/invoices') || url.includes('/rest/v1/invoice_items');
+}
+
 function shouldDedupeRead(url: string, method: string): boolean {
   if (method !== 'GET') return false;
   return url.includes('/rest/v1/products') ||
     isRepairOrdersRead(url) ||
+    isInvoiceHistoryRead(url) ||
     url.includes('/rest/v1/repair_part_usages') ||
     isOpeningBalanceLookup(url);
 }
 
 function readCacheTtlForUrl(url: string): number {
   if (isOpeningBalanceLookup(url)) return OPENING_BALANCE_CACHE_TTL_MS;
-  if (isRepairOrdersRead(url)) return REPAIR_ORDERS_CACHE_TTL_MS;
+  if (isRepairOrdersRead(url) || isInvoiceHistoryRead(url)) return HEAVY_HISTORY_CACHE_TTL_MS;
   return DEFAULT_READ_CACHE_TTL_MS;
 }
 
@@ -90,6 +99,16 @@ function invalidateReadCacheForMutation(url: string): void {
   for (const key of readResponseCache.keys()) {
     if (key.includes(`/rest/v1/${table}`)) {
       readResponseCache.delete(key);
+    }
+  }
+
+  // invoices and invoice_items form one UI snapshot; a write to either side must
+  // invalidate both cached reads so the next invoice refresh is internally consistent.
+  if (table === 'invoices' || table === 'invoice_items') {
+    for (const key of readResponseCache.keys()) {
+      if (key.includes('/rest/v1/invoices') || key.includes('/rest/v1/invoice_items')) {
+        readResponseCache.delete(key);
+      }
     }
   }
 
