@@ -47,8 +47,14 @@ if (!isSupabaseConfigured) {
  * Opening-balance existence checks are especially expensive because the product
  * migration flow performs one inventory_movements lookup per product (N+1).
  * Those lookups are safe to cache longer and are explicitly invalidated on writes.
+ *
+ * repair_orders is a particularly large payload because notes contains the full
+ * serialized repair order (devices, history, accounting metadata, etc). Keep that
+ * snapshot for 60 seconds so repeated navigation/refetches do not download the same
+ * large JSON again. Any repair_orders mutation invalidates this cache immediately.
  */
 const DEFAULT_READ_CACHE_TTL_MS = 12_000;
+const REPAIR_ORDERS_CACHE_TTL_MS = 60_000;
 const OPENING_BALANCE_CACHE_TTL_MS = 10 * 60_000;
 const readResponseCache = new Map<string, { expiresAt: number; response: Response }>();
 const inFlightReads = new Map<string, Promise<Response>>();
@@ -58,18 +64,22 @@ function isOpeningBalanceLookup(url: string): boolean {
     (url.includes('OPENING_BALANCE') || url.includes('reference_id=eq.OPENING_BALANCE'));
 }
 
+function isRepairOrdersRead(url: string): boolean {
+  return url.includes('/rest/v1/repair_orders');
+}
+
 function shouldDedupeRead(url: string, method: string): boolean {
   if (method !== 'GET') return false;
   return url.includes('/rest/v1/products') ||
-    url.includes('/rest/v1/repair_orders') ||
+    isRepairOrdersRead(url) ||
     url.includes('/rest/v1/repair_part_usages') ||
     isOpeningBalanceLookup(url);
 }
 
 function readCacheTtlForUrl(url: string): number {
-  return isOpeningBalanceLookup(url)
-    ? OPENING_BALANCE_CACHE_TTL_MS
-    : DEFAULT_READ_CACHE_TTL_MS;
+  if (isOpeningBalanceLookup(url)) return OPENING_BALANCE_CACHE_TTL_MS;
+  if (isRepairOrdersRead(url)) return REPAIR_ORDERS_CACHE_TTL_MS;
+  return DEFAULT_READ_CACHE_TTL_MS;
 }
 
 function invalidateReadCacheForMutation(url: string): void {
