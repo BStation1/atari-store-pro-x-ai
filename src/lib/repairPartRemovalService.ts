@@ -9,7 +9,7 @@ import { db } from './db';
 export interface ExecuteRemovePartUsageOptions {
   usageId: string;
   deviceIdx: number;
-  removeQty?: number; // 1 by default, or -1 for full remove
+  removeQty?: number;
   selectedOrder: RepairOrder;
   products: Product[];
   partUsages: RepairPartUsage[];
@@ -29,34 +29,17 @@ export interface RemovePartUsageResult {
   returnMovementRow?: any;
 }
 
-/**
-  * Safely finds a product matching a repair part usage record using stable identifiers
-  */
 export function findProductForRepairUsage(products: Product[], usage: RepairPartUsage): Product | undefined {
   if (!usage || !products || products.length === 0) return undefined;
 
-  // 1. Direct match on inventoryItemId against product.id or product.uuid
   if (usage.inventoryItemId) {
-    const match = products.find(p => p.id === usage.inventoryItemId || (p as any).uuid === usage.inventoryItemId);
-    if (match) return match;
+    const direct = products.find(p => p.id === usage.inventoryItemId || (p as any).uuid === usage.inventoryItemId);
+    if (direct) return direct;
   }
 
-  // 2. Match on SKU
   if (usage.sku) {
-    const match = products.find(p => p.sku === usage.sku);
-    if (match) return match;
-  }
-
-  // 3. Match usage.id against product.id
-  if (usage.id) {
-    const match = products.find(p => p.id === usage.id || (p as any).uuid === usage.id);
-    if (match) return match;
-  }
-
-  // 4. Fallback name match
-  if (usage.partName) {
-    const match = products.find(p => p.name === usage.partName);
-    if (match) return match;
+    const bySku = products.find(p => p.sku === usage.sku);
+    if (bySku) return bySku;
   }
 
   return undefined;
@@ -76,125 +59,65 @@ export interface ResolveCanonicalUsageResult {
   isAmbiguous?: boolean;
 }
 
-/**
- * Safely resolves a clicked item / usage identifier to a single, canonical, active RepairPartUsage database record.
- */
 export function resolveCanonicalRepairPartUsage(
   options: ResolveCanonicalUsageOptions
 ): ResolveCanonicalUsageResult {
   const { clickedId, deviceIdx, selectedOrder, products, partUsages } = options;
 
-  if (!selectedOrder) {
-    return { error: 'لم يتم تحديد أمر الصيانة.' };
-  }
+  if (!selectedOrder) return { error: 'لم يتم تحديد أمر الصيانة.' };
 
   const currentDevice = selectedOrder.devices[deviceIdx];
   const items = currentDevice?.selectedRepairItems || (currentDevice as any)?.technicalProcedures || [];
 
-  // 1. Identify target item (if clickedId is fallback-X or item.id/usageId/productId)
-  let targetItem: SelectedRepairItem | undefined = undefined;
-
+  let targetItem: SelectedRepairItem | undefined;
   if (clickedId.startsWith('fallback-')) {
-    const idxStr = clickedId.replace('fallback-', '');
-    const fallbackIdx = parseInt(idxStr, 10);
+    const fallbackIdx = parseInt(clickedId.replace('fallback-', ''), 10);
     if (!isNaN(fallbackIdx) && items[fallbackIdx]) {
       targetItem = items[fallbackIdx];
     } else {
-      return { error: 'تعذر تحديد كود قطعة الغيار المطلوب إرجاعها من أمر الصيانة.' };
+      return { error: 'تعذر تحديد قطعة الغيار المطلوب إرجاعها.' };
     }
   } else {
     targetItem = items.find((i: any) => i.id === clickedId || i.usageId === clickedId || i.productId === clickedId);
   }
 
-  // 2. Filter active candidates belonging to current repair order
   const activeOrderUsages = partUsages.filter(pu =>
+    Number(pu.quantity || 0) > 0 &&
     pu.accountingStatus !== 'RETURNED' &&
     pu.accountingStatus !== 'REVERSED' &&
     usageMatchesOrder(pu, selectedOrder)
   );
 
-  if (activeOrderUsages.length === 0) {
-    return { error: 'تعذر تحديد كود قطعة الغيار المطلوب إرجاعها من أمر الصيانة (لا يوجد سجلات استخدام نشطة في قاعدة البيانات).' };
-  }
-
-  // 3. Direct match by usage.id if clickedId is a real usage ID
   if (!clickedId.startsWith('fallback-')) {
-    const directMatch = activeOrderUsages.find(pu => pu.id === clickedId);
-    if (directMatch) {
-      return { usage: directMatch };
-    }
+    const direct = activeOrderUsages.find(pu => pu.id === clickedId);
+    if (direct) return { usage: direct };
   }
 
-  // 4. Match by targetItem.usageId if present
   if (targetItem?.usageId) {
-    const usageByItemUsageId = activeOrderUsages.find(pu => pu.id === targetItem!.usageId);
-    if (usageByItemUsageId) {
-      return { usage: usageByItemUsageId };
-    }
+    const byUsageId = activeOrderUsages.find(pu => pu.id === targetItem!.usageId);
+    if (byUsageId) return { usage: byUsageId };
   }
 
-  // 5. Match by product identity (productId / SKU / UUID)
-  const productIdToMatch = targetItem?.productId || (!clickedId.startsWith('fallback-') ? clickedId : undefined);
-  const skuToMatch = (targetItem as any)?.sku;
+  const productId = targetItem?.productId || (!clickedId.startsWith('fallback-') ? clickedId : undefined);
+  const matchedProduct = products.find(p => productId && (p.id === productId || (p as any).uuid === productId));
+  const candidateProductIds = new Set<string>();
+  if (productId) candidateProductIds.add(productId);
+  if (matchedProduct?.id) candidateProductIds.add(matchedProduct.id);
+  if ((matchedProduct as any)?.uuid) candidateProductIds.add((matchedProduct as any).uuid);
 
-  let candidateUsages: RepairPartUsage[] = [];
+  let candidates = activeOrderUsages.filter(pu => pu.inventoryItemId && candidateProductIds.has(pu.inventoryItemId));
 
-  if (productIdToMatch || skuToMatch) {
-    const matchedProduct = products.find(p =>
-      (productIdToMatch && (p.id === productIdToMatch || (p as any).uuid === productIdToMatch)) ||
-      (skuToMatch && p.sku === skuToMatch)
-    );
-
-    const productIds = new Set<string>();
-    if (productIdToMatch) productIds.add(productIdToMatch);
-    if (matchedProduct?.id) productIds.add(matchedProduct.id);
-    if ((matchedProduct as any)?.uuid) productIds.add((matchedProduct as any).uuid);
-
-    const skus = new Set<string>();
-    if (skuToMatch) skus.add(skuToMatch);
-    if (matchedProduct?.sku) skus.add(matchedProduct.sku);
-
-    candidateUsages = activeOrderUsages.filter(pu => {
-      const matchProdId = pu.inventoryItemId && productIds.has(pu.inventoryItemId);
-      const matchSku = pu.sku && skus.has(pu.sku);
-      return matchProdId || matchSku;
-    });
+  if (candidates.length > 1 && currentDevice) {
+    const deviceMatches = candidates.filter(pu => usageMatchesDevice(pu, currentDevice, deviceIdx, selectedOrder.devices.length));
+    if (deviceMatches.length > 0) candidates = deviceMatches;
   }
 
-  // Prefer candidates matching the current device
-  if (candidateUsages.length > 1 && currentDevice) {
-    const deviceMatches = candidateUsages.filter(pu =>
-      usageMatchesDevice(pu, currentDevice, deviceIdx, selectedOrder.devices.length)
-    );
-    if (deviceMatches.length > 0) {
-      candidateUsages = deviceMatches;
-    }
+  if (candidates.length === 1) return { usage: candidates[0] };
+  if (candidates.length > 1) {
+    return { error: 'توجد أكثر من قطعة غيار مطابقة. تم إيقاف الحذف لتفادي إرجاع قطعة خاطئة.', isAmbiguous: true };
   }
 
-  // Fallback: If 0 candidate usages matched product ID directly, check if there is a unique usage for current device
-  if (candidateUsages.length === 0 && currentDevice) {
-    const deviceUsages = activeOrderUsages.filter(pu =>
-      usageMatchesDevice(pu, currentDevice, deviceIdx, selectedOrder.devices.length)
-    );
-    if (deviceUsages.length === 1) {
-      candidateUsages = deviceUsages;
-    }
-  }
-
-  if (candidateUsages.length === 1) {
-    return { usage: candidateUsages[0] };
-  }
-
-  if (candidateUsages.length > 1) {
-    return {
-      error: 'توجد أكثر من قطعة غيار مطابقة في أمر الصيانة. تعذر التحديد الدقيق لتفادي الأخطاء.',
-      isAmbiguous: true
-    };
-  }
-
-  return {
-    error: 'تعذر تحديد كود قطعة الغيار المطلوب إرجاعها من أمر الصيانة.'
-  };
+  return { error: 'تعذر تحديد سجل استخدام قطعة الغيار الحقيقي في قاعدة البيانات.' };
 }
 
 export async function executeRemovePartUsageTransaction(
@@ -202,30 +125,15 @@ export async function executeRemovePartUsageTransaction(
 ): Promise<RemovePartUsageResult> {
   const { usageId, deviceIdx, removeQty = 1, selectedOrder, products, partUsages } = options;
 
-  if (!selectedOrder) {
-    return { success: false, error: 'لم يتم تحديد أمر الصيانة.' };
-  }
+  if (!selectedOrder) return { success: false, error: 'لم يتم تحديد أمر الصيانة.' };
 
-  // 1. Strictly resolve canonical usage record without synthetic fallbacks
-  const resolved = resolveCanonicalRepairPartUsage({
-    clickedId: usageId,
-    deviceIdx,
-    selectedOrder,
-    products,
-    partUsages
-  });
-
+  const resolved = resolveCanonicalRepairPartUsage({ clickedId: usageId, deviceIdx, selectedOrder, products, partUsages });
   if (!resolved.usage) {
-    return {
-      success: false,
-      error: resolved.error || 'لم يتم العثور على استخدام قطعة الغيار المطلوب إرجاعها في قاعدة البيانات.'
-    };
+    return { success: false, error: resolved.error || 'لم يتم العثور على استخدام قطعة الغيار المطلوب إرجاعها.' };
   }
 
   const usage = resolved.usage;
-
-  // Idempotency: If usage is already marked RETURNED or REVERSED, do not double-return stock
-  if (usage.accountingStatus === 'RETURNED' || usage.accountingStatus === 'REVERSED') {
+  if (Number(usage.quantity || 0) <= 0 || usage.accountingStatus === 'RETURNED' || usage.accountingStatus === 'REVERSED') {
     return {
       success: true,
       updatedOrder: selectedOrder,
@@ -237,15 +145,19 @@ export async function executeRemovePartUsageTransaction(
   }
 
   const product = findProductForRepairUsage(products, usage);
-  const qtyToReturn = Math.min(usage.quantity, Math.max(1, removeQty === -1 ? usage.quantity : removeQty));
-  const isFullRemove = usage.quantity <= qtyToReturn || removeQty === -1;
-  const actualReturnedQty = isFullRemove ? usage.quantity : qtyToReturn;
-  const newQty = usage.quantity - actualReturnedQty;
-  const newTotalCost = newQty * usage.unitCost;
-  const usageSellPrice = getUsageSellingUnitPrice(usage, products);
-  const newSellingTotal = newQty * usageSellPrice;
+  if (!product) {
+    return {
+      success: false,
+      error: 'تعذر ربط قطعة الغيار بسجل المنتج الحقيقي في المخزون. تم إيقاف الحذف بدون تغيير أي بيانات.'
+    };
+  }
 
-  const previousProductQty = product ? product.quantity : 0;
+  const requestedQty = removeQty === -1 ? usage.quantity : Math.max(1, removeQty);
+  const actualReturnedQty = Math.min(usage.quantity, requestedQty);
+  const newUsageQty = Math.max(0, usage.quantity - actualReturnedQty);
+  const isFullRemove = newUsageQty === 0;
+  const usageSellPrice = getUsageSellingUnitPrice(usage, products);
+  const previousProductQty = Number(product.quantity || 0);
   const newProductQuantity = previousProductQty + actualReturnedQty;
 
   const ownership = selectedOrder.workOwnershipType || WorkOwnershipType.CUSTOMER_SHARED;
@@ -253,9 +165,47 @@ export async function executeRemovePartUsageTransaction(
   if (ownership === WorkOwnershipType.PARTNER_1_PRIVATE) owner = 'AHMED';
   else if (ownership === WorkOwnershipType.PARTNER_2_PRIVATE) owner = 'ABDO';
 
+  const usageUpdates: Partial<RepairPartUsage> = {
+    quantity: newUsageQty,
+    unitCost: usage.unitCost,
+    totalCost: newUsageQty * usage.unitCost,
+    sellingPrice: usageSellPrice,
+    sellingTotal: newUsageQty * usageSellPrice
+  };
+
+  // A) Update the real usage row first. Production removal is quantity = 0.
+  const usageOk = await updateRepairPartUsageInSupabase(usage.id, usageUpdates);
+  const usageUpdateResult = { ok: usageOk, updates: usageUpdates };
+  if (!usageOk) {
+    return {
+      success: false,
+      error: 'فشل تحديث كمية استخدام قطعة الغيار في Supabase.',
+      usageUpdateResult
+    };
+  }
+
+  // B) Restore stock exactly once.
+  const stockOk = await updateProductQuantityInSupabase(product.id, newProductQuantity);
+  const stockUpdateResult = { ok: stockOk, newQuantity: newProductQuantity };
+  if (!stockOk) {
+    await updateRepairPartUsageInSupabase(usage.id, {
+      quantity: usage.quantity,
+      unitCost: usage.unitCost,
+      totalCost: usage.totalCost,
+      sellingPrice: usage.sellingPrice,
+      sellingTotal: usage.sellingTotal
+    });
+    return {
+      success: false,
+      error: 'فشل إرجاع الكمية إلى المخزون في Supabase، وتم التراجع عن تعديل الاستخدام.',
+      stockUpdateResult,
+      usageUpdateResult
+    };
+  }
+
   const returnMovementPayload = {
-    id: `MOV-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
-    productId: usage.inventoryItemId,
+    id: crypto.randomUUID(),
+    productId: usage.inventoryItemId || product.id,
     productNameSnapshot: usage.partName,
     movementType: 'RETURN' as const,
     usageType: 'REPAIR_USAGE_RETURN' as const,
@@ -266,138 +216,92 @@ export async function executeRemovePartUsageTransaction(
     sellingPriceSnapshot: 0,
     totalCost: usage.unitCost * actualReturnedQty,
     referenceId: selectedOrder.id,
-    repairOrderId: selectedOrder.id,
-    owner: owner,
+    repairOrderId: (selectedOrder as any).uuid || (selectedOrder as any).databaseId || selectedOrder.id,
+    owner,
     notes: `إرجاع قطعة غيار صيانة للمخزن: ${usage.partName}`,
     createdAt: new Date().toISOString()
   };
 
-  // STEP A: Restore product stock
-  let stockUpdateResult: any = { ok: true };
-  let stockOk = true;
-  if (product) {
-    stockOk = await updateProductQuantityInSupabase(product.id, newProductQuantity);
-    stockUpdateResult = { ok: stockOk, newQuantity: newProductQuantity };
-    if (!stockOk) {
-      return {
-        success: false,
-        error: 'فشل تحديث مخزون المنتج في Supabase.',
-        stockUpdateResult
-      };
-    }
-  }
-
-  // STEP B: Mark usage RETURNED or update quantity
-  let usageUpdates: Partial<RepairPartUsage> = {};
-  if (isFullRemove) {
-    usageUpdates = { accountingStatus: 'RETURNED' };
-  } else {
-    usageUpdates = {
-      quantity: newQty,
-      totalCost: newTotalCost,
-      sellingPrice: usageSellPrice,
-      sellingTotal: newSellingTotal
-    };
-  }
-
-  const usageOk = await updateRepairPartUsageInSupabase(usage.id, usageUpdates);
-  const usageUpdateResult = { ok: usageOk, updates: usageUpdates };
-  if (!usageOk) {
-    // ROLLBACK C: Restore stock to exact previous quantity if usage update fails
-    if (product) {
-      await updateProductQuantityInSupabase(product.id, previousProductQty);
-    }
-    return {
-      success: false,
-      error: 'فشل تحديث حالة استخدام قطعة الغيار إلى RETURNED في Supabase.',
-      stockUpdateResult,
-      usageUpdateResult
-    };
-  }
-
-  // STEP C: Insert linked REPAIR_USAGE_RETURN movement
+  // C) Record one RETURN movement.
   const movementOk = await addInventoryMovementToSupabase(returnMovementPayload);
   const movementInsertResult = { ok: movementOk, movement: returnMovementPayload };
   if (!movementOk) {
-    // ROLLBACK D: Restore both usage state AND stock quantity if movement insert fails
-    const previousUsageState: Partial<RepairPartUsage> = {
+    await updateProductQuantityInSupabase(product.id, previousProductQty);
+    await updateRepairPartUsageInSupabase(usage.id, {
       quantity: usage.quantity,
+      unitCost: usage.unitCost,
       totalCost: usage.totalCost,
       sellingPrice: usage.sellingPrice,
-      sellingTotal: usage.sellingTotal,
-      accountingStatus: usage.accountingStatus
-    };
-    await updateRepairPartUsageInSupabase(usage.id, previousUsageState);
-    if (product) {
-      await updateProductQuantityInSupabase(product.id, previousProductQty);
-    }
+      sellingTotal: usage.sellingTotal
+    });
     return {
       success: false,
-      error: 'فشل تسجيل حركة إرجاع المخزون REPAIR_USAGE_RETURN في Supabase.',
+      error: 'فشل تسجيل حركة إرجاع المخزون في Supabase، وتم التراجع عن التغييرات.',
       stockUpdateResult,
       usageUpdateResult,
       movementInsertResult
     };
   }
 
-  // STEP D: Calculate local state updates & persist repair order strictly
-  let updatedProducts = products;
-  if (product) {
-    updatedProducts = products.map(p => p.id === product.id ? { ...p, quantity: newProductQuantity } : p);
-  }
-
-  let updatedPartUsages: RepairPartUsage[] = [];
-  if (isFullRemove) {
-    updatedPartUsages = partUsages.map(pu => pu.id === usage.id ? { ...pu, accountingStatus: 'RETURNED' as const } : pu);
-  } else {
-    updatedPartUsages = partUsages.map(pu => pu.id === usage.id ? { ...pu, ...usageUpdates } : pu);
-  }
+  const updatedProducts = products.map(p => p.id === product.id ? { ...p, quantity: newProductQuantity } : p);
+  const updatedPartUsages = partUsages.map(pu => {
+    if (pu.id !== usage.id) return pu;
+    return {
+      ...pu,
+      ...usageUpdates,
+      accountingStatus: (isFullRemove ? 'RETURNED' : (pu.accountingStatus || 'CONSUMED')) as any
+    };
+  });
 
   const updatedDevices = [...selectedOrder.devices];
   const currentDevice = updatedDevices[deviceIdx];
   let updatedOrder: RepairOrder = selectedOrder;
 
   if (currentDevice) {
-    const remainingUsages = updatedPartUsages.filter(
-      pu => usageMatchesOrder(pu, selectedOrder) && pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
-    );
-    const deviceRemainingUsages = remainingUsages.filter(
-      pu => usageMatchesDevice(pu, currentDevice, deviceIdx, selectedOrder.devices.length)
+    const remainingUsages = updatedPartUsages.filter(pu =>
+      usageMatchesOrder(pu, selectedOrder) &&
+      Number(pu.quantity || 0) > 0 &&
+      pu.accountingStatus !== 'RETURNED' &&
+      pu.accountingStatus !== 'REVERSED'
     );
 
-    const newPartsCost = deviceRemainingUsages.reduce((sum, pu) => {
-      const sellP = getUsageSellingUnitPrice(pu, products);
-      return sum + (pu.quantity * sellP);
-    }, 0);
+    const deviceRemainingUsages = remainingUsages.filter(pu =>
+      usageMatchesDevice(pu, currentDevice, deviceIdx, selectedOrder.devices.length)
+    );
+
+    const newPartsSaleTotal = deviceRemainingUsages.reduce((sum, pu) =>
+      sum + (Number(pu.quantity || 0) * getUsageSellingUnitPrice(pu, products)), 0
+    );
+
+    const canonicalPartsCostTotal = remainingUsages.reduce((sum, pu) =>
+      sum + (Number(pu.quantity || 0) * Number(pu.unitCost || 0)), 0
+    );
 
     const nextSelectedRepairItems = (currentDevice.selectedRepairItems || []).map(i => {
-      if (i.id === usage.id || i.usageId === usage.id || (usage.inventoryItemId && i.productId === usage.inventoryItemId)) {
-        if (isFullRemove) return null;
-        return { ...i, quantity: newQty, repairPrice: usageSellPrice, salePrice: usageSellPrice };
-      }
-      return i;
+      const matches = i.id === usage.id || i.usageId === usage.id || (usage.inventoryItemId && i.productId === usage.inventoryItemId);
+      if (!matches) return i;
+      if (isFullRemove) return null;
+      return { ...i, quantity: newUsageQty, repairPrice: usageSellPrice, salePrice: usageSellPrice };
     }).filter(Boolean) as SelectedRepairItem[];
 
-    const tags = currentDevice.selectedQuickFaults || (currentDevice.issue ? currentDevice.issue.split(" - ").map(s => s.trim()) : []);
+    const tags = currentDevice.selectedQuickFaults || (currentDevice.issue ? currentDevice.issue.split(' - ').map(s => s.trim()) : []);
     const faultsCost = currentDevice.suggestedRepairPrice ?? calculateSuggestedPriceForFaults(tags);
-    const newAutoPrice = faultsCost + newPartsCost;
+    const newAutoPrice = faultsCost + newPartsSaleTotal;
 
-    if (currentDevice.isPriceManuallyEdited) {
-      updatedDevices[deviceIdx] = {
-        ...currentDevice,
-        selectedRepairItems: nextSelectedRepairItems,
-        partsCost: newPartsCost,
-        priceOverrideAcknowledged: false
-      };
-    } else {
-      updatedDevices[deviceIdx] = {
-        ...currentDevice,
-        selectedRepairItems: nextSelectedRepairItems,
-        partsCost: newPartsCost,
-        finalRepairPrice: newAutoPrice,
-        estimatedCost: newAutoPrice
-      };
-    }
+    updatedDevices[deviceIdx] = currentDevice.isPriceManuallyEdited
+      ? {
+          ...currentDevice,
+          selectedRepairItems: nextSelectedRepairItems,
+          partsCost: newPartsSaleTotal,
+          priceOverrideAcknowledged: false
+        }
+      : {
+          ...currentDevice,
+          selectedRepairItems: nextSelectedRepairItems,
+          partsCost: newPartsSaleTotal,
+          finalRepairPrice: newAutoPrice,
+          estimatedCost: newAutoPrice
+        };
 
     const totalFinal = updatedDevices.reduce((sum, d) => sum + (d.finalRepairPrice ?? d.estimatedCost ?? 0), 0);
 
@@ -405,31 +309,29 @@ export async function executeRemovePartUsageTransaction(
       ...selectedOrder,
       devices: updatedDevices,
       totalEstimatedCost: totalFinal,
-      finalRepairPrice: totalFinal
-    };
+      finalRepairPrice: totalFinal,
+      partsCostTotal: canonicalPartsCostTotal,
+      parts_cost_total: canonicalPartsCostTotal
+    } as RepairOrder;
   }
 
-  // Strict repair order persistence in Supabase
+  // D) Persist the order. If this final step fails, restore usage and stock and add a compensating usage movement.
   const saveResult = await updateRepairOrderInSupabaseStrict(updatedOrder);
   if (!saveResult.success) {
-    // ROLLBACK E: Restore usage state, restore stock, and neutralize/reverse RETURN movement
-    const previousUsageState: Partial<RepairPartUsage> = {
+    await updateProductQuantityInSupabase(product.id, previousProductQty);
+    await updateRepairPartUsageInSupabase(usage.id, {
       quantity: usage.quantity,
+      unitCost: usage.unitCost,
       totalCost: usage.totalCost,
       sellingPrice: usage.sellingPrice,
-      sellingTotal: usage.sellingTotal,
-      accountingStatus: usage.accountingStatus
-    };
-    await updateRepairPartUsageInSupabase(usage.id, previousUsageState);
-    if (product) {
-      await updateProductQuantityInSupabase(product.id, previousProductQty);
-    }
+      sellingTotal: usage.sellingTotal
+    });
 
-    const compensatingMovementPayload = {
-      id: `MOV-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
-      productId: usage.inventoryItemId,
+    await addInventoryMovementToSupabase({
+      id: crypto.randomUUID(),
+      productId: usage.inventoryItemId || product.id,
       productNameSnapshot: usage.partName,
-      movementType: 'USAGE' as const,
+      movementType: 'REPAIR_USAGE' as const,
       usageType: 'REPAIR_USAGE' as const,
       quantityChange: -actualReturnedQty,
       previousQuantity: newProductQuantity,
@@ -438,34 +340,26 @@ export async function executeRemovePartUsageTransaction(
       sellingPriceSnapshot: 0,
       totalCost: usage.unitCost * actualReturnedQty,
       referenceId: selectedOrder.id,
-      repairOrderId: selectedOrder.id,
-      owner: owner,
-      notes: `عكس إرجاع قطعة غيار صيانة (فشل حفظ أمر الصيانة): ${usage.partName}`,
+      repairOrderId: (selectedOrder as any).uuid || (selectedOrder as any).databaseId || selectedOrder.id,
+      owner,
+      notes: `عكس حركة إرجاع قطعة غيار بسبب فشل حفظ أمر الصيانة: ${usage.partName}`,
       createdAt: new Date().toISOString()
-    };
-    await addInventoryMovementToSupabase(compensatingMovementPayload);
+    });
 
     return {
       success: false,
-      error: saveResult.error || 'فشل حفظ أمر الصيانة في Supabase بعد خصم القطعة.',
+      error: saveResult.error || 'فشل حفظ أمر الصيانة بعد إرجاع القطعة، وتم التراجع عن العملية.',
       stockUpdateResult,
       usageUpdateResult,
       movementInsertResult
     };
   }
 
-  if (saveResult.updatedOrder) {
-    updatedOrder = saveResult.updatedOrder;
-  }
+  if (saveResult.updatedOrder) updatedOrder = saveResult.updatedOrder;
 
-  // Sync to local storage db
-  if (product) {
-    db.saveProducts(updatedProducts);
-  }
+  db.saveProducts(updatedProducts);
   db.saveRepairPartUsages(updatedPartUsages);
-  db.saveRepairOrders(
-    db.getRepairOrders().map(o => o.id === updatedOrder.id ? updatedOrder : o)
-  );
+  db.saveRepairOrders(db.getRepairOrders().map(o => o.id === updatedOrder.id ? updatedOrder : o));
 
   return {
     success: true,
