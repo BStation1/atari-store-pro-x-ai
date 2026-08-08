@@ -56,6 +56,10 @@ if (!isSupabaseConfigured) {
  * invoices + invoice_items are fetched as full historical snapshots together by
  * fetchOrMigrateInvoices(). Cache both for 60 seconds as one logical dataset so
  * repeated invoice/report mounts do not redownload the same history twice.
+ *
+ * customers, expenses, and partner accounting are also loaded as full-table history
+ * snapshots by their hooks. Cache those reads for 60 seconds and invalidate them on
+ * any write to the same table so normal edits remain immediately fresh.
  */
 const DEFAULT_READ_CACHE_TTL_MS = 12_000;
 const HEAVY_HISTORY_CACHE_TTL_MS = 60_000;
@@ -76,18 +80,29 @@ function isInvoiceHistoryRead(url: string): boolean {
   return url.includes('/rest/v1/invoices') || url.includes('/rest/v1/invoice_items');
 }
 
+function isBusinessHistoryRead(url: string): boolean {
+  return url.includes('/rest/v1/customers') ||
+    url.includes('/rest/v1/expenses') ||
+    url.includes('/rest/v1/partner_transactions') ||
+    url.includes('/rest/v1/partner_ledger') ||
+    url.includes('/rest/v1/partner_settlements');
+}
+
 function shouldDedupeRead(url: string, method: string): boolean {
   if (method !== 'GET') return false;
   return url.includes('/rest/v1/products') ||
     isRepairOrdersRead(url) ||
     isInvoiceHistoryRead(url) ||
+    isBusinessHistoryRead(url) ||
     url.includes('/rest/v1/repair_part_usages') ||
     isOpeningBalanceLookup(url);
 }
 
 function readCacheTtlForUrl(url: string): number {
   if (isOpeningBalanceLookup(url)) return OPENING_BALANCE_CACHE_TTL_MS;
-  if (isRepairOrdersRead(url) || isInvoiceHistoryRead(url)) return HEAVY_HISTORY_CACHE_TTL_MS;
+  if (isRepairOrdersRead(url) || isInvoiceHistoryRead(url) || isBusinessHistoryRead(url)) {
+    return HEAVY_HISTORY_CACHE_TTL_MS;
+  }
   return DEFAULT_READ_CACHE_TTL_MS;
 }
 
