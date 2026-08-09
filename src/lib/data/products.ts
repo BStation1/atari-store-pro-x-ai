@@ -5,7 +5,7 @@
 
 import { Product } from '../../types';
 import {
-  fetchOrMigrateProducts,
+  fetchOrMigrateProducts as fetchOrMigrateProductsRemote,
   addProductToSupabase,
   updateProductInSupabase,
   deleteProductFromSupabase,
@@ -18,6 +18,54 @@ import {
 import { db } from '../db';
 import { IDataProvider } from './types';
 import { syncQueue } from '../sync/syncQueue';
+
+const PRODUCTS_REMOTE_TTL_MS = 5 * 60 * 1000;
+let productsFetchInFlight: Promise<any> | null = null;
+let productsLastRemoteFetchAt = 0;
+
+function localProductsResult(products: Product[]) {
+  return {
+    products,
+    localCount: products.length,
+    uploadedCount: 0,
+    totalSupabaseCount: products.length,
+    openingBalanceMovementsCreated: 0
+  };
+}
+
+/**
+ * Guarded product loader.
+ * - Dashboard reads local cache only; it must not download the full products table.
+ * - Other screens dedupe concurrent requests and reuse a recent local snapshot for 5 minutes.
+ */
+export async function fetchOrMigrateProducts() {
+  const localProducts = getLocalProductsBackup();
+  const dashboardLocalOnly = typeof window !== 'undefined' && Boolean((window as any).__ATARI_DASHBOARD_LOCAL_ONLY__);
+
+  if (dashboardLocalOnly) {
+    return localProductsResult(localProducts);
+  }
+
+  const now = Date.now();
+  if (localProducts.length > 0 && now - productsLastRemoteFetchAt < PRODUCTS_REMOTE_TTL_MS) {
+    return localProductsResult(localProducts);
+  }
+
+  if (productsFetchInFlight) {
+    return productsFetchInFlight;
+  }
+
+  productsFetchInFlight = fetchOrMigrateProductsRemote()
+    .then(result => {
+      productsLastRemoteFetchAt = Date.now();
+      return result;
+    })
+    .finally(() => {
+      productsFetchInFlight = null;
+    });
+
+  return productsFetchInFlight;
+}
 
 export async function getAllProducts(): Promise<Product[]> {
   try {
@@ -82,7 +130,6 @@ export const productsDataProvider: IDataProvider<Product> = {
 };
 
 export {
-  fetchOrMigrateProducts,
   addProductToSupabase,
   updateProductInSupabase,
   deleteProductFromSupabase,
