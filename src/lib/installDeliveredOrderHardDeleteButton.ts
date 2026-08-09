@@ -7,15 +7,42 @@ let busy = false;
 
 function getLocalOrders(): LocalRepairOrder[] { try { const parsed = JSON.parse(localStorage.getItem('atari_repair_orders') || '[]'); return Array.isArray(parsed) ? parsed : []; } catch { return []; } }
 function orderAliases(order: LocalRepairOrder): string[] { return [order.id, order.orderNumber, order.uuid].filter((v): v is string => Boolean(v && String(v).trim())).map(v => String(v).trim()); }
+function findOrderByReference(orders: LocalRepairOrder[], reference: string): LocalRepairOrder | null {
+  const ref = String(reference || '').trim().toLowerCase();
+  if (!ref) return null;
+  const matches = orders.filter(order => orderAliases(order).some(alias => {
+    const normalized = alias.toLowerCase();
+    return normalized === ref || normalized.startsWith(ref) || ref.startsWith(normalized);
+  }));
+  return matches.length === 1 ? matches[0] : null;
+}
 function resolveSelectedOrder(anchorButton: HTMLButtonElement): LocalRepairOrder | null {
   const orders = getLocalOrders(); if (!orders.length) return null;
   let node: HTMLElement | null = anchorButton.parentElement;
   for (let depth = 0; node && depth < 12; depth += 1, node = node.parentElement) {
     const text = node.innerText || '';
+
+    // The open workspace prints the repair number (usually ATR-10000). Prefer that explicit
+    // reference before broad text matching, because the sidebar can contain several orders.
+    const atrRefs = Array.from(text.matchAll(/ATR[-\s]?\d{3,}/gi)).map(match => match[0].replace(/\s+/g, '-'));
+    for (const ref of atrRefs) {
+      const exact = findOrderByReference(orders, ref);
+      if (exact) return exact;
+    }
+
     const matches = orders.filter(order => orderAliases(order).some(alias => text.includes(alias) || text.includes(`#${alias}`) || text.includes(`#${alias.slice(0, 8)}`)));
     if (matches.length === 1) return matches[0];
   }
+
+  // Last resort: prefer the visible workspace repair reference instead of scanning every
+  // sidebar alias. This prevents the old "تعذر تحديد أمر الصيانة" error when many orders exist.
   const bodyText = document.body?.innerText || '';
+  const atrRefs = Array.from(bodyText.matchAll(/ATR[-\s]?\d{3,}/gi)).map(match => match[0].replace(/\s+/g, '-'));
+  for (const ref of atrRefs) {
+    const exact = findOrderByReference(orders, ref);
+    if (exact) return exact;
+  }
+
   const matches = orders.filter(order => orderAliases(order).some(alias => bodyText.includes(`#${alias}`) || bodyText.includes(`#${alias.slice(0, 8)}`)));
   return matches.length === 1 ? matches[0] : null;
 }
