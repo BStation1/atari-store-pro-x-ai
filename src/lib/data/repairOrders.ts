@@ -5,7 +5,7 @@
 
 import { RepairOrder } from '../../types';
 import {
-  fetchOrMigrateRepairOrders,
+  fetchOrMigrateRepairOrders as fetchOrMigrateRepairOrdersRemote,
   addRepairOrderToSupabase,
   updateRepairOrderInSupabase,
   deleteRepairOrderFromSupabase,
@@ -14,6 +14,48 @@ import {
 import { db } from '../db';
 import { IDataProvider } from './types';
 import { syncQueue } from '../sync/syncQueue';
+
+const REPAIR_ORDERS_REMOTE_TTL_MS = 60 * 1000;
+let repairOrdersFetchInFlight: Promise<any> | null = null;
+let repairOrdersLastRemoteFetchAt = 0;
+
+function localRepairOrdersResult(orders: RepairOrder[]) {
+  return { success: true, orders };
+}
+
+/**
+ * Guarded repair-order loader.
+ * - Dashboard uses local cache only and never downloads the full repair_orders table.
+ * - Other screens dedupe concurrent requests and reuse a recent local snapshot for 60 seconds.
+ */
+export async function fetchOrMigrateRepairOrders(): Promise<{ success: boolean; orders: RepairOrder[]; error?: string }> {
+  const localOrders = getLocalRepairOrdersBackup();
+  const dashboardLocalOnly = typeof window !== 'undefined' && Boolean((window as any).__ATARI_DASHBOARD_LOCAL_ONLY__);
+
+  if (dashboardLocalOnly) {
+    return localRepairOrdersResult(localOrders);
+  }
+
+  const now = Date.now();
+  if (localOrders.length > 0 && now - repairOrdersLastRemoteFetchAt < REPAIR_ORDERS_REMOTE_TTL_MS) {
+    return localRepairOrdersResult(localOrders);
+  }
+
+  if (repairOrdersFetchInFlight) {
+    return repairOrdersFetchInFlight;
+  }
+
+  repairOrdersFetchInFlight = fetchOrMigrateRepairOrdersRemote()
+    .then(result => {
+      repairOrdersLastRemoteFetchAt = Date.now();
+      return result;
+    })
+    .finally(() => {
+      repairOrdersFetchInFlight = null;
+    });
+
+  return repairOrdersFetchInFlight;
+}
 
 export async function getAllRepairOrders(): Promise<RepairOrder[]> {
   try {
@@ -78,7 +120,6 @@ export const repairOrdersDataProvider: IDataProvider<RepairOrder> = {
 };
 
 export {
-  fetchOrMigrateRepairOrders,
   addRepairOrderToSupabase,
   updateRepairOrderInSupabase,
   deleteRepairOrderFromSupabase,
