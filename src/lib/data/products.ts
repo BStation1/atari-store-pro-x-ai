@@ -5,7 +5,7 @@
 
 import { Product } from '../../types';
 import {
-  fetchOrMigrateProducts,
+  getProductsFromSupabase,
   addProductToSupabase,
   updateProductInSupabase,
   deleteProductFromSupabase,
@@ -18,6 +18,65 @@ import {
 import { db } from '../db';
 import { IDataProvider } from './types';
 import { syncQueue } from '../sync/syncQueue';
+
+const PRODUCTS_REMOTE_TTL_MS = 5 * 60 * 1000;
+let productsFetchInFlight: Promise<any> | null = null;
+let productsLastRemoteFetchAt = 0;
+
+function localProductsResult(products: Product[]) {
+  return {
+    products,
+    localCount: products.length,
+    uploadedCount: 0,
+    totalSupabaseCount: products.length,
+    openingBalanceMovementsCreated: 0
+  };
+}
+
+/**
+ * Runtime product loader optimized for Egress.
+ *
+ * IMPORTANT: the legacy fetchOrMigrateProducts implementation also scanned
+ * inventory_movements once per product to verify opening balances. That is an
+ * N+1 database pattern and must not run during ordinary page reads.
+ * Runtime refresh now uses one products query only; data migrations belong in
+ * an explicit maintenance/migration action, not in the normal UI read path.
+ *
+ * - Dashboard reads local cache only.
+ * - Other screens dedupe concurrent requests and reuse a recent snapshot for 5 minutes.
+ */
+export async function fetchOrMigrateProducts() {
+  const localProducts = getLocalProductsBackup();
+  const dashboardLocalOnly = typeof window !== 'undefined' && Boolean((window as any).__ATARI_DASHBOARD_LOCAL_ONLY__);
+
+  if (dashboardLocalOnly) {
+    return localProductsResult(localProducts);
+  }
+
+  const now = Date.now();
+  if (localProducts.length > 0 && now - productsLastRemoteFetchAt < PRODUCTS_REMOTE_TTL_MS) {
+    return localProductsResult(localProducts);
+  }
+
+  if (productsFetchInFlight) {
+    return productsFetchInFlight;
+  }
+
+  productsFetchInFlight = getProductsFromSupabase()
+    .then(products => {
+      productsLastRemoteFetchAt = Date.now();
+      return localProductsResult(products);
+    })
+    .catch(err => {
+      console.warn('[DataLayer] Product refresh failed; using local snapshot:', err);
+      return localProductsResult(getLocalProductsBackup());
+    })
+    .finally(() => {
+      productsFetchInFlight = null;
+    });
+
+  return productsFetchInFlight;
+}
 
 export async function getAllProducts(): Promise<Product[]> {
   try {
@@ -82,7 +141,6 @@ export const productsDataProvider: IDataProvider<Product> = {
 };
 
 export {
-  fetchOrMigrateProducts,
   addProductToSupabase,
   updateProductInSupabase,
   deleteProductFromSupabase,

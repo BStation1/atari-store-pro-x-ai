@@ -4,7 +4,7 @@
  * @license Apache-2.0
  */
 
-import React from "react";
+import React, { useEffect } from "react";
 import DashboardFoundation from "./dashboard/Dashboard";
 
 interface DashboardProps {
@@ -12,5 +12,19 @@ interface DashboardProps {
 }
 
 export default function Dashboard({ onNavigate }: DashboardProps) {
-  return <DashboardFoundation />;
+  // Set synchronously before child hooks run so Dashboard summary hooks read the
+  // already-cached local snapshots instead of downloading full Supabase tables.
+  if (typeof window !== "undefined") {
+    (window as any).__ATARI_DASHBOARD_LOCAL_ONLY__ = true;
+  }
+
+  useEffect(() => {
+    return () => {
+      if (typeof window !== "undefined") {
+        (window as any).__ATARI_DASHBOARD_LOCAL_ONLY__ = false;
+      }
+    };
+  }, []);
+
+  return <DashboardFoundation onNavigate={onNavigate} />;
 }
