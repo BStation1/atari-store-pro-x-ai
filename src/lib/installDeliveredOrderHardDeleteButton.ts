@@ -8,7 +8,7 @@ type LocalRepairOrder = {
   deliveryStatus?: string;
 };
 
-const BUTTON_MARKER = 'atari-hard-delete-delivered-order';
+const BUTTON_DATA_ATTRIBUTE = 'data-atari-hard-delete-delivered-order';
 let scheduled = false;
 let busy = false;
 
@@ -68,7 +68,7 @@ function findDeliveredActionButton(): HTMLButtonElement | null {
 function buildHardDeleteButton(deliveryButton: HTMLButtonElement): HTMLButtonElement {
   const button = document.createElement('button');
   button.type = 'button';
-  button.dataset[BUTTON_MARKER] = '1';
+  button.setAttribute(BUTTON_DATA_ATTRIBUTE, '1');
   button.className =
     'w-full bg-red-700 hover:bg-red-600 text-white font-extrabold text-xs py-3 px-4 rounded-xl shadow transition cursor-pointer flex items-center justify-center gap-2 border border-red-400/30 mt-2';
   button.innerHTML = '<span aria-hidden="true">🗑️</span><span>حذف نهائي للأوردر</span>';
@@ -132,7 +132,7 @@ function ensureButton() {
   if (busy) return;
 
   const deliveryButton = findDeliveredActionButton();
-  const existing = document.querySelector(`[data-${BUTTON_MARKER.replace(/[A-Z]/g, m => `-${m.toLowerCase()}`)}="1"]`);
+  const existing = document.querySelector(`[${BUTTON_DATA_ATTRIBUTE}="1"]`);
 
   if (!deliveryButton) {
     existing?.remove();
