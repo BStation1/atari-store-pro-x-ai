@@ -5,7 +5,7 @@
 
 import { Product } from '../../types';
 import {
-  fetchOrMigrateProducts as fetchOrMigrateProductsRemote,
+  getProductsFromSupabase,
   addProductToSupabase,
   updateProductInSupabase,
   deleteProductFromSupabase,
@@ -34,9 +34,16 @@ function localProductsResult(products: Product[]) {
 }
 
 /**
- * Guarded product loader.
- * - Dashboard reads local cache only; it must not download the full products table.
- * - Other screens dedupe concurrent requests and reuse a recent local snapshot for 5 minutes.
+ * Runtime product loader optimized for Egress.
+ *
+ * IMPORTANT: the legacy fetchOrMigrateProducts implementation also scanned
+ * inventory_movements once per product to verify opening balances. That is an
+ * N+1 database pattern and must not run during ordinary page reads.
+ * Runtime refresh now uses one products query only; data migrations belong in
+ * an explicit maintenance/migration action, not in the normal UI read path.
+ *
+ * - Dashboard reads local cache only.
+ * - Other screens dedupe concurrent requests and reuse a recent snapshot for 5 minutes.
  */
 export async function fetchOrMigrateProducts() {
   const localProducts = getLocalProductsBackup();
@@ -55,10 +62,14 @@ export async function fetchOrMigrateProducts() {
     return productsFetchInFlight;
   }
 
-  productsFetchInFlight = fetchOrMigrateProductsRemote()
-    .then(result => {
+  productsFetchInFlight = getProductsFromSupabase()
+    .then(products => {
       productsLastRemoteFetchAt = Date.now();
-      return result;
+      return localProductsResult(products);
+    })
+    .catch(err => {
+      console.warn('[DataLayer] Product refresh failed; using local snapshot:', err);
+      return localProductsResult(getLocalProductsBackup());
     })
     .finally(() => {
       productsFetchInFlight = null;
