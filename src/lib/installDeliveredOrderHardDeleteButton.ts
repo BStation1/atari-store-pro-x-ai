@@ -1,4 +1,4 @@
-import { hardDeleteDeliveredRepairOrder } from './hardDeleteRepairOrder';
+import { hardDeleteRepairOrderAnyStatus } from './hardDeleteRepairOrderCompat';
 
 type LocalRepairOrder = { id?: string; orderNumber?: string; uuid?: string; status?: string; deliveryStatus?: string; };
 const BUTTON_DATA_ATTRIBUTE = 'data-atari-hard-delete-delivered-order';
@@ -21,28 +21,14 @@ function resolveSelectedOrder(anchorButton: HTMLButtonElement): LocalRepairOrder
   let node: HTMLElement | null = anchorButton.parentElement;
   for (let depth = 0; node && depth < 12; depth += 1, node = node.parentElement) {
     const text = node.innerText || '';
-
-    // The open workspace prints the repair number (usually ATR-10000). Prefer that explicit
-    // reference before broad text matching, because the sidebar can contain several orders.
     const atrRefs = Array.from(text.matchAll(/ATR[-\s]?\d{3,}/gi)).map(match => match[0].replace(/\s+/g, '-'));
-    for (const ref of atrRefs) {
-      const exact = findOrderByReference(orders, ref);
-      if (exact) return exact;
-    }
-
+    for (const ref of atrRefs) { const exact = findOrderByReference(orders, ref); if (exact) return exact; }
     const matches = orders.filter(order => orderAliases(order).some(alias => text.includes(alias) || text.includes(`#${alias}`) || text.includes(`#${alias.slice(0, 8)}`)));
     if (matches.length === 1) return matches[0];
   }
-
-  // Last resort: prefer the visible workspace repair reference instead of scanning every
-  // sidebar alias. This prevents the old "تعذر تحديد أمر الصيانة" error when many orders exist.
   const bodyText = document.body?.innerText || '';
   const atrRefs = Array.from(bodyText.matchAll(/ATR[-\s]?\d{3,}/gi)).map(match => match[0].replace(/\s+/g, '-'));
-  for (const ref of atrRefs) {
-    const exact = findOrderByReference(orders, ref);
-    if (exact) return exact;
-  }
-
+  for (const ref of atrRefs) { const exact = findOrderByReference(orders, ref); if (exact) return exact; }
   const matches = orders.filter(order => orderAliases(order).some(alias => bodyText.includes(`#${alias}`) || bodyText.includes(`#${alias.slice(0, 8)}`)));
   return matches.length === 1 ? matches[0] : null;
 }
@@ -51,18 +37,6 @@ function findDeliveryActionButton(): HTMLButtonElement | null {
     const text = (button.textContent || '').replace(/\s+/g, ' ').trim();
     return text.includes('تم التسليم') && (text.includes('🚚') || button.className.includes('bg-cyan-700'));
   }) || null;
-}
-function temporarilyMarkLocalOrderDelivered(order: LocalRepairOrder): (() => void) {
-  const raw = localStorage.getItem('atari_repair_orders');
-  if (!raw) return () => undefined;
-  try {
-    const list = JSON.parse(raw);
-    if (!Array.isArray(list)) return () => undefined;
-    const aliases = new Set(orderAliases(order));
-    const next = list.map((item: any) => aliases.has(String(item?.id || '')) || aliases.has(String(item?.orderNumber || '')) || aliases.has(String(item?.uuid || '')) ? { ...item, status: 'delivered', deliveryStatus: 'DELIVERED' } : item);
-    localStorage.setItem('atari_repair_orders', JSON.stringify(next));
-    return () => { if (localStorage.getItem('atari_repair_orders')) localStorage.setItem('atari_repair_orders', raw); };
-  } catch { return () => undefined; }
 }
 function buildHardDeleteButton(anchorButton: HTMLButtonElement): HTMLButtonElement {
   const button = document.createElement('button'); button.type = 'button'; button.setAttribute(BUTTON_DATA_ATTRIBUTE, '1');
@@ -75,13 +49,12 @@ function buildHardDeleteButton(anchorButton: HTMLButtonElement): HTMLButtonEleme
     if (!window.confirm(`تحذير: سيتم حذف أمر الصيانة [${orderId}] نهائياً مهما كانت حالته، وحذف السجلات المرتبطة به، وإرجاع أي قطع غيار مسحوبة إلى المخزون.\n\nهل تريد الاستمرار؟`)) return;
     if (!window.confirm(`تأكيد أخير: حذف [${orderId}] نهائياً لا يمكن التراجع عنه.\n\nاضغط موافق لتنفيذ الحذف الآن.`)) return;
     busy = true; const originalHtml = button.innerHTML; button.disabled = true; button.innerHTML = '<span>⏳</span><span>جاري إرجاع البضاعة وحذف الأوردر...</span>';
-    const restoreLocalStatus = temporarilyMarkLocalOrderDelivered(order);
     try {
-      const result = await hardDeleteDeliveredRepairOrder(orderId);
-      if (!result.success) { restoreLocalStatus(); throw new Error(result.error || 'تعذر تنفيذ الحذف النهائي.'); }
+      const result = await hardDeleteRepairOrderAnyStatus(orderId);
+      if (!result.success) throw new Error(result.error || 'تعذر تنفيذ الحذف النهائي.');
       window.alert(`تم حذف الأوردر [${orderId}] نهائياً بنجاح.\nتم إرجاع ${result.restoredUnits} قطعة إلى المخزون (${result.restoredProducts} صنف).\nتم حذف ${result.deletedPartUsages} سجل قطع غيار و${result.deletedInvoices} فاتورة مرتبطة.`);
       window.location.reload();
-    } catch (error: any) { restoreLocalStatus(); console.error('[HardDeleteRepairOrder] Failed:', error); window.alert(error?.message || 'حدث خطأ أثناء الحذف النهائي للأوردر.'); button.disabled = false; button.innerHTML = originalHtml; }
+    } catch (error: any) { console.error('[HardDeleteRepairOrder] Failed:', error); window.alert(error?.message || 'حدث خطأ أثناء الحذف النهائي للأوردر.'); button.disabled = false; button.innerHTML = originalHtml; }
     finally { busy = false; }
   });
   return button;
