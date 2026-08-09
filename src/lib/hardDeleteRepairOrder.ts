@@ -306,7 +306,9 @@ export async function hardDeleteDeliveredRepairOrder(orderId: string): Promise<H
       for (const productId of updatedProductIds) {
         const previousQty = previousProductQuantities.get(productId);
         if (previousQty === undefined) continue;
-        await supabase.from('products').update({ quantity: previousQty }).eq('id', productId).catch(() => undefined);
+        try {
+          await supabase.from('products').update({ quantity: previousQty }).eq('id', productId);
+        } catch {}
       }
       return { ...result, error: `فشل إرجاع البضاعة للمخزن، وتم إيقاف الحذف: ${error?.message || error}` };
     }
@@ -362,7 +364,6 @@ export async function hardDeleteDeliveredRepairOrder(orderId: string): Promise<H
     if (usagesDelete.error) throw usagesDelete.error;
     result.deletedPartUsages = usages.length;
 
-    // Best-effort cleanup for optional accounting/payment tables that may or may not exist in a deployment.
     for (const table of ['repair_payments', 'payments', 'partner_transactions', 'partner_ledger']) {
       await deleteOptionalRows(table, 'repair_order_id', orderUuid);
       await deleteOptionalRows(table, 'order_id', orderUuid);
