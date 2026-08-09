@@ -14,10 +14,12 @@ export async function fetchOrMigrateExpenses(): Promise<{
       return { success: true, expenses: localExpenses };
     }
 
+    // Do not order by a database column here. Older deployed schemas may not
+    // have a `date` column (some only expose created_at), which makes PostgREST
+    // return HTTP 400. Fetch the available row shape and sort client-side.
     const { data, error } = await supabase
       .from('expenses')
-      .select('*')
-      .order('date', { ascending: false });
+      .select('*');
 
     if (error) {
       console.warn("⚠️ [fetchOrMigrateExpenses] Supabase fetch notice:", error.message);
