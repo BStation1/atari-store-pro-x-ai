@@ -3,7 +3,9 @@ import { Supplier, User } from '../types';
 import { getAuthenticatedUserRole } from './authPermissions';
 
 const SUPPLIERS_STORAGE_KEY = 'atari_suppliers';
-const SUPPLIER_SELECT = 'id, name, phone, company, email, address, notes, balance, is_active, is_archived, created_at, updated_at';
+// Use the deployed row shape rather than requiring optional columns that may
+// not exist on older supplier schemas. mapRowToSupplier already handles absent fields.
+const SUPPLIER_SELECT = '*';
 
 export const DEFAULT_SUPPLIERS: Supplier[] = [];
 
@@ -67,9 +69,6 @@ export function mapSupplierToRow(s: Partial<Supplier>): Record<string, any> {
   return row;
 }
 
-/**
- * Migration & Fetching Logic for Suppliers
- */
 export async function fetchOrMigrateSuppliers(): Promise<{
   success: boolean;
   suppliers: Supplier[];
@@ -82,12 +81,11 @@ export async function fetchOrMigrateSuppliers(): Promise<{
   const localSuppliers = getLocalSuppliersBackup();
 
   try {
-    // Query only the supplier fields used by the UI. The shared Supabase fetch
-    // layer deduplicates/caches this full snapshot for 60 seconds.
+    // Avoid schema-specific select/order clauses. Missing optional columns such as
+    // is_archived/updated_at/created_at otherwise make PostgREST respond with 400.
     const { data: dbRows, error: fetchErr } = await supabase
       .from('suppliers')
-      .select(SUPPLIER_SELECT)
-      .order('created_at', { ascending: false });
+      .select(SUPPLIER_SELECT);
 
     if (fetchErr) {
       console.warn('⚠️ Supabase suppliers query error, using local fallback:', fetchErr);
@@ -102,9 +100,10 @@ export async function fetchOrMigrateSuppliers(): Promise<{
       };
     }
 
-    const remoteSuppliers = (dbRows || []).map(mapRowToSupplier);
+    const remoteSuppliers = (dbRows || [])
+      .map(mapRowToSupplier)
+      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 
-    // Save refreshed list to local backup
     saveLocalSuppliersBackup(remoteSuppliers, false);
 
     return {
@@ -129,9 +128,6 @@ export async function fetchOrMigrateSuppliers(): Promise<{
   }
 }
 
-/**
- * Add a new supplier to Supabase
- */
 export async function addSupplierToSupabase(
   supplierData: Omit<Supplier, "id">,
   currentUser?: User
@@ -143,7 +139,6 @@ export async function addSupplierToSupabase(
 
   const cleanPhone = String(supplierData.phone || '').trim();
 
-  // Check duplicate supplier
   if (cleanPhone) {
     const { data: existing } = await supabase
       .from('suppliers')
@@ -175,17 +170,11 @@ export async function addSupplierToSupabase(
   }
 
   const createdSupplier = mapRowToSupplier(inserted);
-
-  // Update local backup
   const localList = getLocalSuppliersBackup();
   saveLocalSuppliersBackup([createdSupplier, ...localList], false);
-
   return createdSupplier;
 }
 
-/**
- * Update an existing supplier in Supabase
- */
 export async function updateSupplierInSupabase(
   supplier: Supplier,
   currentUser?: User
@@ -209,23 +198,14 @@ export async function updateSupplierInSupabase(
   }
 
   const updatedSupplier = mapRowToSupplier(updated);
-
-  // Update local backup
   const localList = getLocalSuppliersBackup();
   const idx = localList.findIndex(s => s.id === supplier.id);
-  if (idx !== -1) {
-    localList[idx] = updatedSupplier;
-  } else {
-    localList.push(updatedSupplier);
-  }
+  if (idx !== -1) localList[idx] = updatedSupplier;
+  else localList.push(updatedSupplier);
   saveLocalSuppliersBackup(localList, false);
-
   return updatedSupplier;
 }
 
-/**
- * Delete or Soft-Delete a supplier in Supabase
- */
 export async function deleteSupplierFromSupabase(
   id: string,
   currentUser?: User
@@ -235,7 +215,6 @@ export async function deleteSupplierFromSupabase(
     throw new Error('عذراً، تقتصر صلاحية حذف الموردين على مدير النظام فقط.');
   }
 
-  // Check if supplier is linked in invoices or products
   const { data: linkedInvoices } = await supabase
     .from('invoices')
     .select('id')
