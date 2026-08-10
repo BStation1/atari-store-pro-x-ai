@@ -75,11 +75,43 @@ export default function PrintReceiptModal({
   });
 
   const handlePrint = () => {
-    const printContent = printAreaRef.current?.innerHTML;
-    if (!printContent) return;
+    const source = printAreaRef.current;
+    if (!source) return;
 
-    // Print from an off-screen iframe instead of opening a blank browser tab.
-    // This is more reliable for thermal printers and avoids the white-screen popup issue.
+    // Clone the exact preview and inline its computed styles so the thermal print
+    // remains visually identical even inside the isolated print iframe.
+    const printableReceipt = source.cloneNode(true) as HTMLElement;
+
+    const copyComputedStyles = (from: Element, to: Element) => {
+      const computed = window.getComputedStyle(from);
+      const targetStyle = (to as HTMLElement).style;
+
+      for (const property of Array.from(computed)) {
+        targetStyle.setProperty(
+          property,
+          computed.getPropertyValue(property),
+          computed.getPropertyPriority(property)
+        );
+      }
+
+      Array.from(from.children).forEach((child, index) => {
+        const targetChild = to.children[index];
+        if (targetChild) copyComputedStyles(child, targetChild);
+      });
+    };
+
+    copyComputedStyles(source, printableReceipt);
+
+    // RP326 uses 80mm paper with roughly 72mm safe printable width.
+    // Keep the same preview typography/padding but lock its physical width.
+    printableReceipt.style.setProperty("width", "72mm", "important");
+    printableReceipt.style.setProperty("max-width", "72mm", "important");
+    printableReceipt.style.setProperty("min-width", "72mm", "important");
+    printableReceipt.style.setProperty("margin", "0 auto", "important");
+    printableReceipt.style.setProperty("border-radius", "0", "important");
+    printableReceipt.style.setProperty("box-shadow", "none", "important");
+    printableReceipt.style.setProperty("overflow", "visible", "important");
+
     const iframe = document.createElement("iframe");
     iframe.setAttribute("aria-hidden", "true");
     iframe.style.position = "fixed";
@@ -110,7 +142,11 @@ export default function PrintReceiptModal({
               size: 80mm auto;
               margin: 0;
             }
-            * { box-sizing: border-box; }
+            * {
+              box-sizing: border-box;
+              -webkit-print-color-adjust: exact;
+              print-color-adjust: exact;
+            }
             html, body {
               margin: 0 !important;
               padding: 0 !important;
@@ -119,111 +155,87 @@ export default function PrintReceiptModal({
               background: #fff !important;
               color: #000 !important;
               direction: rtl;
-              font-family: Arial, Tahoma, sans-serif;
-              -webkit-print-color-adjust: exact;
-              print-color-adjust: exact;
+              overflow: visible !important;
             }
-            .receipt-container {
-              width: 72mm !important;
-              max-width: 72mm !important;
-              margin: 0 auto !important;
-              padding: 2mm 1.5mm 4mm !important;
-              border: 0 !important;
-              box-shadow: none !important;
-              overflow: hidden !important;
+            #rp326-print-root {
+              width: 80mm !important;
+              max-width: 80mm !important;
+              margin: 0 !important;
+              padding: 0 !important;
+              display: flex !important;
+              justify-content: center !important;
+              align-items: flex-start !important;
               background: #fff !important;
-              color: #000 !important;
-              font-size: 9.5px !important;
-              line-height: 1.35 !important;
-            }
-            .receipt-container * {
-              max-width: 100%;
-              box-sizing: border-box;
-            }
-            .receipt-container table {
-              width: 100% !important;
-              table-layout: fixed !important;
-              border-collapse: collapse !important;
-            }
-            .receipt-container th,
-            .receipt-container td {
-              padding: 1mm 0.5mm !important;
-              overflow-wrap: anywhere !important;
-              word-break: break-word !important;
-              vertical-align: top !important;
-              font-size: 8.5px !important;
-            }
-            .receipt-container th:nth-child(1),
-            .receipt-container td:nth-child(1) { width: 58% !important; }
-            .receipt-container th:nth-child(2),
-            .receipt-container td:nth-child(2) { width: 14% !important; text-align: center !important; }
-            .receipt-container th:nth-child(3),
-            .receipt-container td:nth-child(3) { width: 28% !important; }
-            .receipt-container img {
-              max-width: 22mm !important;
-              height: auto !important;
-              margin-left: auto !important;
-              margin-right: auto !important;
-            }
-            .receipt-container h4 {
-              font-size: 15px !important;
-              margin: 0 0 1mm !important;
-            }
-            .receipt-container p,
-            .receipt-container span,
-            .receipt-container div {
-              overflow-wrap: anywhere !important;
-              word-break: break-word !important;
+              overflow: visible !important;
             }
             @media print {
-              html, body {
+              html, body, #rp326-print-root {
                 width: 80mm !important;
+                max-width: 80mm !important;
                 margin: 0 !important;
                 padding: 0 !important;
-              }
-              .receipt-container {
-                width: 72mm !important;
-                max-width: 72mm !important;
-                margin: 0 auto !important;
               }
             }
           </style>
         </head>
         <body>
-          <div class="receipt-container">${printContent}</div>
+          <div id="rp326-print-root"></div>
         </body>
       </html>
     `);
     printDocument.close();
 
+    const root = printDocument.getElementById("rp326-print-root");
+    if (!root) {
+      iframe.remove();
+      return;
+    }
+    root.appendChild(printableReceipt);
+
+    let cleanedUp = false;
     const cleanup = () => {
-      window.setTimeout(() => iframe.remove(), 500);
+      if (cleanedUp) return;
+      cleanedUp = true;
+      window.setTimeout(() => iframe.remove(), 300);
     };
 
-    const doPrint = () => {
+    const doPrint = async () => {
       const printWindow = iframe.contentWindow;
       if (!printWindow) {
         cleanup();
         return;
       }
 
-      // Give the receipt and QR image a moment to render before opening the print dialog.
-      window.setTimeout(() => {
-        try {
-          printWindow.focus();
-          printWindow.print();
-        } finally {
-          cleanup();
+      try {
+        if (printDocument.fonts?.ready) {
+          await printDocument.fonts.ready;
         }
-      }, 350);
+
+        const images = Array.from(printDocument.images);
+        await Promise.all(
+          images.map(img => {
+            if (img.complete) return Promise.resolve();
+            return new Promise<void>(resolve => {
+              img.onload = () => resolve();
+              img.onerror = () => resolve();
+            });
+          })
+        );
+
+        // Small final delay helps the RP326/Chrome print pipeline preserve layout.
+        await new Promise(resolve => window.setTimeout(resolve, 180));
+        printWindow.onafterprint = cleanup;
+        printWindow.focus();
+        printWindow.print();
+      } catch {
+        cleanup();
+      }
+
+      // Fallback cleanup in case onafterprint is not fired by the browser.
+      window.setTimeout(cleanup, 10000);
     };
 
-    if (iframe.contentWindow?.document.readyState === "complete") {
-      doPrint();
-    } else {
-      iframe.onload = doPrint;
-      window.setTimeout(doPrint, 500);
-    }
+    void doPrint();
   };
 
   // Safe QR generation link via public dynamic API
