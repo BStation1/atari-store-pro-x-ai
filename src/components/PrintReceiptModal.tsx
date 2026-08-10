@@ -76,119 +76,153 @@ export default function PrintReceiptModal({
 
   const handlePrint = () => {
     const printContent = printAreaRef.current?.innerHTML;
-    const originalContent = document.body.innerHTML;
+    if (!printContent) return;
 
-    // Use a basic iframe print approach or direct window print
-    const printWindow = window.open("", "_blank");
-    if (printWindow) {
-      printWindow.document.write(`
-        <html>
-          <head>
-            <title>طباعة الفاتورة - ${order?.id || invoice?.id || "receipt"}</title>
-            <style>
-              @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
-              body {
-                font-family: 'Cairo', 'Courier New', sans-serif;
-                direction: rtl;
-                text-align: right;
-                padding: 20px;
-                background-color: #fff;
-                color: #000;
+    // Print from an off-screen iframe instead of opening a blank browser tab.
+    // This is more reliable for thermal printers and avoids the white-screen popup issue.
+    const iframe = document.createElement("iframe");
+    iframe.setAttribute("aria-hidden", "true");
+    iframe.style.position = "fixed";
+    iframe.style.right = "0";
+    iframe.style.bottom = "0";
+    iframe.style.width = "0";
+    iframe.style.height = "0";
+    iframe.style.border = "0";
+    iframe.style.visibility = "hidden";
+    document.body.appendChild(iframe);
+
+    const printDocument = iframe.contentDocument || iframe.contentWindow?.document;
+    if (!printDocument) {
+      iframe.remove();
+      return;
+    }
+
+    printDocument.open();
+    printDocument.write(`
+      <!doctype html>
+      <html dir="rtl">
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <title>إيصال ${order?.id || invoice?.id || "receipt"}</title>
+          <style>
+            @page {
+              size: 80mm auto;
+              margin: 0;
+            }
+            * { box-sizing: border-box; }
+            html, body {
+              margin: 0 !important;
+              padding: 0 !important;
+              width: 80mm !important;
+              min-width: 80mm !important;
+              background: #fff !important;
+              color: #000 !important;
+              direction: rtl;
+              font-family: Arial, Tahoma, sans-serif;
+              -webkit-print-color-adjust: exact;
+              print-color-adjust: exact;
+            }
+            .receipt-container {
+              width: 72mm !important;
+              max-width: 72mm !important;
+              margin: 0 auto !important;
+              padding: 2mm 1.5mm 4mm !important;
+              border: 0 !important;
+              box-shadow: none !important;
+              overflow: hidden !important;
+              background: #fff !important;
+              color: #000 !important;
+              font-size: 9.5px !important;
+              line-height: 1.35 !important;
+            }
+            .receipt-container * {
+              max-width: 100%;
+              box-sizing: border-box;
+            }
+            .receipt-container table {
+              width: 100% !important;
+              table-layout: fixed !important;
+              border-collapse: collapse !important;
+            }
+            .receipt-container th,
+            .receipt-container td {
+              padding: 1mm 0.5mm !important;
+              overflow-wrap: anywhere !important;
+              word-break: break-word !important;
+              vertical-align: top !important;
+              font-size: 8.5px !important;
+            }
+            .receipt-container th:nth-child(1),
+            .receipt-container td:nth-child(1) { width: 58% !important; }
+            .receipt-container th:nth-child(2),
+            .receipt-container td:nth-child(2) { width: 14% !important; text-align: center !important; }
+            .receipt-container th:nth-child(3),
+            .receipt-container td:nth-child(3) { width: 28% !important; }
+            .receipt-container img {
+              max-width: 22mm !important;
+              height: auto !important;
+              margin-left: auto !important;
+              margin-right: auto !important;
+            }
+            .receipt-container h4 {
+              font-size: 15px !important;
+              margin: 0 0 1mm !important;
+            }
+            .receipt-container p,
+            .receipt-container span,
+            .receipt-container div {
+              overflow-wrap: anywhere !important;
+              word-break: break-word !important;
+            }
+            @media print {
+              html, body {
+                width: 80mm !important;
+                margin: 0 !important;
+                padding: 0 !important;
               }
               .receipt-container {
-                max-width: 80mm;
-                margin: 0 auto;
-                border: 1px dashed #ccc;
-                padding: 10px;
+                width: 72mm !important;
+                max-width: 72mm !important;
+                margin: 0 auto !important;
               }
-              .header {
-                text-align: center;
-                margin-bottom: 15px;
-                border-bottom: 2px dashed #000;
-                padding-bottom: 10px;
-              }
-              .title {
-                font-size: 18px;
-                font-weight: bold;
-                margin: 5px 0;
-              }
-              .subtitle {
-                font-size: 11px;
-                color: #555;
-              }
-              .info-row {
-                display: flex;
-                justify-content: space-between;
-                font-size: 12px;
-                margin: 4px 0;
-              }
-              .divider {
-                border-top: 1px dashed #000;
-                margin: 8px 0;
-              }
-              .item-table {
-                width: 100%;
-                font-size: 11px;
-                border-collapse: collapse;
-                margin: 8px 0;
-              }
-              .item-table th {
-                border-bottom: 1px solid #000;
-                text-align: right;
-                padding: 4px 0;
-              }
-              .item-table td {
-                padding: 4px 0;
-              }
-              .total-section {
-                font-size: 12px;
-                margin-top: 10px;
-                border-top: 1px solid #000;
-                padding-top: 5px;
-              }
-              .qr-code {
-                text-align: center;
-                margin: 15px 0;
-              }
-              .qr-code img {
-                width: 100px;
-                height: 100px;
-              }
-              .footer {
-                text-align: center;
-                font-size: 10px;
-                margin-top: 15px;
-                border-top: 1px dashed #000;
-                padding-top: 10px;
-                white-space: pre-line;
-              }
-              @media print {
-                body {
-                  padding: 0;
-                }
-                .receipt-container {
-                  border: none;
-                  max-width: 100%;
-                }
-              }
-            </style>
-          </head>
-          <body>
-            <div class="receipt-container">
-              ${printContent}
-            </div>
-            <script>
-              window.onload = function() {
-                window.print();
-                window.onafterprint = function() {
-                  window.close();
-                };
-              }
-            </script>
-          </body>
-        </html>
-      `);
-      printWindow.document.close();
+            }
+          </style>
+        </head>
+        <body>
+          <div class="receipt-container">${printContent}</div>
+        </body>
+      </html>
+    `);
+    printDocument.close();
+
+    const cleanup = () => {
+      window.setTimeout(() => iframe.remove(), 500);
+    };
+
+    const doPrint = () => {
+      const printWindow = iframe.contentWindow;
+      if (!printWindow) {
+        cleanup();
+        return;
+      }
+
+      // Give the receipt and QR image a moment to render before opening the print dialog.
+      window.setTimeout(() => {
+        try {
+          printWindow.focus();
+          printWindow.print();
+        } finally {
+          cleanup();
+        }
+      }, 350);
+    };
+
+    if (iframe.contentWindow?.document.readyState === "complete") {
+      doPrint();
+    } else {
+      iframe.onload = doPrint;
+      window.setTimeout(doPrint, 500);
     }
   };
 
@@ -409,7 +443,7 @@ export default function PrintReceiptModal({
             className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg flex items-center justify-center gap-2 transition-all-custom cursor-pointer"
           >
             <Printer className="w-5 h-5" />
-            طباعة الإيصال
+            طباعة الإيصال 80mm
           </button>
           <button
             onClick={onClose}
