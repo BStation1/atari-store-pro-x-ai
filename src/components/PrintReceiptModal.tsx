@@ -4,9 +4,8 @@
  */
 
 import React, { useRef } from "react";
-import { Printer, X, Check, Share2 } from "lucide-react";
+import { Printer, X } from "lucide-react";
 import { RepairOrder, Customer, SystemSettings, Invoice, RepairStatus } from "../types";
-import { formatPhoneDisplay } from "../utils/phone";
 import { PhoneDisplay } from "./PhoneDisplay";
 import {
   getInvoiceCustomerName,
@@ -18,7 +17,12 @@ import {
   getDeviceDisplayName
 } from "../lib/customerDisplayHelper";
 import { useRepairPartUsages } from "../hooks/useData";
-import { syncOrderSelectedRepairItemsFromUsages, getActiveRepairUsagesForDevice, getActiveRepairUsagesForOrder, buildRepairPartReceiptLines } from "../lib/accountingEngineV2";
+import {
+  syncOrderSelectedRepairItemsFromUsages,
+  getActiveRepairUsagesForDevice,
+  getActiveRepairUsagesForOrder,
+  buildRepairPartReceiptLines
+} from "../lib/accountingEngineV2";
 
 interface PrintReceiptModalProps {
   isOpen: boolean;
@@ -43,11 +47,18 @@ export default function PrintReceiptModal({
   if (!isOpen) return null;
 
   const activeUsages = (partUsages || []).filter(
-    pu => pu.accountingStatus !== 'RETURNED' && pu.accountingStatus !== 'REVERSED'
+    pu => pu.accountingStatus !== "RETURNED" && pu.accountingStatus !== "REVERSED"
   );
-  const syncedOrder = order ? syncOrderSelectedRepairItemsFromUsages(order, activeUsages, pu => pu.sellingPrice || 0, { usagesLoaded: partUsagesLoaded, allowClear: false }) : undefined;
 
-  // Calculate totals
+  const syncedOrder = order
+    ? syncOrderSelectedRepairItemsFromUsages(
+        order,
+        activeUsages,
+        pu => pu.sellingPrice || 0,
+        { usagesLoaded: partUsagesLoaded, allowClear: false }
+      )
+    : undefined;
+
   const discount = invoice ? invoice.discount : 0;
   const total = invoice ? invoice.totalAmount : (syncedOrder ? syncedOrder.totalEstimatedCost : 0);
   const paid = invoice ? invoice.paidAmount : (syncedOrder ? syncedOrder.advancePayment : 0);
@@ -78,8 +89,6 @@ export default function PrintReceiptModal({
     const source = printAreaRef.current;
     if (!source) return;
 
-    // Clone the exact preview and inline its computed styles so the thermal print
-    // remains visually identical even inside the isolated print iframe.
     const printableReceipt = source.cloneNode(true) as HTMLElement;
 
     const copyComputedStyles = (from: Element, to: Element) => {
@@ -102,15 +111,51 @@ export default function PrintReceiptModal({
 
     copyComputedStyles(source, printableReceipt);
 
-    // RP326 uses 80mm paper with roughly 72mm safe printable width.
-    // Keep the same preview typography/padding but lock its physical width.
-    printableReceipt.style.setProperty("width", "72mm", "important");
-    printableReceipt.style.setProperty("max-width", "72mm", "important");
-    printableReceipt.style.setProperty("min-width", "72mm", "important");
-    printableReceipt.style.setProperty("margin", "0 auto", "important");
+    // RP326: use a deliberately narrower physical width than the printer's
+    // nominal 72mm printable area. This prevents the left price column from
+    // being clipped or shifted by driver-specific non-printable margins.
+    printableReceipt.classList.add("rp326-receipt");
+    printableReceipt.style.setProperty("box-sizing", "border-box", "important");
+    printableReceipt.style.setProperty("width", "68mm", "important");
+    printableReceipt.style.setProperty("max-width", "68mm", "important");
+    printableReceipt.style.setProperty("min-width", "68mm", "important");
+    printableReceipt.style.setProperty("margin-left", "auto", "important");
+    printableReceipt.style.setProperty("margin-right", "auto", "important");
+    printableReceipt.style.setProperty("padding", "3mm", "important");
     printableReceipt.style.setProperty("border-radius", "0", "important");
     printableReceipt.style.setProperty("box-shadow", "none", "important");
     printableReceipt.style.setProperty("overflow", "visible", "important");
+    printableReceipt.style.setProperty("background", "#fff", "important");
+    printableReceipt.style.setProperty("color", "#000", "important");
+    printableReceipt.style.setProperty("font-family", "Tahoma, Arial, sans-serif", "important");
+
+    // Thermal printers render anti-aliased grey text very lightly. Convert all
+    // receipt text to solid black and make normal copy semibold while keeping
+    // already-bold headings bold. Borders are also forced to true black.
+    const thermalElements = [printableReceipt, ...Array.from(printableReceipt.querySelectorAll<HTMLElement>("*"))];
+    thermalElements.forEach(element => {
+      const style = window.getComputedStyle(element);
+      const weight = Number.parseInt(style.fontWeight, 10);
+
+      element.style.setProperty("color", "#000", "important");
+      element.style.setProperty("opacity", "1", "important");
+      element.style.setProperty("text-shadow", "none", "important");
+      element.style.setProperty("filter", "none", "important");
+      element.style.setProperty("font-family", "Tahoma, Arial, sans-serif", "important");
+
+      if (!Number.isNaN(weight)) {
+        element.style.setProperty("font-weight", weight >= 600 ? "700" : "600", "important");
+      }
+
+      const borderTop = style.borderTopStyle !== "none" && style.borderTopWidth !== "0px";
+      const borderRight = style.borderRightStyle !== "none" && style.borderRightWidth !== "0px";
+      const borderBottom = style.borderBottomStyle !== "none" && style.borderBottomWidth !== "0px";
+      const borderLeft = style.borderLeftStyle !== "none" && style.borderLeftWidth !== "0px";
+      if (borderTop) element.style.setProperty("border-top-color", "#000", "important");
+      if (borderRight) element.style.setProperty("border-right-color", "#000", "important");
+      if (borderBottom) element.style.setProperty("border-bottom-color", "#000", "important");
+      if (borderLeft) element.style.setProperty("border-left-color", "#000", "important");
+    });
 
     const iframe = document.createElement("iframe");
     iframe.setAttribute("aria-hidden", "true");
@@ -144,8 +189,8 @@ export default function PrintReceiptModal({
             }
             * {
               box-sizing: border-box;
-              -webkit-print-color-adjust: exact;
-              print-color-adjust: exact;
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
             }
             html, body {
               margin: 0 !important;
@@ -154,26 +199,52 @@ export default function PrintReceiptModal({
               min-width: 80mm !important;
               background: #fff !important;
               color: #000 !important;
-              direction: rtl;
+              direction: rtl !important;
+              font-family: Tahoma, Arial, sans-serif !important;
               overflow: visible !important;
             }
             #rp326-print-root {
+              display: block !important;
               width: 80mm !important;
               max-width: 80mm !important;
               margin: 0 !important;
               padding: 0 !important;
-              display: flex !important;
-              justify-content: center !important;
-              align-items: flex-start !important;
               background: #fff !important;
               overflow: visible !important;
+            }
+            .rp326-receipt {
+              width: 68mm !important;
+              min-width: 68mm !important;
+              max-width: 68mm !important;
+              margin-left: auto !important;
+              margin-right: auto !important;
+              color: #000 !important;
+              background: #fff !important;
+            }
+            .rp326-receipt, .rp326-receipt * {
+              color: #000 !important;
+              opacity: 1 !important;
+              text-shadow: none !important;
+              font-family: Tahoma, Arial, sans-serif !important;
+            }
+            .rp326-receipt img {
+              opacity: 1 !important;
+              filter: contrast(1.15) !important;
             }
             @media print {
               html, body, #rp326-print-root {
                 width: 80mm !important;
+                min-width: 80mm !important;
                 max-width: 80mm !important;
                 margin: 0 !important;
                 padding: 0 !important;
+              }
+              .rp326-receipt {
+                width: 68mm !important;
+                min-width: 68mm !important;
+                max-width: 68mm !important;
+                margin-left: auto !important;
+                margin-right: auto !important;
               }
             }
           </style>
@@ -207,9 +278,7 @@ export default function PrintReceiptModal({
       }
 
       try {
-        if (printDocument.fonts?.ready) {
-          await printDocument.fonts.ready;
-        }
+        if (printDocument.fonts?.ready) await printDocument.fonts.ready;
 
         const images = Array.from(printDocument.images);
         await Promise.all(
@@ -222,7 +291,6 @@ export default function PrintReceiptModal({
           })
         );
 
-        // Small final delay helps the RP326/Chrome print pipeline preserve layout.
         await new Promise(resolve => window.setTimeout(resolve, 180));
         printWindow.onafterprint = cleanup;
         printWindow.focus();
@@ -231,14 +299,12 @@ export default function PrintReceiptModal({
         cleanup();
       }
 
-      // Fallback cleanup in case onafterprint is not fired by the browser.
       window.setTimeout(cleanup, 10000);
     };
 
     void doPrint();
   };
 
-  // Safe QR generation link via public dynamic API
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const trackingLink = `${origin}/track?token=${order?.trackingToken || ""}`;
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(trackingLink)}`;
@@ -246,43 +312,40 @@ export default function PrintReceiptModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
       <div className="bg-[#11131e] border border-[#2a2d42] rounded-xl w-full max-w-md max-h-[90vh] overflow-hidden flex flex-col shadow-2xl glow-primary">
-        {/* Header */}
         <div className="flex justify-between items-center px-6 py-4 border-b border-[#2a2d42]">
           <h3 className="text-lg font-semibold text-white flex items-center gap-2">
             <Printer className="w-5 h-5 text-indigo-400" />
             معاينة إيصال الطباعة
           </h3>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-white transition-colors"
-          >
+          <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Scrollable Preview Area */}
         <div className="p-6 overflow-y-auto bg-gray-950 flex-1 flex justify-center">
           <div
             ref={printAreaRef}
             className="bg-white text-black p-4 rounded-md w-full max-w-[80mm] shadow-md text-right flex flex-col leading-tight text-xs"
             style={{ direction: "rtl", fontFamily: "Cairo, sans-serif" }}
           >
-            {/* Store details */}
             <div className="text-center pb-2 mb-2 border-b-2 border-dashed border-black">
               <h4 className="text-lg font-bold text-black leading-none">{settings.companyName}</h4>
               <p className="text-[10px] text-gray-700 font-medium mt-1">مركز صيانة وبيع أجهزة الكونسول والألعاب</p>
               <p className="text-[10px] text-gray-600 mt-0.5">{settings.address}</p>
-              <p className="text-[10px] text-gray-600">هاتف: <PhoneDisplay phone={settings.phone} className="text-[10px]" /></p>
+              <p className="text-[10px] text-gray-600">
+                هاتف: <PhoneDisplay phone={settings.phone} className="text-[10px]" />
+              </p>
             </div>
 
-            {/* Receipt details */}
             <div className="space-y-1 text-[11px] text-black">
               <div className="flex justify-between">
                 <span>نوع المستند:</span>
                 <span className="font-bold">
                   {order?.deliveryStatus === "DELIVERED" || order?.status === RepairStatus.Delivered
                     ? "إيصال تسليم جهاز (نهائي)"
-                    : (invoice ? "فاتورة مبيعات / صيانة" : "إيصال استلام صيانة")}
+                    : invoice
+                      ? "فاتورة مبيعات / صيانة"
+                      : "إيصال استلام صيانة"}
                 </span>
               </div>
               <div className="flex justify-between">
@@ -299,7 +362,7 @@ export default function PrintReceiptModal({
                   <span className="font-bold">{order.deliveredByUserName}</span>
                 </div>
               )}
-              {/* Customer section */}
+
               {(() => {
                 const displayName = invoice
                   ? getInvoiceCustomerName(invoice, customer ? [customer] : [])
@@ -307,10 +370,12 @@ export default function PrintReceiptModal({
                 const displayPhone = invoice
                   ? getInvoiceCustomerPhone(invoice, customer ? [customer] : [])
                   : getCustomerPhoneHelper(order, customer ? [customer] : []);
-                const isGuest = order ? (order.customerType === 'GUEST' || !order.customerId) : (customer?.type === 'Guest');
+                const isGuest = order
+                  ? order.customerType === "GUEST" || !order.customerId
+                  : customer?.type === "Guest";
                 const badge = invoice
                   ? getInvoiceCustomerBadge(invoice)
-                  : { type: isGuest ? 'GUEST' : 'REGISTERED', label: isGuest ? 'عميل زائر' : 'عميل مسجل' };
+                  : { type: isGuest ? "GUEST" : "REGISTERED", label: isGuest ? "عميل زائر" : "عميل مسجل" };
 
                 return (
                   <>
@@ -339,9 +404,8 @@ export default function PrintReceiptModal({
               })()}
             </div>
 
-            <div className="border-t border-dashed border-black my-2"></div>
+            <div className="border-t border-dashed border-black my-2" />
 
-            {/* Items details */}
             <table className="w-full text-right text-[11px] border-collapse my-2">
               <thead>
                 <tr className="border-b border-black">
@@ -353,14 +417,18 @@ export default function PrintReceiptModal({
               <tbody>
                 {syncedOrder &&
                   syncedOrder.devices.map((dev, devIdx) => {
-                    const deviceUsages = (partUsagesLoaded && order)
+                    const deviceUsages = partUsagesLoaded && order
                       ? getActiveRepairUsagesForDevice(order, dev, devIdx, partUsages)
                       : [];
 
                     const partLines = deviceUsages.length > 0
-                      ? deviceUsages.map(pu => `${pu.partName} (x${pu.quantity} بسعر ${pu.sellingPrice ?? (pu as any).salePrice ?? 0} ج.م)`)
-                      : (dev.selectedRepairItems && dev.selectedRepairItems.length > 0)
-                        ? dev.selectedRepairItems.map(i => `${i.name} (x${i.quantity} بسعر ${i.repairPrice ?? i.salePrice ?? 0} ج.م)`)
+                      ? deviceUsages.map(
+                          pu => `${pu.partName} (x${pu.quantity} بسعر ${pu.sellingPrice ?? (pu as any).salePrice ?? 0} ج.م)`
+                        )
+                      : dev.selectedRepairItems && dev.selectedRepairItems.length > 0
+                        ? dev.selectedRepairItems.map(
+                            i => `${i.name} (x${i.quantity} بسعر ${i.repairPrice ?? i.salePrice ?? 0} ج.م)`
+                          )
                         : [];
 
                     return (
@@ -379,6 +447,7 @@ export default function PrintReceiptModal({
                       </tr>
                     );
                   })}
+
                 {invoice &&
                   invoice.items.map((item, idx) => (
                     <tr key={idx} className="border-b border-gray-100">
@@ -390,9 +459,8 @@ export default function PrintReceiptModal({
               </tbody>
             </table>
 
-            <div className="border-t border-dashed border-black my-2"></div>
+            <div className="border-t border-dashed border-black my-2" />
 
-            {/* Financial Calculations */}
             <div className="space-y-1 text-[11px] text-black">
               {discount > 0 && (
                 <div className="flex justify-between text-gray-700">
@@ -425,9 +493,8 @@ export default function PrintReceiptModal({
               )}
             </div>
 
-            <div className="border-t border-dashed border-black my-2"></div>
+            <div className="border-t border-dashed border-black my-2" />
 
-            {/* QR Section for Tracking */}
             {order && (
               <div className="flex flex-col items-center justify-center py-2 text-center">
                 <p className="text-[9px] text-gray-600 font-bold mb-1">امسح الكود لتتبع حالة الصيانة فورياً</p>
@@ -441,14 +508,12 @@ export default function PrintReceiptModal({
               </div>
             )}
 
-            {/* Footer comments */}
             <div className="text-center text-[9px] text-gray-700 border-t border-dashed border-black pt-2 whitespace-pre-line leading-relaxed">
               {settings.receiptFooter}
             </div>
           </div>
         </div>
 
-        {/* Action Buttons */}
         <div className="px-6 py-4 border-t border-[#2a2d42] bg-[#161927] flex gap-3">
           <button
             onClick={handlePrint}
