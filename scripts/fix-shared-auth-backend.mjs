@@ -57,7 +57,7 @@ patchFile('src/components/Users.tsx', [
   },
   {
     label: 'require remote id',
-    from: '        id: authUserId || `U-${String(allUsers.length + 101).padStart(3, "0")}` ,',
+    from: '        id: authUserId || `U-${String(allUsers.length + 101).padStart(3, "0")}`,',
     to: '        id: authUserId,'
   }
 ]);
