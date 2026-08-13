@@ -36,6 +36,16 @@ patchFile('src/lib/authStore.ts', [
     label: 'sync profile fields',
     from: `          email: user.email,\n          full_name: user.fullName,\n          role: targetRole`,
     to: `          email: user.email,\n          username: user.username,\n          full_name: user.fullName,\n          phone: user.phone || "",\n          branch: user.branch || "الفرع الرئيسي",\n          permissions: user.permissions || [],\n          must_change_password: user.mustChangePassword === true,\n          is_active: user.isActive !== false,\n          role: targetRole,\n          updated_at: new Date().toISOString()`
+  },
+  {
+    label: 'owner check error fallback',
+    from: `        return {\n          hasOwner: true, // Default to true so setup screen is NEVER exposed accidentally on error\n          error: "تعذر الاتصال بقاعدة البيانات للتحقق من وجود المالك. يرجى إعادة المحاولة."\n        };`,
+    to: `        return {\n          hasOwner: false,\n          error: "تعذر الاتصال بقاعدة بيانات المستخدمين للتحقق من وجود المالك. يرجى إعادة المحاولة."\n        };`
+  },
+  {
+    label: 'owner check catch fallback',
+    from: `      return {\n        hasOwner: true,\n        error: "حدث خطأ غير متوقع أثناء الاتصال بـ Supabase. يرجى التحقق من اتصال الإنترنت."\n      };`,
+    to: `      return {\n        hasOwner: false,\n        error: "حدث خطأ غير متوقع أثناء الاتصال بقاعدة بيانات المستخدمين. يرجى التحقق من اتصال الإنترنت."\n      };`
   }
 ]);
 
@@ -59,6 +69,29 @@ patchFile('src/components/Users.tsx', [
     label: 'require remote id',
     from: '        id: authUserId || `U-${String(allUsers.length + 101).padStart(3, "0")}`,',
     to: '        id: authUserId,'
+  }
+]);
+
+patchFile('src/App.tsx', [
+  {
+    label: 'shared auth import',
+    from: 'import { isSupabaseConfigured, supabase } from "./lib/supabaseClient";',
+    to: 'import { isSupabaseConfigured } from "./lib/supabaseClient";\nimport { authSupabase } from "./lib/authSupabaseClient";'
+  },
+  {
+    label: 'auth state listener',
+    from: '    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {',
+    to: '    const { data: { subscription } } = authSupabase.auth.onAuthStateChange(async (event, session) => {'
+  },
+  {
+    label: 'auth changed session lookup',
+    from: '      supabase.auth.getSession().then(({ data }) => {',
+    to: '      authSupabase.auth.getSession().then(({ data }) => {'
+  },
+  {
+    label: 'force setup when no owner',
+    from: '  if (currentView === "setup" || (!hasOwner && !currentLoggedUser && currentView !== "login")) {',
+    to: '  if (currentView === "setup" || (!hasOwner && !currentLoggedUser)) {'
   }
 ]);
 
