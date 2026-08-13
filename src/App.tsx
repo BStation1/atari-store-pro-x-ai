@@ -26,7 +26,8 @@ import {
 } from "lucide-react";
 import { db } from "./lib/data";
 import { authStore } from "./lib/authStore";
-import { isSupabaseConfigured, supabase } from "./lib/supabaseClient";
+import { authSupabase as supabase } from "./lib/authSupabaseClient";
+const isSupabaseConfigured = true;
 import { hasPermission, getViewRequiredPermission } from "./lib/authPermissions";
 import { useCurrentUser, useSettings } from "./hooks/useData";
 
@@ -54,22 +55,16 @@ import UserProfileModal from "./components/UserProfileModal";
 import AppShell from "./components/layout/AppShell";
 
 function MainApp() {
-  // Initialize the local database once. Heavy Supabase business tables are deliberately
-  // NOT prefetched here; the owning screen/hook loads them only when that area is used.
   useEffect(() => {
     db.init();
-
     if (typeof window !== "undefined") {
       const pathname = window.location.pathname;
       const urlParams = new URLSearchParams(window.location.search);
       const queryView = urlParams.get("view");
       const trackId = urlParams.get("id") || urlParams.get("orderId") || urlParams.get("track") || urlParams.get("token") || urlParams.get("phone");
-
-      if (pathname.includes("/login")) {
-        setCurrentView("login");
-      } else if (pathname.includes("/unauthorized")) {
-        setCurrentView("unauthorized");
-      } else if (queryView === "tracking" || trackId || pathname.includes("/track")) {
+      if (pathname.includes("/login")) setCurrentView("login");
+      else if (pathname.includes("/unauthorized")) setCurrentView("unauthorized");
+      else if (queryView === "tracking" || trackId || pathname.includes("/track")) {
         setCurrentView("tracking");
         if (trackId) setNavigationParams({ initialQuery: trackId });
       }
@@ -78,23 +73,15 @@ function MainApp() {
 
   const { user: currentLoggedUser } = useCurrentUser();
   const { settings } = useSettings();
-
-  // Navigation and view state
   const [currentView, setCurrentView] = useState<string>("dashboard");
   const [navigationParams, setNavigationParams] = useState<any>(null);
   const [postLoginRedirect, setPostLoginRedirect] = useState<string>("dashboard");
-
-  // Notifications Drawer state
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [cmdSearchQuery, setCmdSearchQuery] = useState("");
-
-  // Notifications are calculated from the already-present local DB snapshot. Previously
-  // App mounted useProducts/useRepairOrders solely to refresh this memo, which caused two
-  // large Supabase table reads on every app boot even if the user never opened those pages.
   const [notificationsTick, setNotificationsTick] = useState(0);
   const handleRefreshNotifications = () => setNotificationsTick(prev => prev + 1);
   const notificationsList = React.useMemo(() => db.getNotifications(), [notificationsTick]);
@@ -106,23 +93,12 @@ function MainApp() {
     return () => window.removeEventListener("atari_db_changed", handleDbChange);
   }, []);
 
-  // Keyboard Shortcuts Listeners (Ctrl+N, Ctrl+S, Ctrl+K)
   useEffect(() => {
     const handleShortcuts = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.key === "n") {
-        e.preventDefault();
-        handleNavigate("reception");
-      }
-      if (e.ctrlKey && e.key === "s") {
-        e.preventDefault();
-        handleNavigate("settings");
-      }
-      if (e.ctrlKey && e.key === "k") {
-        e.preventDefault();
-        setIsSearchOpen(prev => !prev);
-      }
+      if (e.ctrlKey && e.key === "n") { e.preventDefault(); handleNavigate("reception"); }
+      if (e.ctrlKey && e.key === "s") { e.preventDefault(); handleNavigate("settings"); }
+      if (e.ctrlKey && e.key === "k") { e.preventDefault(); setIsSearchOpen(prev => !prev); }
     };
-
     window.addEventListener("keydown", handleShortcuts);
     return () => window.removeEventListener("keydown", handleShortcuts);
   }, []);
@@ -130,55 +106,24 @@ function MainApp() {
   const handleNavigate = (view: string, params: any = null) => {
     const isPublic = view === "tracking" || view === "login" || view === "setup" || view === "unauthorized";
     if (!isPublic && (!hasSupabaseSession || !currentLoggedUser)) {
-      setPostLoginRedirect(view);
-      setCurrentView("login");
-      return;
+      setPostLoginRedirect(view); setCurrentView("login"); return;
     }
-
-    setCurrentView(view);
-    setNavigationParams(params);
-    setIsSidebarOpen(false);
-    setIsSearchOpen(false);
-    setIsUserMenuOpen(false);
-    setCmdSearchQuery("");
+    setCurrentView(view); setNavigationParams(params); setIsSidebarOpen(false); setIsSearchOpen(false); setIsUserMenuOpen(false); setCmdSearchQuery("");
   };
 
-  const handleLogout = async () => {
-    await authStore.logout();
-    setHasSupabaseSession(false);
-    setIsUserMenuOpen(false);
-    setIsProfileModalOpen(false);
-    setCurrentView("login");
-  };
-
-  const handleLogoutAllDevices = () => {
-    if (currentLoggedUser) authStore.logoutAllSessions(currentLoggedUser.id);
-    handleLogout();
-  };
+  const handleLogout = async () => { await authStore.logout(); setHasSupabaseSession(false); setIsUserMenuOpen(false); setIsProfileModalOpen(false); setCurrentView("login"); };
+  const handleLogoutAllDevices = () => { if (currentLoggedUser) authStore.logoutAllSessions(currentLoggedUser.id); handleLogout(); };
 
   const allMenuItems = [
-    { id: "dashboard", label: "لوحة التحكم", icon: LayoutDashboard },
-    { id: "reception", label: "الاستقبال وتسجيل الأجهزة", icon: PlusCircle },
-    { id: "customers", label: "حسابات العملاء", icon: Users },
-    { id: "repair-center", label: "مركز الصيانة والورشة", icon: Wrench },
-    { id: "ai-diagnostics", label: "تشخيص الأعطال الذكي AI", icon: Sparkles },
-    { id: "inventory", label: "المخزون والمستودع", icon: Warehouse },
-    { id: "accounting", label: "المبيعات والمحاسبة", icon: DollarSign },
-    { id: "partner-accounting", label: "محاسبة الشركاء", icon: PieChart },
-    { id: "reports", label: "التقارير المالية", icon: TrendingUp },
-    { id: "system-health", label: "سلامة وجاهزية النظام", icon: ShieldCheck },
-    { id: "users", label: "المستخدمين والأمن", icon: UserIcon },
-    { id: "tracking", label: "بوابة تتبع العملاء", icon: Smartphone },
+    { id: "dashboard", label: "لوحة التحكم", icon: LayoutDashboard }, { id: "reception", label: "الاستقبال وتسجيل الأجهزة", icon: PlusCircle },
+    { id: "customers", label: "حسابات العملاء", icon: Users }, { id: "repair-center", label: "مركز الصيانة والورشة", icon: Wrench },
+    { id: "ai-diagnostics", label: "تشخيص الأعطال الذكي AI", icon: Sparkles }, { id: "inventory", label: "المخزون والمستودع", icon: Warehouse },
+    { id: "accounting", label: "المبيعات والمحاسبة", icon: DollarSign }, { id: "partner-accounting", label: "محاسبة الشركاء", icon: PieChart },
+    { id: "reports", label: "التقارير المالية", icon: TrendingUp }, { id: "system-health", label: "سلامة وجاهزية النظام", icon: ShieldCheck },
+    { id: "users", label: "المستخدمين والأمن", icon: UserIcon }, { id: "tracking", label: "بوابة تتبع العملاء", icon: Smartphone },
     { id: "settings", label: "إعدادات النظام الفنية", icon: Settings }
   ];
-
-  const allowedMenuItems = allMenuItems.filter(item => {
-    if (item.id === "tracking") return true;
-    if (!currentLoggedUser) return false;
-    const reqPerm = getViewRequiredPermission(item.id);
-    if (!reqPerm) return true;
-    return hasPermission(currentLoggedUser.roleId, currentLoggedUser.permissions, reqPerm);
-  });
+  const allowedMenuItems = allMenuItems.filter(item => { if (item.id === "tracking") return true; if (!currentLoggedUser) return false; const reqPerm = getViewRequiredPermission(item.id); return !reqPerm || hasPermission(currentLoggedUser.roleId, currentLoggedUser.permissions, reqPerm); });
 
   const [hasOwner, setHasOwner] = useState<boolean>(true);
   const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
@@ -186,302 +131,64 @@ function MainApp() {
   const [authError, setAuthError] = useState<string | null>(null);
 
   const checkAuthAndOwner = async () => {
-    setIsAuthChecking(true);
-    setAuthError(null);
-
+    setIsAuthChecking(true); setAuthError(null);
     try {
-      if (!isSupabaseConfigured) {
-        setHasOwner(true);
-        setHasSupabaseSession(false);
-        setIsAuthChecking(false);
-        return;
-      }
-
       const sessionRes = await authStore.validateAndSyncSession();
-      if (sessionRes.error) {
-        const cleanErr = (sessionRes.error.includes('fetch') || sessionRes.error.includes('TypeError'))
-          ? "تعذر الاتصال بقاعدة البيانات Supabase. يرجى التحقق من إعدادات VITE_SUPABASE_URL و VITE_SUPABASE_PUBLISHABLE_KEY في Vercel ثم إعادة النشر (Redeploy)."
-          : sessionRes.error;
-        setAuthError(cleanErr);
-        setHasSupabaseSession(false);
-        setIsAuthChecking(false);
-        return;
-      }
-
+      if (sessionRes.error) { setAuthError(sessionRes.error); setHasSupabaseSession(false); return; }
       if (!sessionRes.user) {
-        setHasSupabaseSession(false);
-        authStore.clearSession();
-        const ownerExists = await authStore.checkHasOwnerInSupabase();
-        setHasOwner(ownerExists);
-      } else {
-        setHasSupabaseSession(true);
-        setHasOwner(true);
-      }
+        setHasSupabaseSession(false); authStore.clearSession();
+        const ownerExists = await authStore.checkHasOwnerInSupabase(); setHasOwner(ownerExists);
+      } else { setHasSupabaseSession(true); setHasOwner(true); }
     } catch (err: any) {
-      console.warn("⚠️ Error verifying auth and owner in Supabase:", err);
-      setHasSupabaseSession(false);
-      authStore.clearSession();
-      const raw = String(err?.message || err || '');
-      if (raw.includes('fetch') || raw.includes('TypeError')) {
-        setAuthError("تعذر الاتصال بقاعدة البيانات Supabase (TypeError: Failed to fetch). يرجى التأكد من ضبط VITE_SUPABASE_URL و VITE_SUPABASE_PUBLISHABLE_KEY في إعدادات Vercel ثم إعادة النشر.");
-      } else {
-        setAuthError(err?.message || "حدث خطأ أثناء الاتصال بخادم المصادقة.");
-      }
-    } finally {
-      setIsAuthChecking(false);
-    }
+      console.warn("⚠️ Error verifying auth and owner:", err); setHasSupabaseSession(false); authStore.clearSession(); setAuthError(err?.message || "حدث خطأ أثناء الاتصال بخادم المصادقة.");
+    } finally { setIsAuthChecking(false); }
   };
 
   useEffect(() => {
-    let isMounted = true;
-    checkAuthAndOwner();
-
+    let isMounted = true; checkAuthAndOwner();
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!isMounted) return;
-      if (event === "SIGNED_OUT" || !session) {
-        authStore.clearSession();
-        setHasSupabaseSession(false);
-      } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || session?.user) {
-        const syncRes = await authStore.validateAndSyncSession();
-        if (isMounted) setHasSupabaseSession(Boolean(syncRes.user));
-      }
+      if (event === "SIGNED_OUT" || !session) { authStore.clearSession(); setHasSupabaseSession(false); }
+      else { const syncRes = await authStore.validateAndSyncSession(); if (isMounted) setHasSupabaseSession(Boolean(syncRes.user)); }
     });
-
-    const handleAuthChanged = () => {
-      if (!isMounted) return;
-      supabase.auth.getSession().then(({ data }) => {
-        if (!isMounted) return;
-        const currentUser = authStore.getCurrentUser();
-        setHasSupabaseSession(Boolean(data.session && currentUser));
-      }).catch(() => {
-        if (isMounted) setHasSupabaseSession(false);
-      });
-
-      authStore.checkHasOwnerInSupabase().then(res => {
-        if (isMounted) setHasOwner(res);
-      });
-    };
-
+    const handleAuthChanged = () => { if (!isMounted) return; checkAuthAndOwner(); };
     window.addEventListener("atari_auth_changed", handleAuthChanged);
-    return () => {
-      isMounted = false;
-      subscription.unsubscribe();
-      window.removeEventListener("atari_auth_changed", handleAuthChanged);
-    };
+    return () => { isMounted = false; subscription.unsubscribe(); window.removeEventListener("atari_auth_changed", handleAuthChanged); };
   }, []);
 
-  // IMPORTANT: The previous performInitialLoad() downloaded repair_orders, customers,
-  // products, repair_part_usages and invoices in parallel immediately after login. That
-  // generated a large Egress burst even while the user did nothing. Each feature screen
-  // already owns its data hook, so that redundant boot prefetch has been removed.
+  if (currentView === "tracking") return <TrackingPage initialQuery={navigationParams?.initialQuery} />;
+  if (isAuthChecking) return <div className="min-h-screen bg-[#070913] text-gray-100 flex items-center justify-center p-4 font-sans dir-rtl"><div className="text-center space-y-4"><div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto"></div><p className="text-xs text-gray-400 font-bold">جاري التحقق من جلسة الدخول وصلاحيات النظام...</p></div></div>;
+  if (authError) return <div className="min-h-screen bg-[#070913] text-gray-100 flex items-center justify-center p-4 font-sans dir-rtl"><div className="bg-[#11131e] border border-red-500/30 p-6 max-w-md w-full rounded-3xl shadow-2xl text-center space-y-4"><AlertCircle className="w-6 h-6 text-red-400 mx-auto"/><h2 className="text-base font-bold text-white">خطأ في التحقق من المصادقة</h2><p className="text-xs text-red-300 leading-relaxed">{authError}</p><button onClick={checkAuthAndOwner} className="w-full bg-indigo-600 text-white font-bold py-3 px-6 rounded-xl text-xs flex items-center justify-center gap-2"><RefreshCw className="w-4 h-4"/>إعادة المحاولة</button></div></div>;
 
-  if (currentView === "tracking") {
-    return <TrackingPage initialQuery={navigationParams?.initialQuery} />;
+  // Empty shared database always opens OWNER setup, regardless of stale browser state or /login.
+  if (currentView === "setup" || !hasOwner) {
+    return <InitialSetup onSuccess={() => { setHasOwner(true); setCurrentView("dashboard"); }} onCancel={() => setCurrentView("login")} />;
   }
-
-  if (isAuthChecking) {
-    return (
-      <div className="min-h-screen bg-[#070913] text-gray-100 flex items-center justify-center p-4 font-sans dir-rtl">
-        <div className="text-center space-y-4">
-          <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="text-xs text-gray-400 font-bold">جاري التحقق من جلسة الدخول وصلاحيات النظام...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (authError) {
-    return (
-      <div className="min-h-screen bg-[#070913] text-gray-100 flex items-center justify-center p-4 font-sans dir-rtl">
-        <div className="bg-[#11131e] border border-red-500/30 p-6 max-w-md w-full rounded-3xl shadow-2xl text-center space-y-4">
-          <div className="w-12 h-12 bg-red-500/10 border border-red-500/20 rounded-2xl flex items-center justify-center mx-auto text-red-400">
-            <AlertCircle className="w-6 h-6 text-red-400" />
-          </div>
-          <h2 className="text-base font-bold text-white">خطأ في التحقق من المصادقة</h2>
-          <p className="text-xs text-red-300 leading-relaxed">{authError}</p>
-          <button
-            onClick={() => checkAuthAndOwner()}
-            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-xl text-xs transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer"
-          >
-            <RefreshCw className="w-4 h-4" />
-            <span>إعادة المحاولة</span>
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (currentView === "setup" || (!hasOwner && !currentLoggedUser && currentView !== "login")) {
-    return (
-      <InitialSetup
-        onSuccess={() => {
-          setHasOwner(true);
-          setCurrentView("dashboard");
-        }}
-        onCancel={() => setCurrentView("login")}
-      />
-    );
-  }
-
-  if (!hasSupabaseSession || !currentLoggedUser || currentView === "login") {
-    return (
-      <Login
-        onSuccess={() => {
-          setHasSupabaseSession(true);
-          const target = postLoginRedirect || "dashboard";
-          setCurrentView(target);
-        }}
-        onNavigateToSetup={() => setCurrentView("setup")}
-      />
-    );
-  }
+  if (!hasSupabaseSession || !currentLoggedUser || currentView === "login") return <Login onSuccess={() => { setHasSupabaseSession(true); setCurrentView(postLoginRedirect || "dashboard"); }} onNavigateToSetup={() => setCurrentView("setup")} />;
 
   const requiredPerm = getViewRequiredPermission(currentView);
   const isAuthorized = !requiredPerm || hasPermission(currentLoggedUser.roleId, currentLoggedUser.permissions, requiredPerm);
-
   const renderViewContent = () => {
-    if (!isAuthorized) {
-      return <Unauthorized requiredPermission={requiredPerm} onReturnHome={() => setCurrentView("dashboard")} />;
-    }
-
+    if (!isAuthorized) return <Unauthorized requiredPermission={requiredPerm} onReturnHome={() => setCurrentView("dashboard")} />;
     switch (currentView) {
-      case "dashboard":
-        return <Dashboard onNavigate={handleNavigate} />;
-      case "reception":
-        return <Reception prefillData={navigationParams?.prefillData} onNavigate={handleNavigate} />;
-      case "customers":
-        return <CustomersList initialOpenAddModal={navigationParams?.openAddModal} initialFocusSearch={navigationParams?.focusSearch} />;
-      case "repair-center":
-        return <RepairCenter initialStatusFilter={navigationParams?.status} initialOrderId={navigationParams?.orderId} />;
-      case "ai-diagnostics":
-        return <AIDiagnostics onNavigateToReception={prefillData => handleNavigate("reception", { prefillData })} />;
-      case "inventory":
-        return <Inventory initialSearch={navigationParams?.search} />;
-      case "accounting":
-        return <Accounting openInvoiceModal={navigationParams?.openInvoiceModal} />;
-      case "partner-accounting":
-        return <PartnerDashboard currentUserId={currentLoggedUser.id} />;
-      case "reports":
-        return <Reports />;
-      case "system-health":
-        return <SystemHealthDashboard />;
-      case "users":
-        return <UsersList />;
-      case "settings":
-        return <SettingsView />;
-      case "unauthorized":
-        return <Unauthorized onReturnHome={() => setCurrentView("dashboard")} />;
-      default:
-        return <Dashboard onNavigate={handleNavigate} />;
+      case "dashboard": return <Dashboard onNavigate={handleNavigate} />; case "reception": return <Reception prefillData={navigationParams?.prefillData} onNavigate={handleNavigate} />;
+      case "customers": return <CustomersList initialOpenAddModal={navigationParams?.openAddModal} initialFocusSearch={navigationParams?.focusSearch} />; case "repair-center": return <RepairCenter initialStatusFilter={navigationParams?.status} initialOrderId={navigationParams?.orderId} />;
+      case "ai-diagnostics": return <AIDiagnostics onNavigateToReception={prefillData => handleNavigate("reception", { prefillData })} />; case "inventory": return <Inventory initialSearch={navigationParams?.search} />;
+      case "accounting": return <Accounting openInvoiceModal={navigationParams?.openInvoiceModal} />; case "partner-accounting": return <PartnerDashboard currentUserId={currentLoggedUser.id} />;
+      case "reports": return <Reports />; case "system-health": return <SystemHealthDashboard />; case "users": return <UsersList />; case "settings": return <SettingsView />; case "unauthorized": return <Unauthorized onReturnHome={() => setCurrentView("dashboard")} />; default: return <Dashboard onNavigate={handleNavigate} />;
     }
   };
+  const commandSearchResults = cmdSearchQuery.trim() ? allowedMenuItems.filter(item => item.label.includes(cmdSearchQuery)) : allowedMenuItems;
 
-  const commandSearchResults = cmdSearchQuery.trim()
-    ? allowedMenuItems.filter(item => item.label.includes(cmdSearchQuery))
-    : allowedMenuItems;
-
-  return (
-    <>
-      {currentLoggedUser.mustChangePassword && (
-        <ForcePasswordChangeModal
-          userId={currentLoggedUser.id}
-          onSuccess={() => window.dispatchEvent(new Event("atari_auth_changed"))}
-        />
-      )}
-
-      <UserProfileModal
-        user={currentLoggedUser}
-        isOpen={isProfileModalOpen}
-        onClose={() => setIsProfileModalOpen(false)}
-        onLogout={handleLogout}
-        onLogoutAllDevices={handleLogoutAllDevices}
-      />
-
-      {isSearchOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4">
-          <div className="bg-[#11131e] border border-[#2a2d42] rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden text-right">
-            <div className="p-4 border-b border-[#2a2d42] flex items-center justify-between">
-              <span className="text-xs font-bold text-indigo-400">البحث السريع والتنقل باللوحة</span>
-              <button onClick={() => setIsSearchOpen(false)} className="text-gray-400 hover:text-white cursor-pointer">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="p-4 space-y-3">
-              <div className="relative">
-                <input
-                  type="text"
-                  autoFocus
-                  placeholder="اكتب القسم المراد الوصول إليه... (مثال: مخزون، صيانة)"
-                  value={cmdSearchQuery}
-                  onChange={e => setCmdSearchQuery(e.target.value)}
-                  className="w-full bg-gray-950 border border-[#2a2d42] rounded-xl px-4 py-3 text-xs text-white focus:outline-none focus:border-indigo-500 pr-9"
-                />
-                <Search className="w-4 h-4 text-gray-500 absolute left-3 top-3.5" />
-              </div>
-
-              <div className="space-y-1.5 max-h-[220px] overflow-y-auto pt-2">
-                {commandSearchResults.map(item => (
-                  <button
-                    key={item.id}
-                    onClick={() => handleNavigate(item.id)}
-                    className="w-full text-right px-4 py-3 rounded-xl hover:bg-indigo-600/10 text-xs text-gray-300 transition-colors flex justify-between items-center cursor-pointer"
-                  >
-                    <span className="flex items-center gap-2 font-bold">
-                      <item.icon className="w-4 h-4 text-indigo-400" />
-                      {item.label}
-                    </span>
-                    <span className="text-[10px] text-gray-500">انتقال سريع</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <AppShell
-        allowedMenuItems={allowedMenuItems}
-        currentView={currentView}
-        onNavigate={handleNavigate}
-        currentUser={currentLoggedUser}
-        totalNotifications={totalNotifications}
-        onOpenSearch={() => setIsSearchOpen(true)}
-        onOpenNotifications={() => setIsNotificationsOpen(true)}
-        onOpenProfileModal={() => setIsProfileModalOpen(true)}
-        onLogout={handleLogout}
-        onLogoutAllDevices={handleLogoutAllDevices}
-        companyName={settings.companyName || "Atari Store"}
-        bannerNotification={
-          !isSupabaseConfigured ? (
-            <div className="bg-amber-950/80 border-b border-amber-500/30 text-amber-200 text-xs py-2.5 px-6 flex items-center justify-between font-sans shadow-md dir-rtl">
-              <div className="flex items-center gap-2.5">
-                <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-                <span>
-                  <strong>تنبيه إعدادات Supabase مفقودة:</strong> لم يتم العثور على <code className="bg-black/40 px-1.5 py-0.5 rounded text-amber-300 font-mono">VITE_SUPABASE_URL</code> أو <code className="bg-black/40 px-1.5 py-0.5 rounded text-amber-300 font-mono">VITE_SUPABASE_PUBLISHABLE_KEY</code>. يرجى إضافتها في Vercel Project Settings → Environment Variables ثم إجراء <strong>Redeploy</strong>.
-                </span>
-              </div>
-            </div>
-          ) : undefined
-        }
-      >
-        {renderViewContent()}
-      </AppShell>
-
-      <NotificationsDrawer
-        isOpen={isNotificationsOpen}
-        onClose={() => setIsNotificationsOpen(false)}
-        notifications={notificationsList}
-        onRefresh={handleRefreshNotifications}
-        onNavigate={handleNavigate}
-      />
-    </>
-  );
+  return <>
+    {currentLoggedUser.mustChangePassword && <ForcePasswordChangeModal userId={currentLoggedUser.id} onSuccess={() => window.dispatchEvent(new Event("atari_auth_changed"))} />}
+    <UserProfileModal user={currentLoggedUser} isOpen={isProfileModalOpen} onClose={() => setIsProfileModalOpen(false)} onLogout={handleLogout} onLogoutAllDevices={handleLogoutAllDevices} />
+    {isSearchOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"><div className="bg-[#11131e] border border-[#2a2d42] rounded-2xl w-full max-w-lg p-4"><button onClick={() => setIsSearchOpen(false)}><X/></button><input autoFocus value={cmdSearchQuery} onChange={e=>setCmdSearchQuery(e.target.value)} className="w-full bg-gray-950 p-3 text-white"/><div>{commandSearchResults.map(item=><button key={item.id} onClick={()=>handleNavigate(item.id)} className="w-full p-3 text-right text-white"><item.icon className="inline w-4 h-4"/> {item.label}</button>)}</div></div></div>}
+    <AppShell settings={settings} currentUser={currentLoggedUser} currentView={currentView} menuItems={allowedMenuItems} totalNotifications={totalNotifications} isNotificationsOpen={isNotificationsOpen} setIsNotificationsOpen={setIsNotificationsOpen} isUserMenuOpen={isUserMenuOpen} setIsUserMenuOpen={setIsUserMenuOpen} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} onNavigate={handleNavigate} onLogout={handleLogout} onOpenProfile={() => setIsProfileModalOpen(true)} onOpenSearch={() => setIsSearchOpen(true)}>
+      {renderViewContent()}
+    </AppShell>
+    <NotificationsDrawer isOpen={isNotificationsOpen} onClose={() => setIsNotificationsOpen(false)} notifications={notificationsList} onRefresh={handleRefreshNotifications} onNavigate={handleNavigate} />
+  </>;
 }
 
-export default function App() {
-  return (
-    <DialogProvider>
-      <MainApp />
-    </DialogProvider>
-  );
-}
+export default function App() { return <DialogProvider><MainApp /></DialogProvider>; }
