@@ -4,9 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "predev": "node scripts/fix-product-archive-mapping.mjs",
+    "predev": "node scripts/fix-product-archive-mapping.mjs && node scripts/fix-repair-part-compatibility.mjs",
     "dev": "tsx server.ts",
-    "prebuild": "node scripts/fix-product-archive-mapping.mjs",
+    "prebuild": "node scripts/fix-product-archive-mapping.mjs && node scripts/fix-repair-part-compatibility.mjs",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
