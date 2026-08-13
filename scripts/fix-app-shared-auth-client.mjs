@@ -12,13 +12,18 @@ if (text.includes(oldImport)) {
   throw new Error('Could not locate App.tsx Supabase auth import to patch');
 }
 
-// If the shared auth database has no OWNER, setup must win over the login view.
-// The previous condition excluded setup whenever currentView had already become "login".
-const oldSetupCondition = 'if (currentView === "setup" || (!hasOwner && !currentLoggedUser && currentView !== "login"))';
-const newSetupCondition = 'if (currentView === "setup" || (!hasOwner && !currentLoggedUser))';
-if (text.includes(oldSetupCondition)) {
-  text = text.replace(oldSetupCondition, newSetupCondition);
+// Shared-auth OWNER bootstrap must win over any stale local browser user/login view.
+// db.init()/legacy localStorage may still expose a local user, so owner existence in the
+// shared Supabase database is the only authority for deciding whether setup is required.
+const setupConditions = [
+  'if (currentView === "setup" || (!hasOwner && !currentLoggedUser && currentView !== "login"))',
+  'if (currentView === "setup" || (!hasOwner && !currentLoggedUser))'
+];
+for (const condition of setupConditions) {
+  if (text.includes(condition)) {
+    text = text.replace(condition, 'if (currentView === "setup" || !hasOwner)');
+  }
 }
 
 fs.writeFileSync(path, text, 'utf8');
-console.log('✅ App shared auth client and initial OWNER setup routing configured');
+console.log('✅ App shared auth client and authoritative OWNER setup routing configured');
