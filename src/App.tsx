@@ -96,7 +96,7 @@ function MainApp() {
   const [authError, setAuthError] = useState<string | null>(null);
 
   const handleRefreshNotifications = () => setNotificationsTick(prev => prev + 1);
-  const notificationsList = React.useMemo(() => db.getNotifications(), [notificationsTick]);
+  const notificationsList = React.useMemo(() => db.getNotifications() || [], [notificationsTick]);
   const totalNotifications = notificationsList.filter(n => !n.isRead).length;
 
   useEffect(() => {
@@ -167,7 +167,7 @@ function MainApp() {
   });
 
   const directOwnerCheck = async (): Promise<boolean> => {
-    const rpcResult = await withTimeout(supabase.rpc("has_owner"), 5000);
+    const rpcResult = await withTimeout(Promise.resolve(supabase.rpc("has_owner")), 5000);
     if (rpcResult.error) throw rpcResult.error;
     return Boolean(rpcResult.data);
   };
