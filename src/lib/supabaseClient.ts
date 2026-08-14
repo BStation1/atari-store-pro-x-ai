@@ -12,7 +12,7 @@ const supabaseUrl =
   procEnv.VITE_SUPABASE_URL ||
   procEnv.VITE_SUPABASE_PROJECT_URL ||
   procEnv.NEXT_PUBLIC_SUPABASE_URL ||
-  '';
+  'https://snwizwgmgwxiotrfmkzm.supabase.co';
 
 const supabaseKey =
   metaEnv.VITE_SUPABASE_PUBLISHABLE_KEY ||
@@ -23,7 +23,7 @@ const supabaseKey =
   procEnv.VITE_SUPABASE_ANON_KEY ||
   procEnv.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
   procEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  '';
+  'sb_publishable_XltOYCOplUoZI3RiHlWB9w_H9YF-S5q';
 
 export const isSupabaseConfigured = Boolean(
   supabaseUrl &&
