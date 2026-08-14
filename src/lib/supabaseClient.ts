@@ -3,27 +3,9 @@ import { createClient } from '@supabase/supabase-js';
 const metaEnv = ((typeof import.meta !== 'undefined' && (import.meta as any).env) || {}) as Record<string, string | undefined>;
 const procEnv = (typeof process !== 'undefined' && process.env) ? process.env : {};
 
-// Vite only exposes VITE_* variables to browser code by default. vite.config.ts also
-// maps the Vercel/Next-style names used by this deployment to VITE_* at build time.
-const supabaseUrl =
-  metaEnv.VITE_SUPABASE_URL ||
-  metaEnv.VITE_SUPABASE_PROJECT_URL ||
-  metaEnv.NEXT_PUBLIC_SUPABASE_URL ||
-  procEnv.VITE_SUPABASE_URL ||
-  procEnv.VITE_SUPABASE_PROJECT_URL ||
-  procEnv.NEXT_PUBLIC_SUPABASE_URL ||
-  'https://snwizwgmgwxiotrfmkzm.supabase.co';
-
-const supabaseKey =
-  metaEnv.VITE_SUPABASE_PUBLISHABLE_KEY ||
-  metaEnv.VITE_SUPABASE_ANON_KEY ||
-  metaEnv.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-  metaEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  procEnv.VITE_SUPABASE_PUBLISHABLE_KEY ||
-  procEnv.VITE_SUPABASE_ANON_KEY ||
-  procEnv.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-  procEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  'sb_publishable_XltOYCOplUoZI3RiHlWB9w_H9YF-S5q';
+// This is the browser-safe public endpoint and publishable key for the active project.
+const supabaseUrl = 'https://snwizwgmgwxiotrfmkzm.supabase.co';
+const supabaseKey = 'sb_publishable_XltOYCOplUoZI3RiHlWB9w_H9YF-S5q';
 
 export const isSupabaseConfigured = Boolean(
   supabaseUrl &&
