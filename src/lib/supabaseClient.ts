@@ -84,7 +84,7 @@ const dedupingFetch: typeof fetch = async (input, init) => {
 export const supabase = createClient(
   isSupabaseConfigured ? supabaseUrl : 'https://placeholder.supabase.co',
   isSupabaseConfigured ? supabaseKey : 'placeholder_key',
-  { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }, global: { fetch: dedupingFetch } }
+  { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, storageKey: 'atari_shared_auth_session_v1' }, global: { fetch: dedupingFetch } }
 );
 
 const enableGlobalRealtime = String(metaEnv.VITE_ENABLE_GLOBAL_REALTIME || procEnv.VITE_ENABLE_GLOBAL_REALTIME || 'false').toLowerCase() === 'true';
