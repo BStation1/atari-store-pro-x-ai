@@ -290,7 +290,19 @@ function MainApp() {
     {currentLoggedUser.mustChangePassword && <ForcePasswordChangeModal userId={currentLoggedUser.id} onSuccess={() => window.dispatchEvent(new Event("atari_auth_changed"))} />}
     <UserProfileModal user={currentLoggedUser} isOpen={isProfileModalOpen} onClose={() => setIsProfileModalOpen(false)} onLogout={handleLogout} onLogoutAllDevices={handleLogoutAllDevices} />
     {isSearchOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"><div className="bg-[#11131e] border border-[#2a2d42] rounded-2xl w-full max-w-lg p-4"><button onClick={() => setIsSearchOpen(false)}><X/></button><input autoFocus value={cmdSearchQuery} onChange={e=>setCmdSearchQuery(e.target.value)} className="w-full bg-gray-950 p-3 text-white"/><div>{commandSearchResults.map(item=><button key={item.id} onClick={()=>handleNavigate(item.id)} className="w-full p-3 text-right text-white"><item.icon className="inline w-4 h-4"/> {item.label}</button>)}</div></div></div>}
-    <AppShell settings={settings} currentUser={currentLoggedUser} currentView={currentView} menuItems={allowedMenuItems} totalNotifications={totalNotifications} isNotificationsOpen={isNotificationsOpen} setIsNotificationsOpen={setIsNotificationsOpen} isUserMenuOpen={isUserMenuOpen} setIsUserMenuOpen={setIsUserMenuOpen} isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} onNavigate={handleNavigate} onLogout={handleLogout} onOpenProfile={() => setIsProfileModalOpen(true)} onOpenSearch={() => setIsSearchOpen(true)}>
+    <AppShell
+      allowedMenuItems={allowedMenuItems}
+      currentUser={currentLoggedUser}
+      currentView={currentView}
+      totalNotifications={totalNotifications}
+      onNavigate={handleNavigate}
+      onLogout={handleLogout}
+      onLogoutAllDevices={handleLogoutAllDevices}
+      onOpenProfileModal={() => setIsProfileModalOpen(true)}
+      onOpenSearch={() => setIsSearchOpen(true)}
+      onOpenNotifications={() => setIsNotificationsOpen(true)}
+      companyName={settings?.companyName || settings?.company_name || "Atari Store"}
+    >
       {renderViewContent()}
     </AppShell>
     <NotificationsDrawer isOpen={isNotificationsOpen} onClose={() => setIsNotificationsOpen(false)} notifications={notificationsList} onRefresh={handleRefreshNotifications} onNavigate={handleNavigate} />
