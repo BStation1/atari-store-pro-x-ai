@@ -3,13 +3,33 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import { defineConfig, loadEnv } from 'vite';
 
+const DEFAULT_SUPABASE_URL = 'https://snwizwgmgwxiotrfmkzm.supabase.co';
+const DEFAULT_SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_XltOYCOplUoZI3RiHlWB9w_H9YF-S5q';
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
 
-  // The deployment already uses NEXT_PUBLIC_* names in Vercel. This is a Vite app,
-  // so explicitly expose those public values under the VITE_* names consumed by the client.
-  const supabaseUrl = env.VITE_SUPABASE_URL || env.VITE_SUPABASE_PROJECT_URL || env.NEXT_PUBLIC_SUPABASE_URL || '';
-  const supabaseKey = env.VITE_SUPABASE_PUBLISHABLE_KEY || env.VITE_SUPABASE_ANON_KEY || env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+  // Prefer deployment variables. The checked-in fallback is limited to the browser-safe
+  // project URL and publishable key so production remains connected if Vercel env injection fails.
+  const supabaseUrl =
+    env.VITE_SUPABASE_URL ||
+    env.VITE_SUPABASE_PROJECT_URL ||
+    env.NEXT_PUBLIC_SUPABASE_URL ||
+    process.env.VITE_SUPABASE_URL ||
+    process.env.VITE_SUPABASE_PROJECT_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    DEFAULT_SUPABASE_URL;
+
+  const supabaseKey =
+    env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+    env.VITE_SUPABASE_ANON_KEY ||
+    env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+    env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+    process.env.VITE_SUPABASE_ANON_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    DEFAULT_SUPABASE_PUBLISHABLE_KEY;
 
   return {
     plugins: [react(), tailwindcss()],
