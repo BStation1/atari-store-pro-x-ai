@@ -1,0 +1,26 @@
+name: Patch users admin create
+on:
+  push:
+    paths:
+      - 'scripts/patch-users-admin-create.py'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: python scripts/patch-users-admin-create.py
+      - name: Commit patch
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/components/Users.tsx
+          git commit -m "fix: create staff through admin edge function"
+          git push
