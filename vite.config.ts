@@ -35,11 +35,6 @@ export default defineConfig(({ mode }) => {
       'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(supabaseUrl),
       'import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY': JSON.stringify(supabaseKey),
     },
-    // Debug console statements inside render paths were flooding production DevTools.
-    // Strip log/info/debug from the production bundle while preserving warnings/errors.
-    esbuild: mode === 'production' ? {
-      pure: ['console.log', 'console.info', 'console.debug'],
-    } : undefined,
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
