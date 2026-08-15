@@ -1092,9 +1092,6 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
   const filteredOrders = statusFilteredOrders.filter(o => matchesWorkshopSearch(o, searchQuery));
 
-  console.log("=== Repair Center: Orders after filter ===", statusFilteredOrders.length);
-  console.log("=== Repair Center: Displayed orders ===", filteredOrders.length);
-
   return (
     <div className="space-y-6 text-right">
       {/* Top Header Controls */}
