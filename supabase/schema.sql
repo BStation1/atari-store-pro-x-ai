@@ -14,7 +14,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role_enum') THEN
-        CREATE TYPE user_role_enum AS ENUM ('OWNER', 'RECEPTION', 'ENGINEER', 'CASHIER');
+        CREATE TYPE user_role_enum AS ENUM ('OWNER', 'ADMIN', 'MANAGER', 'RECEPTION', 'ENGINEER', 'CASHIER', 'INVENTORY', 'ACCOUNTANT', 'VIEWER');
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'customer_type_enum') THEN
         CREATE TYPE customer_type_enum AS ENUM ('REGULAR', 'WHOLESALE', 'VIP');
