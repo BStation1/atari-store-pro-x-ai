@@ -1,7 +1,7 @@
 {
   "name": "atari-store-pro-x",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
   "scripts": {
     "predev": "node scripts/fix-product-archive-mapping.mjs && node scripts/fix-repair-device-id-compatibility.mjs && node scripts/fix-receipt-payment-layout.mjs && node scripts/fix-app-shared-auth-client.mjs",
