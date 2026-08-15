@@ -199,29 +199,38 @@ export default function UsersList() {
       const cleanEmail = email.toLowerCase().trim();
       const passToUse = tempPassword || "123456";
 
-      // Attempt signup in Supabase Auth
-      let authUserId: string | undefined;
-      try {
-        const { data: spData } = await supabase.auth.signUp({
+      // Create staff account through the privileged Edge Function. This keeps the OWNER's
+      // browser session intact and creates an already-confirmed Auth user (no email activation).
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (sessionError || !accessToken) {
+        setActionAlert({ type: "error", msg: "انتهت جلسة المالك. سجل الدخول مرة أخرى ثم أعد المحاولة." });
+        return;
+      }
+
+      const { data: createResult, error: createError } = await supabase.functions.invoke("admin-create-user", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body: {
+          fullName: fullName.trim(),
+          username: username.toLowerCase().trim(),
           email: cleanEmail,
           password: passToUse,
-          options: {
-            data: {
-              full_name: fullName,
-              username: username.toLowerCase().trim(),
-              role: roleId
-            }
-          }
-        });
-        if (spData?.user) {
-          authUserId = spData.user.id;
+          phone: phone.trim() || null,
+          branch,
+          roleId,
+          permissions: roleId === "OWNER" ? ALL_PERMISSIONS : customPermissions,
+          mustChangePassword
         }
-      } catch (err) {
-        console.warn("⚠️ Supabase Auth register notice:", err);
+      });
+
+      if (createError || !createResult?.success) {
+        const message = createResult?.error || createError?.message || "تعذر إنشاء المستخدم في Supabase.";
+        setActionAlert({ type: "error", msg: message });
+        return;
       }
 
       const newUser: AuthUser = {
-        id: authUserId || `U-${String(allUsers.length + 101).padStart(3, "0")}`,
+        id: createResult.user.id,
         fullName,
         name: fullName,
         username: username.toLowerCase().trim(),
@@ -240,14 +249,10 @@ export default function UsersList() {
         avatarUrl: `https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80`
       };
 
+      // Local store is only a UI cache; Supabase is authoritative.
       allUsers.push(newUser);
       authStore.saveUsers(allUsers);
-
-      if (authUserId) {
-        await authStore.syncProfileToSupabase(newUser, authUserId);
-      }
-
-      setActionAlert({ type: "success", msg: `تم إضافة الموظف الجديد ${fullName} بنجاح وترحيله إلى Supabase Auth!` });
+      setActionAlert({ type: "success", msg: `تم إضافة الموظف الجديد ${fullName} بنجاح بدون رسالة تفعيل بريد.` });
     }
 
     refreshUsersList();
