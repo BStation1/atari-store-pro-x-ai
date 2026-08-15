@@ -31,6 +31,22 @@ export interface AuthUser {
   avatarUrl?: string;
 }
 
+function profileRoleToUserRole(role: unknown): UserRole {
+  const value = String(role || "RECEPTION").toUpperCase();
+  if (value === "ENGINEER" || value === "TECHNICIAN") return "TECHNICIAN";
+  if (value === "RECEPTION" || value === "RECEPTIONIST") return "RECEPTIONIST";
+  if (["OWNER", "ADMIN", "MANAGER", "CASHIER", "INVENTORY", "ACCOUNTANT", "VIEWER"].includes(value)) {
+    return value as UserRole;
+  }
+  return "RECEPTIONIST";
+}
+
+function userRoleToProfileRole(role: UserRole): string {
+  if (role === "TECHNICIAN") return "ENGINEER";
+  if (role === "RECEPTIONIST") return "RECEPTION";
+  return role;
+}
+
 export interface UserSession {
   sessionId: string;
   userId: string;
@@ -168,8 +184,7 @@ export const authStore = {
         const now = new Date().toISOString();
 
         profiles.forEach((p: any) => {
-          const pRole = String(p.role || "RECEPTION").toUpperCase();
-          const normRoleId: UserRole = (pRole === "OWNER" || pRole === "ADMIN") ? "OWNER" : (pRole as UserRole);
+          const normRoleId = profileRoleToUserRole(p.role);
           const existingIdx = existingUsers.findIndex(u => u.id === p.id || u.email.toLowerCase() === (p.email || "").toLowerCase());
 
           const syncedUser: AuthUser = {
@@ -182,7 +197,7 @@ export const authStore = {
             branch: p.branch || "الفرع الرئيسي",
             roleId: normRoleId,
             role: normRoleId.toLowerCase(),
-            permissions: Array.isArray(p.permissions) && p.permissions.length > 0 ? p.permissions : ALL_PERMISSIONS,
+            permissions: Array.isArray(p.custom_permissions) ? p.custom_permissions : (DEFAULT_ROLE_PERMISSIONS[normRoleId] || []),
             isActive: p.is_active !== false,
             mustChangePassword: p.must_change_password === true,
             createdAt: p.created_at || now,
@@ -211,9 +226,9 @@ export const authStore = {
       const targetId = authUserId || user.id;
       if (!targetId || targetId.startsWith("U-")) return; // Only sync valid UUIDs or auth users
 
-      const targetRole = user.roleId === "OWNER" ? "OWNER" : user.roleId === "ADMIN" ? "OWNER" : user.roleId === "TECHNICIAN" ? "ENGINEER" : "RECEPTION";
+      const targetRole = userRoleToProfileRole(user.roleId);
 
-      await supabase.from("profiles").upsert(
+      const { error } = await supabase.from("profiles").upsert(
         {
           id: targetId,
           email: user.email,
@@ -221,7 +236,7 @@ export const authStore = {
           full_name: user.fullName,
           phone: user.phone || "",
           branch: user.branch || "الفرع الرئيسي",
-          permissions: user.permissions || [],
+          custom_permissions: user.permissions || [],
           must_change_password: user.mustChangePassword === true,
           is_active: user.isActive !== false,
           role: targetRole,
@@ -229,8 +244,11 @@ export const authStore = {
         },
         { onConflict: "id" }
       );
+      if (error) throw error;
+      return { success: true as const };
     } catch (err) {
       console.warn("⚠️ Could not sync profile to Supabase:", err);
+      return { success: false as const, error: err instanceof Error ? err.message : "تعذر حفظ ملف المستخدم" };
     }
   },
 
@@ -491,9 +509,8 @@ export const authStore = {
       // 3. If profile is still missing, create or upsert profile
       if (!profile) {
         console.warn("⚠️ Profile not found for session user, auto-creating profile row:", session.user.id);
-        const rawRole = String(session.user.user_metadata?.role || localUser?.roleId || "OWNER").toUpperCase();
-        const roleId: UserRole = (rawRole === "OWNER" || rawRole === "ADMIN") ? "OWNER" : (rawRole === "TECHNICIAN" || rawRole === "ENGINEER") ? "TECHNICIAN" : (rawRole as UserRole) === "RECEPTIONIST" || rawRole === "RECEPTION" ? "RECEPTIONIST" : "RECEPTIONIST";
-        const dbRole = roleId === "OWNER" ? "OWNER" : roleId === "TECHNICIAN" ? "ENGINEER" : "RECEPTION";
+        const roleId = profileRoleToUserRole(session.user.user_metadata?.role || localUser?.roleId || "OWNER");
+        const dbRole = userRoleToProfileRole(roleId);
         const fullName = session.user.user_metadata?.full_name || localUser?.fullName || session.user.email?.split("@")[0] || "مستخدم";
 
         const newProfileData = {
@@ -526,8 +543,7 @@ export const authStore = {
       }
 
       // Map profile to AuthUser
-      const roleUpper = String(profile?.role || session.user.user_metadata?.role || localUser?.roleId || "OWNER").toUpperCase();
-      const roleId: UserRole = (roleUpper === "OWNER" || roleUpper === "ADMIN") ? "OWNER" : (roleUpper === "TECHNICIAN" || roleUpper === "ENGINEER") ? "TECHNICIAN" : roleUpper === "RECEPTIONIST" || roleUpper === "RECEPTION" ? "RECEPTIONIST" : "RECEPTIONIST";
+      const roleId = profileRoleToUserRole(profile?.role || session.user.user_metadata?.role || localUser?.roleId || "OWNER");
 
       const activeUser: AuthUser = {
         id: session.user.id,
@@ -538,7 +554,7 @@ export const authStore = {
         phone: profile?.phone || "",
         roleId: roleId,
         role: roleId.toLowerCase(),
-        permissions: ALL_PERMISSIONS,
+        permissions: Array.isArray(profile?.custom_permissions) ? profile.custom_permissions : (DEFAULT_ROLE_PERMISSIONS[roleId] || []),
         isActive: true,
         createdAt: profile?.created_at || new Date().toISOString(),
         updatedAt: profile?.updated_at || new Date().toISOString(),
@@ -725,4 +741,3 @@ if (typeof window !== "undefined") {
     }
   });
 }
-

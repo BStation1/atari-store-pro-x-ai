@@ -189,8 +189,12 @@ export default function UsersList() {
           allUsers[index].mustChangePassword = true;
         }
 
+        const syncResult = await authStore.syncProfileToSupabase(allUsers[index]);
+        if (!syncResult.success) {
+          setActionAlert({ type: "error", msg: syncResult.error || "تعذر حفظ بيانات المستخدم في Supabase." });
+          return;
+        }
         authStore.saveUsers(allUsers);
-        await authStore.syncProfileToSupabase(allUsers[index]);
         setActionAlert({ type: "success", msg: `تم تحديث بيانات المستخدم ${fullName} بنجاح!` });
       }
     } else {
