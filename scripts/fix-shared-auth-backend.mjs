@@ -59,6 +59,11 @@ patchFile('src/components/Users.tsx', [
     label: 'require remote id',
     from: '        id: authUserId || `U-${String(allUsers.length + 101).padStart(3, "0")}`,',
     to: '        id: authUserId,'
+  },
+  {
+    label: 'prevent duplicate owner creation',
+    from: `                      {Object.entries(ROLE_LABELS_AR).map(([key, label]) => (\n                        <option key={key} value={key} disabled={key === "OWNER" && currentLoggedUser?.roleId !== "OWNER"}>\n                          {label}\n                        </option>\n                      ))}`,
+    to: `                      {Object.entries(ROLE_LABELS_AR)\n                        .filter(([key]) => editingUser || key !== "OWNER")\n                        .map(([key, label]) => (\n                          <option key={key} value={key} disabled={key === "OWNER" && currentLoggedUser?.roleId !== "OWNER"}>\n                            {label}\n                          </option>\n                        ))}`
   }
 ]);
 
