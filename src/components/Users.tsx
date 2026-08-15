@@ -5,7 +5,7 @@
 
 import React, { useState } from "react";
 import { PhoneDisplay } from "./PhoneDisplay";
-import { supabase } from "../lib/supabaseClient";
+import { authSupabase as supabase } from "../lib/authSupabaseClient";
 import { isUserOwnerSync } from "../lib/authPermissions";
 import {
   Users,
@@ -57,6 +57,14 @@ export default function UsersList() {
   const refreshUsersList = () => {
     setUsersList(authStore.getUsers());
   };
+
+  React.useEffect(() => {
+    let mounted = true;
+    authStore.syncUsersFromSupabase().then(users => {
+      if (mounted) setUsersList(users);
+    }).catch(err => console.warn("⚠️ Failed to sync staff list:", err));
+    return () => { mounted = false; };
+  }, []);
 
   // Add / Edit Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -181,8 +189,12 @@ export default function UsersList() {
           allUsers[index].mustChangePassword = true;
         }
 
+        const syncResult = await authStore.syncProfileToSupabase(allUsers[index]);
+        if (!syncResult.success) {
+          setActionAlert({ type: "error", msg: syncResult.error || "تعذر حفظ بيانات المستخدم في Supabase." });
+          return;
+        }
         authStore.saveUsers(allUsers);
-        await authStore.syncProfileToSupabase(allUsers[index]);
         setActionAlert({ type: "success", msg: `تم تحديث بيانات المستخدم ${fullName} بنجاح!` });
       }
     } else {
@@ -720,11 +732,13 @@ export default function UsersList() {
                       onChange={e => handleRoleChange(e.target.value as UserRole)}
                       className="w-full bg-gray-950 border border-[#2a2d42] rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500"
                     >
-                      {Object.entries(ROLE_LABELS_AR).map(([key, label]) => (
-                        <option key={key} value={key} disabled={key === "OWNER" && currentLoggedUser?.roleId !== "OWNER"}>
-                          {label}
-                        </option>
-                      ))}
+                      {Object.entries(ROLE_LABELS_AR)
+                        .filter(([key]) => editingUser || key !== "OWNER")
+                        .map(([key, label]) => (
+                          <option key={key} value={key} disabled={key === "OWNER" && currentLoggedUser?.roleId !== "OWNER"}>
+                            {label}
+                          </option>
+                        ))}
                     </select>
                   </div>
 
