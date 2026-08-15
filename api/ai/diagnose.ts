@@ -19,23 +19,24 @@ export default async function handler(req: any, res: any) {
 
     const ai = new GoogleGenAI({ apiKey });
     const systemPrompt = `أنت مهندس متخصص في تشخيص وصيانة أجهزة الألعاب PS5 وPS4 وXbox وNintendo Switch وأذرع التحكم. حلل الحالة المدخلة نفسها ولا تستخدم تشخيصاً عاماً ثابتاً. فرّق بدقة بين أكواد الأخطاء المختلفة. إذا كان كود الخطأ معروفاً اشرح معناه أولاً، ثم اربط الأعراض به. لا تدّعي أن عطل هاردوير مؤكد إذا كان الكود يشير غالباً إلى سوفتوير أو شبكة أو تخزين. اذكر الاحتمالات بالترتيب وخطوات اختبار آمنة قبل استبدال أي قطعة. أجب بالعربية وبصيغة JSON فقط بهذا الشكل: {"title":"","cause":"","difficulty":"","suggestedParts":[],"repairSteps":[],"estimatedCost":"","technicianAdvice":""}`;
-
     const userQuery = `الجهاز: ${deviceModel || 'غير محدد'}\nكود الخطأ: ${errorCode || 'غير محدد'}\nالأعراض: ${symptoms || 'غير محددة'}\nقدّم تشخيصاً خاصاً بهذه الحالة فقط.`;
     const contents: any[] = [{ text: systemPrompt }, { text: userQuery }];
 
     if (imageData) {
       const match = String(imageData).match(/^data:([^;]+);base64,(.+)$/s);
-      const data = match ? match[2] : String(imageData);
-      const mimeType = match?.[1] || mediaType || 'image/jpeg';
-      contents.splice(1, 0, { inlineData: { data, mimeType } });
+      contents.splice(1, 0, { inlineData: { data: match ? match[2] : String(imageData), mimeType: match?.[1] || mediaType || 'image/jpeg' } });
     }
 
     let response: any;
-    const models = ['gemini-2.5-flash', 'gemini-2.0-flash'];
     let lastError: any;
-    for (const model of models) {
+    // Current production models. 2.0 Flash was shut down in June 2026.
+    for (const model of ['gemini-3.6-flash', 'gemini-2.5-flash']) {
       try {
-        response = await ai.models.generateContent({ model, contents, config: { responseMimeType: 'application/json', temperature: 0.25 } });
+        response = await ai.models.generateContent({
+          model,
+          contents,
+          config: { responseMimeType: 'application/json' }
+        });
         break;
       } catch (err) {
         lastError = err;
@@ -43,11 +44,12 @@ export default async function handler(req: any, res: any) {
     }
     if (!response) throw lastError || new Error('Gemini request failed');
 
-    const text = response.text || '{}';
     let diagnosis: any;
-    try { diagnosis = JSON.parse(text); }
-    catch { throw new Error('Gemini returned invalid JSON'); }
-
+    try {
+      diagnosis = JSON.parse(response.text || '{}');
+    } catch {
+      throw new Error('Gemini returned invalid JSON');
+    }
     return res.status(200).json({ success: true, source: 'gemini_ai', diagnosis });
   } catch (err: any) {
     console.error('Gemini Diagnosis Error:', err);
