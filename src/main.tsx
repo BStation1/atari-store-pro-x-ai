@@ -3,9 +3,18 @@ import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 import './lib/installDeliveredOrderHardDeleteButton';
+import { bootstrapAuthoritativeSync } from './lib/bootstrapAuthoritativeSync';
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+async function bootstrap() {
+  // Supabase is the shared source of truth. Refresh the local cache before the UI
+  // reads it so two browsers cannot display different repair-order snapshots.
+  await bootstrapAuthoritativeSync();
+
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
+}
+
+void bootstrap();
