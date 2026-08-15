@@ -9,8 +9,6 @@ const DEFAULT_SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_XltOYCOplUoZI3RiHlWB9w_
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
 
-  // Prefer deployment variables. The checked-in fallback is limited to the browser-safe
-  // project URL and publishable key so production remains connected if Vercel env injection fails.
   const supabaseUrl =
     env.VITE_SUPABASE_URL ||
     env.VITE_SUPABASE_PROJECT_URL ||
@@ -37,6 +35,11 @@ export default defineConfig(({ mode }) => {
       'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(supabaseUrl),
       'import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY': JSON.stringify(supabaseKey),
     },
+    // Debug console statements inside render paths were flooding production DevTools.
+    // Strip log/info/debug from the production bundle while preserving warnings/errors.
+    esbuild: mode === 'production' ? {
+      pure: ['console.log', 'console.info', 'console.debug'],
+    } : undefined,
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
