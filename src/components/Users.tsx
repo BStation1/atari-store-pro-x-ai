@@ -5,7 +5,7 @@
 
 import React, { useState } from "react";
 import { PhoneDisplay } from "./PhoneDisplay";
-import { supabase } from "../lib/supabaseClient";
+import { authSupabase as supabase } from "../lib/authSupabaseClient";
 import { isUserOwnerSync } from "../lib/authPermissions";
 import {
   Users,
@@ -57,6 +57,14 @@ export default function UsersList() {
   const refreshUsersList = () => {
     setUsersList(authStore.getUsers());
   };
+
+  React.useEffect(() => {
+    let mounted = true;
+    authStore.syncUsersFromSupabase().then(users => {
+      if (mounted) setUsersList(users);
+    }).catch(err => console.warn("⚠️ Failed to sync staff list:", err));
+    return () => { mounted = false; };
+  }, []);
 
   // Add / Edit Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -199,29 +207,34 @@ export default function UsersList() {
       const cleanEmail = email.toLowerCase().trim();
       const passToUse = tempPassword || "123456";
 
-      // Attempt signup in Supabase Auth
+      // Create the employee centrally with the protected admin Edge Function.
       let authUserId: string | undefined;
       try {
-        const { data: spData } = await supabase.auth.signUp({
-          email: cleanEmail,
-          password: passToUse,
-          options: {
-            data: {
-              full_name: fullName,
-              username: username.toLowerCase().trim(),
-              role: roleId
-            }
+        const { data: createData, error: createError } = await supabase.functions.invoke("admin-create-user", {
+          body: {
+            email: cleanEmail,
+            password: passToUse,
+            fullName,
+            username: username.toLowerCase().trim(),
+            phone,
+            branch,
+            roleId,
+            permissions: roleId === "OWNER" ? ALL_PERMISSIONS : customPermissions,
+            mustChangePassword
           }
         });
-        if (spData?.user) {
-          authUserId = spData.user.id;
+        if (createError || createData?.error) {
+          throw new Error(createData?.error || createError?.message || "تعذر إنشاء المستخدم على الخادم");
         }
-      } catch (err) {
-        console.warn("⚠️ Supabase Auth register notice:", err);
+        authUserId = createData?.user?.id;
+        if (!authUserId) throw new Error("لم يرجع الخادم رقم المستخدم الجديد");
+      } catch (err: any) {
+        setActionAlert({ type: "error", msg: err?.message || "تعذر إنشاء المستخدم في قاعدة المستخدمين المركزية." });
+        return;
       }
 
       const newUser: AuthUser = {
-        id: authUserId || `U-${String(allUsers.length + 101).padStart(3, "0")}`,
+        id: authUserId,
         fullName,
         name: fullName,
         username: username.toLowerCase().trim(),

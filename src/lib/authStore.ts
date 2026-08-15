@@ -4,7 +4,7 @@
  */
 
 import { UserRole, ALL_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS } from "./authPermissions";
-import { supabase } from "./supabaseClient";
+import { authSupabase as supabase } from "./authSupabaseClient";
 
 export interface AuthUser {
   id: string;
@@ -176,13 +176,15 @@ export const authStore = {
             id: p.id,
             fullName: p.full_name || p.email || "مستخدم",
             name: p.full_name || p.email || "مستخدم",
-            username: (p.email || "user").split("@")[0],
+            username: p.username || (p.email || "user").split("@")[0],
             email: p.email || "",
             phone: p.phone || "",
+            branch: p.branch || "الفرع الرئيسي",
             roleId: normRoleId,
             role: normRoleId.toLowerCase(),
-            permissions: ALL_PERMISSIONS,
+            permissions: Array.isArray(p.permissions) && p.permissions.length > 0 ? p.permissions : ALL_PERMISSIONS,
             isActive: p.is_active !== false,
+            mustChangePassword: p.must_change_password === true,
             createdAt: p.created_at || now,
             updatedAt: p.updated_at || now,
             avatarUrl: p.avatar_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80"
@@ -215,8 +217,15 @@ export const authStore = {
         {
           id: targetId,
           email: user.email,
+          username: user.username,
           full_name: user.fullName,
-          role: targetRole
+          phone: user.phone || "",
+          branch: user.branch || "الفرع الرئيسي",
+          permissions: user.permissions || [],
+          must_change_password: user.mustChangePassword === true,
+          is_active: user.isActive !== false,
+          role: targetRole,
+          updated_at: new Date().toISOString()
         },
         { onConflict: "id" }
       );
@@ -563,14 +572,18 @@ export const authStore = {
   ): Promise<{ success: boolean; error?: string; user?: AuthUser; mustChangePassword?: boolean }> {
     const cleanIdentifier = usernameOrEmail.trim().toLowerCase();
 
-    // Determine target email for Supabase Auth
+    // Resolve usernames centrally so login works from every browser/device.
     let targetEmail = cleanIdentifier;
     if (!targetEmail.includes("@")) {
-      const users = this.getUsers();
-      const localMatch = users.find(
-        u => u.username.toLowerCase() === cleanIdentifier || u.email.toLowerCase() === cleanIdentifier
-      );
-      targetEmail = localMatch?.email || `${cleanIdentifier}@atari.com`;
+      const { data: remoteEmail, error: lookupError } = await supabase.rpc("lookup_login_email", {
+        p_username: cleanIdentifier
+      });
+      if (lookupError) {
+        console.warn("⚠️ Username lookup failed:", lookupError.message);
+      }
+      targetEmail = typeof remoteEmail === "string" && remoteEmail
+        ? remoteEmail
+        : `${cleanIdentifier}@atari.com`;
     }
 
     try {

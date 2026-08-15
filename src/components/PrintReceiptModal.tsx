@@ -280,6 +280,33 @@ export default function PrintReceiptModal({
               transform: none !important;
             }
 
+            /* Keep payment summary labels and values in separate fixed columns on RP326. */
+            .rp326-receipt .receipt-summary .receipt-money-row {
+              display: grid !important;
+              grid-template-columns: minmax(0, 1fr) 19mm !important;
+              column-gap: 2mm !important;
+              align-items: center !important;
+              width: 100% !important;
+              line-height: 1.55 !important;
+              margin-bottom: 0.8mm !important;
+            }
+
+            .rp326-receipt .receipt-summary .receipt-money-row > span:first-child {
+              grid-column: 1 !important;
+              text-align: right !important;
+              white-space: nowrap !important;
+              overflow-wrap: normal !important;
+              word-break: normal !important;
+            }
+
+            .rp326-receipt .receipt-summary .receipt-money-row > span:last-child {
+              grid-column: 2 !important;
+              text-align: left !important;
+              white-space: nowrap !important;
+              overflow-wrap: normal !important;
+              word-break: normal !important;
+            }
+
             .rp326-receipt table {
               width: 100% !important;
               max-width: 100% !important;
@@ -541,22 +568,22 @@ export default function PrintReceiptModal({
 
             <div className="border-t border-dashed border-black my-2" />
 
-            <div className="space-y-1 text-[11px] text-black">
+            <div className="receipt-summary space-y-1 text-[11px] text-black">
               {discount > 0 && (
                 <div className="flex justify-between text-black">
                   <span>خصم خاص:</span>
                   <span>{discount} - ج.م</span>
                 </div>
               )}
-              <div className="flex justify-between font-bold text-sm">
+              <div className="receipt-money-row flex justify-between font-bold text-sm">
                 <span>سعر الصيانة المتفق عليه:</span>
                 <span>{order?.finalRepairPrice ?? total} ج.م</span>
               </div>
-              <div className="flex justify-between text-black font-semibold">
-                <span>المدفوع مقدمًا / نقداً:</span>
+              <div className="receipt-money-row flex justify-between text-black font-semibold">
+                <span>المدفوع مقدمًا:</span>
                 <span>{paid} ج.م</span>
               </div>
-              <div className="flex justify-between text-black font-bold">
+              <div className="receipt-money-row flex justify-between text-black font-bold">
                 <span>المتبقي المطلوب:</span>
                 <span>{remaining} ج.م</span>
               </div>

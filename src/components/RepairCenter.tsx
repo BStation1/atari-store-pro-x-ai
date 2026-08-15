@@ -50,7 +50,7 @@ import DeliverDeviceModal from "./DeliverDeviceModal";
 import ReopenOrderModal from "./ReopenOrderModal";
 import CancelWarrantyModal from "./CancelWarrantyModal";
 import { canDeliverDevice, canReopenDeliveredOrder, canCancelWarranty } from "../lib/authPermissions";
-import { db } from "../lib/data";
+import { db, getDeviceTypesSync, getDeviceModelsSync } from "../lib/data";
 import { addInventoryMovementToSupabase, ensureProductUuidInSupabase, updateProductQuantityInSupabase } from "../lib/supabaseProducts";
 import { addRepairPartUsageToSupabase, updateRepairPartUsageInSupabase, fetchOrMigrateRepairPartUsages } from "../lib/supabasePartUsages";
 import { ensureRepairOrderUuidInSupabase, updateRepairOrderInSupabase } from "../lib/supabaseRepairOrders";
@@ -83,33 +83,49 @@ export function getUsageSellingUnitPrice(pu: RepairPartUsage, productsList: Prod
 
 export function isProductCompatibleWithDevice(product: Product, deviceType?: string, deviceModel?: string): boolean {
   if (!product) return false;
-  const compTypes = product.compatibleDeviceTypes || [];
-  const compModels = product.compatibleModels || [];
 
-  if (compTypes.length === 0 && compModels.length === 0) {
-    return true; // Universal part if no restrictions
-  }
+  const compTypes = (product.compatibleDeviceTypes || []).map(v => String(v).trim().toLowerCase()).filter(Boolean);
+  const compModels = (product.compatibleModels || []).map(v => String(v).trim().toLowerCase()).filter(Boolean);
 
-  const dType = (deviceType || "").trim().toLowerCase();
-  const dModel = (deviceModel || "").trim().toLowerCase();
+  // Untagged stock must never appear as compatible with every repair device.
+  if (compTypes.length === 0 && compModels.length === 0) return false;
 
-  const typeMatch = compTypes.some(t => {
-    const tClean = t.trim().toLowerCase();
-    return tClean === dType || (dType && dType.includes(tClean)) || tClean.includes(dType);
-  });
+  const rawType = String(deviceType || '').trim();
+  const rawModel = String(deviceModel || '').trim();
+  const deviceTypes = getDeviceTypesSync();
+  const deviceModels = getDeviceModelsSync();
 
-  const modelMatch = compModels.some(m => {
-    const mClean = m.trim().toLowerCase();
-    return mClean === dModel || (dModel && dModel.includes(mClean)) || mClean.includes(dModel) || (dType && dType.includes(mClean));
-  });
+  const resolvedType = deviceTypes.find(t =>
+    String(t.id) === rawType || t.nameAr === rawType || t.nameEn === rawType
+  );
+  const resolvedModel = deviceModels.find(m =>
+    String(m.id) === rawModel || m.nameAr === rawModel || m.nameEn === rawModel || m.modelCode === rawModel
+  );
 
-  if (compTypes.length > 0 && compModels.length > 0) {
-    return typeMatch || modelMatch;
-  }
-  if (compTypes.length > 0) return typeMatch;
+  const typeCandidates = [
+    rawType,
+    resolvedType?.id || '',
+    resolvedType?.nameAr || '',
+    resolvedType?.nameEn || ''
+  ].map(v => String(v).trim().toLowerCase()).filter(Boolean);
+
+  const modelCandidates = [
+    rawModel,
+    resolvedModel?.id || '',
+    resolvedModel?.nameAr || '',
+    resolvedModel?.nameEn || '',
+    resolvedModel?.modelCode || ''
+  ].map(v => String(v).trim().toLowerCase()).filter(Boolean);
+
+  const overlaps = (saved: string, candidates: string[]) =>
+    candidates.some(candidate => saved === candidate || saved.includes(candidate) || candidate.includes(saved));
+
+  const typeMatch = compTypes.some(saved => overlaps(saved, typeCandidates));
+  const modelMatch = compModels.some(saved => overlaps(saved, modelCandidates));
+
+  // Model-specific compatibility is stricter than device-type compatibility.
   if (compModels.length > 0) return modelMatch;
-
-  return true;
+  return typeMatch;
 }
 
 interface RepairCenterProps {
@@ -1483,9 +1499,14 @@ export default function RepairCenter({ initialStatusFilter, initialOrderId }: Re
 
                 // Instant Search filtering (compatible parts with search text matching name, nameAr, SKU, or barcode)
                 const query = partSearch.trim().toLowerCase();
-                const availableInventory = products.filter(p => !p.isArchived);
+                // Only hide products that are explicitly archived. Older/local rows can
+                // contain false as a string; treating that as truthy made valid stock disappear.
+                const availableInventory = products.filter(p => {
+                  const archived = (p as any).isArchived;
+                  return archived !== true && archived !== 1 && String(archived ?? '').toLowerCase() !== 'true';
+                });
                 const compatibleInventory = availableInventory.filter(p => isProductCompatibleWithDevice(p, currentDevice.type, currentDevice.model));
-                const baseListToSearch = (compatibleInventory.length > 0 ? compatibleInventory : availableInventory);
+                const baseListToSearch = compatibleInventory;
 
                 const matchedSearchResults = baseListToSearch.filter(p => {
                   if (!query) return true;

@@ -77,7 +77,7 @@ export function mapRowToProduct(row: Record<string, any>): Product {
     compatibleDeviceTypes: meta.compatibleDeviceTypes || [],
     compatibleModels: row.compatible_models || meta.compatibleModels || [],
     notes: meta.notes || '',
-    isArchived: Boolean(row.is_archived || meta.isArchived || false),
+    isArchived: typeof row.is_archived === 'boolean' ? row.is_archived : Boolean(meta.isArchived ?? false),
     stockOwnership: (row.stock_ownership as any) || meta.stockOwnership || 'SHARED',
     createdAt: row.created_at,
     updatedAt: row.updated_at,

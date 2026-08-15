@@ -1,18 +1,10 @@
 import { createClient } from '@supabase/supabase-js';
+import { isSupabaseConfigured, supabasePublishableKey, supabaseUrl } from './supabaseConfig';
+
+export { isSupabaseConfigured } from './supabaseConfig';
 
 const metaEnv = ((typeof import.meta !== 'undefined' && (import.meta as any).env) || {}) as Record<string, string | undefined>;
 const procEnv = (typeof process !== 'undefined' && process.env) ? process.env : {};
-
-// This is the browser-safe public endpoint and publishable key for the active project.
-const supabaseUrl = 'https://snwizwgmgwxiotrfmkzm.supabase.co';
-const supabaseKey = 'sb_publishable_XltOYCOplUoZI3RiHlWB9w_H9YF-S5q';
-
-export const isSupabaseConfigured = Boolean(
-  supabaseUrl &&
-  supabaseKey &&
-  /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(supabaseUrl) &&
-  !supabaseUrl.includes('placeholder')
-);
 
 if (typeof window !== 'undefined') {
   console.log('Supabase configured:', isSupabaseConfigured);
@@ -83,7 +75,7 @@ const dedupingFetch: typeof fetch = async (input, init) => {
 
 export const supabase = createClient(
   isSupabaseConfigured ? supabaseUrl : 'https://placeholder.supabase.co',
-  isSupabaseConfigured ? supabaseKey : 'placeholder_key',
+  isSupabaseConfigured ? supabasePublishableKey : 'placeholder_key',
   { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, storageKey: 'atari_shared_auth_session_v1' }, global: { fetch: dedupingFetch } }
 );
 
