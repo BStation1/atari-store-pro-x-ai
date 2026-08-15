@@ -1,10 +1,10 @@
-@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 @import "./styles/design-tokens.css";
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Cairo", "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  /* System fonts avoid external font requests and render Arabic reliably offline. */
+  --font-sans: Tahoma, "Segoe UI", Arial, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: Consolas, "Courier New", ui-monospace, SFMono-Regular, monospace;
   
   --color-brand-primary: #6366f1;
   --color-brand-secondary: #4f46e5;
@@ -61,4 +61,3 @@ body {
 .thermal-receipt {
   font-family: 'Courier New', Courier, monospace, 'Cairo';
 }
-
