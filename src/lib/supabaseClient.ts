@@ -3,18 +3,18 @@ import { createClient } from '@supabase/supabase-js';
 const metaEnv = ((typeof import.meta !== 'undefined' && (import.meta as any).env) || {}) as Record<string, string | undefined>;
 const procEnv = (typeof process !== 'undefined' && process.env) ? process.env : {};
 
-// Atari Store Pro X has one authoritative Supabase project.
-// Older Vercel environments still contain credentials for retired projects, so never allow
-// a stale deployment variable to silently redirect authentication or database traffic.
-const ACTIVE_SUPABASE_URL = 'https://nywfsxkqvwgvmriwhtow.supabase.co';
-const ACTIVE_SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_7D4_kTCJ7zN91IGwd3Holg_ZO5Vl8m4';
+// This is the existing Atari Store database that contains the live products, inventory,
+// repair orders and store settings. Keep Preview and production pointed at the same
+// authoritative project until a separate test branch is intentionally provisioned.
+const ACTIVE_SUPABASE_URL = 'https://snwizwgmgwxiotrfmkzm.supabase.co';
+const ACTIVE_SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_XltOYCOplUoZI3RiHlWB9w_H9YF-S5q';
 
 const configuredUrl = metaEnv.VITE_SUPABASE_URL || procEnv.VITE_SUPABASE_URL || '';
 const configuredKey = metaEnv.VITE_SUPABASE_PUBLISHABLE_KEY || procEnv.VITE_SUPABASE_PUBLISHABLE_KEY || '';
 const deploymentMatchesActiveProject = configuredUrl === ACTIVE_SUPABASE_URL;
 
-// Only accept deployment credentials when they explicitly target the active project.
-// Otherwise use the known public client credentials for the authoritative project.
+// Only accept deployment credentials when they explicitly target the authoritative project.
+// Otherwise use its public browser credentials so stale Vercel variables cannot redirect data.
 const supabaseUrl = deploymentMatchesActiveProject ? configuredUrl : ACTIVE_SUPABASE_URL;
 const supabaseKey = deploymentMatchesActiveProject && configuredKey ? configuredKey : ACTIVE_SUPABASE_PUBLISHABLE_KEY;
 
@@ -23,11 +23,7 @@ export const isSupabaseConfigured = Boolean(
 );
 
 if (typeof window !== 'undefined') {
-  if (configuredUrl && !deploymentMatchesActiveProject) {
-    console.warn('Ignoring stale Supabase deployment configuration and using the active Atari Store Pro X project.');
-  }
   console.log('Supabase configured:', isSupabaseConfigured);
-  console.log('Supabase project:', 'nywfsxkqvwgvmriwhtow');
   console.log('App Origin:', window.location.origin);
 }
 
@@ -146,6 +142,5 @@ export async function testAuthRpcFunctions(): Promise<{ role: any; roleError: an
     const { data: role, error: roleError } = await supabase.rpc('get_auth_user_role');
     const { data: isOwner, error: isOwnerError } = await supabase.rpc('is_owner');
     return { role, roleError, isOwner, isOwnerError };
-  } catch (err) { return { role: null, roleError: err, isOwner: null, isOwnerError: err };
-  }
+  } catch (err) { return { role: null, roleError: err, isOwner: null, isOwnerError: err }; }
 }
