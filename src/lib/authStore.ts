@@ -24,8 +24,8 @@ export interface AuthUser {
   updatedAt: string;
   createdBy?: string;
   updatedBy?: string;
+  // Kept only for backward-compatible persisted objects. Never written or trusted.
   passwordHash?: string;
-  // Backward compatibility
   name?: string;
   role?: string;
   avatarUrl?: string;
@@ -35,7 +35,9 @@ function profileRoleToUserRole(role: unknown): UserRole {
   const value = String(role || "RECEPTION").toUpperCase();
   if (value === "ENGINEER" || value === "TECHNICIAN") return "TECHNICIAN";
   if (value === "RECEPTION" || value === "RECEPTIONIST") return "RECEPTIONIST";
-  if (["OWNER", "ADMIN", "MANAGER", "CASHIER", "INVENTORY", "ACCOUNTANT", "VIEWER"].includes(value)) return value as UserRole;
+  if (["OWNER", "ADMIN", "MANAGER", "CASHIER", "INVENTORY", "ACCOUNTANT", "VIEWER"].includes(value)) {
+    return value as UserRole;
+  }
   return "RECEPTIONIST";
 }
 
@@ -43,6 +45,31 @@ function userRoleToProfileRole(role: UserRole): string {
   if (role === "TECHNICIAN") return "ENGINEER";
   if (role === "RECEPTIONIST") return "RECEPTION";
   return role;
+}
+
+function mapProfileToAuthUser(profile: any, authEmail?: string | null): AuthUser {
+  const roleId = profileRoleToUserRole(profile?.role);
+  const email = String(profile?.email || authEmail || "");
+  const fullName = profile?.full_name || email.split("@")[0] || "مستخدم";
+  return {
+    id: profile.id,
+    fullName,
+    name: fullName,
+    username: profile?.username || email.split("@")[0] || "user",
+    email,
+    phone: profile?.phone || "",
+    branch: profile?.branch || "الفرع الرئيسي",
+    roleId,
+    role: roleId.toLowerCase(),
+    permissions: Array.isArray(profile?.custom_permissions)
+      ? profile.custom_permissions
+      : (DEFAULT_ROLE_PERMISSIONS[roleId] || []),
+    isActive: profile?.is_active !== false,
+    mustChangePassword: profile?.must_change_password === true,
+    createdAt: profile?.created_at || new Date().toISOString(),
+    updatedAt: profile?.updated_at || new Date().toISOString(),
+    avatarUrl: profile?.avatar_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80"
+  };
 }
 
 export interface UserSession {
@@ -67,25 +94,24 @@ const CURRENT_SESSION_KEY = "atari_current_session_v2";
 const USERS_STORAGE_KEY = "atari_erp_users_v2";
 const SESSIONS_STORAGE_KEY = "atari_erp_sessions_v2";
 const LOGIN_ATTEMPTS_STORAGE_KEY = "atari_login_attempts_v2";
+const ACTIVE_USER_KEY = "atari_active_user_session";
 
-// Simple secure string hash for demonstration client environment
-export function hashPassword(plain: string): string {
-  let hash = 0;
-  for (let i = 0; i < plain.length; i++) {
-    const char = plain.charCodeAt(i);
-    hash = (hash << 5) - hash + char;
-    hash |= 0;
-  }
-  return `hash_v2_${Math.abs(hash).toString(16)}_${plain.length}`;
+/** @deprecated Passwords are owned exclusively by Supabase Auth. */
+export function hashPassword(_plain: string): string {
+  throw new Error("Client-side password hashing is disabled. Use Supabase Auth.");
+}
+
+function sanitizedForCache(user: AuthUser): AuthUser {
+  const { passwordHash: _ignored, ...safe } = user;
+  return safe as AuthUser;
 }
 
 export const authStore = {
   getUsers(): AuthUser[] {
     if (typeof window === "undefined") return [];
     try {
-      const data = localStorage.getItem(USERS_STORAGE_KEY);
-      if (!data) return [];
-      return JSON.parse(data);
+      const raw = JSON.parse(localStorage.getItem(USERS_STORAGE_KEY) || "[]") as AuthUser[];
+      return Array.isArray(raw) ? raw.map(sanitizedForCache) : [];
     } catch {
       return [];
     }
@@ -93,158 +119,78 @@ export const authStore = {
 
   saveUsers(users: AuthUser[]) {
     if (typeof window === "undefined") return;
-    localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
+    localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users.map(sanitizedForCache)));
     window.dispatchEvent(new Event("atari_db_changed"));
     window.dispatchEvent(new Event("atari_auth_changed"));
   },
 
   hasOwner(): boolean {
-    const users = this.getUsers();
-    return users.some(u => (u.roleId === "OWNER" || u.roleId === "ADMIN") && u.isActive);
+    // Local cache is display-only. This method is retained for old UI code only.
+    return this.getUsers().some(u => (u.roleId === "OWNER" || u.roleId === "ADMIN") && u.isActive);
   },
 
   async checkHasOwnerStatus(): Promise<{ hasOwner: boolean; error?: string }> {
     try {
-      // 1. Primary: Try secure RPC function owner_exists
-      const { data: ownerData, error: ownerErr } = await supabase.rpc("owner_exists");
-      if (!ownerErr && typeof ownerData === "boolean") {
-        if (ownerData) {
-          this.syncUsersFromSupabase().catch(() => {});
-        }
-        return { hasOwner: ownerData };
-      }
-
-      // 2. Secondary: Fallback to check_has_owner RPC
-      const { data: checkData, error: checkErr } = await supabase.rpc("check_has_owner");
-      if (!checkErr && typeof checkData === "boolean") {
-        if (checkData) {
-          this.syncUsersFromSupabase().catch(() => {});
-        }
-        return { hasOwner: checkData };
-      }
-
-      // 3. Fallback: Direct profiles table query
-      const { data: profilesData, error: profilesErr } = await supabase
-        .from("profiles")
-        .select("id, role");
-
-      if (!profilesErr && profilesData) {
-        const hasOwnerInProfiles = profilesData.some(p => {
-          const r = String(p.role || "").toUpperCase();
-          return r === "OWNER" || r === "ADMIN";
-        });
-        if (hasOwnerInProfiles) {
-          this.syncUsersFromSupabase().catch(() => {});
-          return { hasOwner: true };
-        }
-        if (profilesData.length === 0) {
-          return { hasOwner: false };
-        }
-      }
-
-      // 4. Handle errors gracefully - DO NOT default to false on network/connection failure
-      if (ownerErr || checkErr || profilesErr) {
-        console.warn("⚠️ Database query error during owner check:", ownerErr || checkErr || profilesErr);
-        const localUsers = this.getUsers();
-        if (localUsers.some(u => (u.roleId === "OWNER" || u.roleId === "ADMIN") && u.isActive)) {
-          return { hasOwner: true };
-        }
+      const { data, error } = await supabase.rpc("owner_exists");
+      if (error) {
         return {
-          hasOwner: true, // Default to true so setup screen is NEVER exposed accidentally on error
-          error: "تعذر الاتصال بقاعدة البيانات للتحقق من وجود المالك. يرجى إعادة المحاولة."
+          hasOwner: true,
+          error: "تعذر التحقق من حالة المالك. تم إغلاق شاشة الإعداد احترازياً."
         };
       }
-
-      return { hasOwner: false };
-    } catch (err: any) {
-      console.warn("⚠️ Unexpected exception checking owner status:", err);
-      const localUsers = this.getUsers();
-      if (localUsers.some(u => (u.roleId === "OWNER" || u.roleId === "ADMIN") && u.isActive)) {
-        return { hasOwner: true };
-      }
+      return { hasOwner: data === true };
+    } catch {
       return {
         hasOwner: true,
-        error: "حدث خطأ غير متوقع أثناء الاتصال بـ Supabase. يرجى التحقق من اتصال الإنترنت."
+        error: "تعذر الاتصال بقاعدة البيانات. تم إغلاق شاشة الإعداد احترازياً."
       };
     }
   },
 
   async checkHasOwnerInSupabase(): Promise<boolean> {
-    const res = await this.checkHasOwnerStatus();
-    return res.hasOwner;
+    return (await this.checkHasOwnerStatus()).hasOwner;
   },
 
   async syncUsersFromSupabase(): Promise<AuthUser[]> {
     try {
       const { data: profiles, error } = await supabase.from("profiles").select("*");
-      if (!error && profiles && profiles.length > 0) {
-        const existingUsers = this.getUsers();
-        const now = new Date().toISOString();
-
-        profiles.forEach((p: any) => {
-          const normRoleId = profileRoleToUserRole(p.role);
-          const existingIdx = existingUsers.findIndex(u => u.id === p.id || u.email.toLowerCase() === (p.email || "").toLowerCase());
-
-          const syncedUser: AuthUser = {
-            id: p.id,
-            fullName: p.full_name || p.email || "مستخدم",
-            name: p.full_name || p.email || "مستخدم",
-            username: p.username || (p.email || "user").split("@")[0],
-            email: p.email || "",
-            phone: p.phone || "",
-            roleId: normRoleId,
-            role: normRoleId.toLowerCase(),
-            permissions: Array.isArray(p.custom_permissions) ? p.custom_permissions : (DEFAULT_ROLE_PERMISSIONS[normRoleId] || []),
-            isActive: p.is_active !== false,
-            createdAt: p.created_at || now,
-            updatedAt: p.updated_at || now,
-            avatarUrl: p.avatar_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80"
-          };
-
-          if (existingIdx !== -1) {
-            existingUsers[existingIdx] = { ...existingUsers[existingIdx], ...syncedUser };
-          } else {
-            existingUsers.push(syncedUser);
-          }
-        });
-
-        this.saveUsers(existingUsers);
-        return existingUsers;
-      }
-    } catch (err) {
-      console.warn("⚠️ Could not sync users from Supabase profiles:", err);
+      if (error || !profiles) return this.getUsers();
+      const users = profiles.map((p: any) => mapProfileToAuthUser(p, p.email));
+      this.saveUsers(users);
+      return users;
+    } catch {
+      return this.getUsers();
     }
-    return this.getUsers();
   },
 
   async syncProfileToSupabase(user: AuthUser, authUserId?: string) {
     try {
       const targetId = authUserId || user.id;
-      if (!targetId || targetId.startsWith("U-")) return; // Only sync valid UUIDs or auth users
+      if (!targetId || targetId.startsWith("U-")) {
+        return { success: false as const, error: "معرّف المستخدم غير صالح." };
+      }
 
-      const targetRole = userRoleToProfileRole(user.roleId);
+      const { error } = await supabase.from("profiles").upsert({
+        id: targetId,
+        email: user.email,
+        username: user.username,
+        full_name: user.fullName,
+        phone: user.phone || "",
+        branch: user.branch || "الفرع الرئيسي",
+        custom_permissions: user.permissions || [],
+        must_change_password: user.mustChangePassword === true,
+        is_active: user.isActive !== false,
+        role: userRoleToProfileRole(user.roleId),
+        updated_at: new Date().toISOString()
+      }, { onConflict: "id" });
 
-      const { error } = await supabase.from("profiles").upsert(
-        {
-          id: targetId,
-          email: user.email,
-          username: user.username,
-          full_name: user.fullName,
-          phone: user.phone || "",
-          branch: user.branch || "الفرع الرئيسي",
-          custom_permissions: user.permissions || [],
-          must_change_password: user.mustChangePassword === true,
-          is_active: user.isActive !== false,
-          role: targetRole,
-          updated_at: new Date().toISOString()
-        },
-        { onConflict: "id" }
-      );
       if (error) throw error;
       return { success: true as const };
     } catch (err) {
-      console.warn("⚠️ Could not sync profile to Supabase:", err);
-      return { success: false as const, error: err instanceof Error ? err.message : "تعذر حفظ ملف المستخدم" };
+      return {
+        success: false as const,
+        error: err instanceof Error ? err.message : "تعذر حفظ ملف المستخدم"
+      };
     }
   },
 
@@ -256,101 +202,51 @@ export const authStore = {
     password: string;
   }): Promise<{ success: boolean; error?: string; user?: AuthUser }> {
     const ownerStatus = await this.checkHasOwnerStatus();
-    if (ownerStatus.hasOwner && !ownerStatus.error) {
-      return { success: false, error: "يوجد صاحب نظام (OWNER) مسجل بالفعل بالنظام." };
-    }
+    if (ownerStatus.error) return { success: false, error: ownerStatus.error };
+    if (ownerStatus.hasOwner) return { success: false, error: "يوجد صاحب نظام (OWNER) مسجل بالفعل بالنظام." };
 
     const cleanEmail = data.email.toLowerCase().trim();
     const cleanUsername = data.username.toLowerCase().trim();
 
-    // 1. Sign up with Supabase Auth
-    let authUserId: string | undefined;
-    try {
-      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-        email: cleanEmail,
-        password: data.password,
-        options: {
-          data: {
-            full_name: data.fullName,
-            username: cleanUsername,
-            role: "OWNER"
-          }
-        }
-      });
-
-      if (signUpError && !signUpError.message.includes("User already registered")) {
-        console.warn("⚠️ Supabase Auth SignUp Notice:", signUpError.message);
-      }
-
-      if (signUpData?.user) {
-        authUserId = signUpData.user.id;
-      }
-
-      // If session not established automatically, attempt sign in
-      if (!signUpData?.session) {
-        const { data: signInData } = await supabase.auth.signInWithPassword({
-          email: cleanEmail,
-          password: data.password
-        });
-        if (signInData?.user) {
-          authUserId = signInData.user.id;
-        }
-      }
-    } catch (err: any) {
-      console.warn("⚠️ Error creating auth owner in Supabase:", err);
-    }
-
-    const now = new Date().toISOString();
-    if (!authUserId) {
-      return { success: false, error: "تعذر إنشاء أو ربط حساب المالك مع نظام المصادقة Supabase Auth." };
-    }
-    const finalProfileId = authUserId;
-
-    const ownerUser: AuthUser = {
-      id: finalProfileId,
-      fullName: data.fullName,
-      name: data.fullName,
-      username: cleanUsername,
+    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
       email: cleanEmail,
-      phone: data.phone || "",
-      roleId: "OWNER",
-      role: "admin",
-      permissions: ALL_PERMISSIONS,
-      isActive: true,
-      mustChangePassword: false,
-      createdAt: now,
-      updatedAt: now,
-      passwordHash: hashPassword(data.password),
-      avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80"
-    };
+      password: data.password,
+      options: { data: { full_name: data.fullName, username: cleanUsername } }
+    });
+    if (signUpError) return { success: false, error: signUpError.message };
 
-    const users = this.getUsers();
-    // Replace or add
-    const existingIndex = users.findIndex(u => u.roleId === "OWNER" || u.email === cleanEmail);
-    if (existingIndex !== -1) {
-      users[existingIndex] = ownerUser;
-    } else {
-      users.push(ownerUser);
+    if (!signUpData.session) {
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
+        password: data.password
+      });
+      if (signInError) {
+        return { success: false, error: "تم إنشاء الحساب، لكن يلزم تأكيد البريد أو تسجيل الدخول قبل تفعيل المالك." };
+      }
     }
-    this.saveUsers(users);
 
-    // Sync to profiles table directly
-    await this.syncProfileToSupabase(ownerUser, finalProfileId);
+    const { data: ownerProfile, error: bootstrapError } = await supabase.rpc("bootstrap_first_owner");
+    if (bootstrapError || !ownerProfile) {
+      return { success: false, error: bootstrapError?.message || "تعذر تفعيل أول مالك بأمان." };
+    }
 
-    // Re-verify owner_exists status
-    const postCheck = await this.checkHasOwnerStatus();
-    console.log("✅ Verified owner_exists after owner creation:", postCheck);
+    const ownerUser = mapProfileToAuthUser(ownerProfile, cleanEmail);
+    ownerUser.username = cleanUsername;
+    ownerUser.fullName = data.fullName;
+    ownerUser.name = data.fullName;
+    ownerUser.phone = data.phone || "";
+    ownerUser.permissions = ALL_PERMISSIONS;
 
-    // Create session for initial owner
-    this.createSession(ownerUser.id);
-    this.logLoginAttempt(data.username, true, "إشعال نظام التشغيل - إنشاء أول OWNER");
-
+    await this.syncProfileToSupabase(ownerUser, ownerUser.id);
+    this.setActiveUser(ownerUser);
+    this.logLoginAttempt(cleanUsername, true, "إنشاء أول OWNER عبر Supabase Auth");
     return { success: true, user: ownerUser };
   },
 
   setActiveUser(user: AuthUser) {
     if (typeof window === "undefined") return;
-    localStorage.setItem("atari_active_user_session", JSON.stringify(user));
+    const safeUser = sanitizedForCache(user);
+    localStorage.setItem(ACTIVE_USER_KEY, JSON.stringify(safeUser));
     localStorage.setItem(CURRENT_SESSION_KEY, JSON.stringify({
       sessionId: `SESS-${user.id}`,
       userId: user.id,
@@ -362,7 +258,7 @@ export const authStore = {
 
   clearSession() {
     if (typeof window === "undefined") return;
-    localStorage.removeItem("atari_active_user_session");
+    localStorage.removeItem(ACTIVE_USER_KEY);
     localStorage.removeItem("atari_current_session_v1");
     localStorage.removeItem(CURRENT_SESSION_KEY);
     localStorage.removeItem("atari_current_user");
@@ -372,9 +268,7 @@ export const authStore = {
   getSessions(): UserSession[] {
     if (typeof window === "undefined") return [];
     try {
-      const data = localStorage.getItem(SESSIONS_STORAGE_KEY);
-      if (!data) return [];
-      return JSON.parse(data);
+      return JSON.parse(localStorage.getItem(SESSIONS_STORAGE_KEY) || "[]");
     } catch {
       return [];
     }
@@ -386,47 +280,40 @@ export const authStore = {
   },
 
   createSession(userId: string): UserSession {
-    const sessions = this.getSessions();
     const now = new Date();
-    const expires = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24 hours
-
+    const randomId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now()}-${userId}`;
     const newSession: UserSession = {
-      sessionId: `SESS-${Math.random().toString(36).substring(2, 11)}`,
+      sessionId: `SESS-${randomId}`,
       userId,
       createdAt: now.toISOString(),
-      expiresAt: expires.toISOString(),
+      expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString(),
       deviceInfo: typeof navigator !== "undefined" ? navigator.userAgent : "Web Device"
     };
-
-    sessions.push(newSession);
-    this.saveSessions(sessions);
-
-    localStorage.setItem(CURRENT_SESSION_KEY, JSON.stringify(newSession));
-    window.dispatchEvent(new Event("atari_auth_changed"));
+    this.saveSessions([...this.getSessions(), newSession]);
+    if (typeof window !== "undefined") localStorage.setItem(CURRENT_SESSION_KEY, JSON.stringify(newSession));
     return newSession;
   },
 
   getCurrentSession(): UserSession | null {
     if (typeof window === "undefined") return null;
     try {
-      const activeUser = this.getCurrentUser();
-      if (!activeUser) return null;
       const data = localStorage.getItem(CURRENT_SESSION_KEY);
-      if (!data) return null;
-      return JSON.parse(data);
+      return data ? JSON.parse(data) : null;
     } catch {
       return null;
     }
   },
 
   getCurrentUser(): AuthUser | null {
+    // This is a UI cache only. Authorization is enforced in Supabase RLS/RPCs.
     if (typeof window === "undefined") return null;
     try {
-      const activeUserStr = localStorage.getItem("atari_active_user_session");
-      if (!activeUserStr) return null;
-      const user: AuthUser = JSON.parse(activeUserStr);
-      if (!user || !user.id || user.isActive === false) return null;
-      return user;
+      const raw = localStorage.getItem(ACTIVE_USER_KEY);
+      if (!raw) return null;
+      const user = sanitizedForCache(JSON.parse(raw));
+      return user?.id && user.isActive !== false ? user : null;
     } catch {
       return null;
     }
@@ -434,301 +321,178 @@ export const authStore = {
 
   async validateAndSyncSession(): Promise<{ user: AuthUser | null; error?: string }> {
     try {
-      // 1. Get real Supabase Auth session
-      const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
-
-      if (sessionErr) {
-        console.warn("⚠️ Error getting Supabase Auth session:", sessionErr);
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !session?.user) {
         this.clearSession();
-        return { user: null, error: "تعذر التحقق من جلسة المستخدم: " + sessionErr.message };
+        return { user: null, error: sessionError?.message };
       }
 
-      if (!session || !session.user) {
-        this.clearSession();
-        return { user: null };
-      }
-
-      // Look up local user record if present for metadata fallback
-      const localUsers = this.getUsers();
-      const localUser = localUsers.find(
-        u => u.id === session.user.id || (u.email && session.user.email && u.email.toLowerCase() === session.user.email.toLowerCase())
-      );
-
-      // 2. Query user profile from profiles table in Supabase by ID
-      let profile: any = null;
-      const { data: profileById, error: profileErr } = await supabase
+      let { data: profile, error: profileError } = await supabase
         .from("profiles")
         .select("*")
         .eq("id", session.user.id)
         .maybeSingle();
 
-      if (profileErr) {
-        console.warn("⚠️ Error fetching user profile by ID from Supabase:", profileErr);
-      }
-
-      if (profileById) {
-        profile = profileById;
-      } else if (session.user.email) {
-        // Search profile by email to detect if profile was created under a different ID
-        const { data: profileByEmail, error: emailErr } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("email", session.user.email)
-          .maybeSingle();
-
-        if (emailErr) {
-          console.warn("⚠️ Error searching profile by email:", emailErr);
-        }
-
-        if (profileByEmail) {
-          console.log(`ℹ️ Found existing profile for ${session.user.email} with ID (${profileByEmail.id}). Linking/migrating ID to ${session.user.id}...`);
-          try {
-            const { data: updatedProfile, error: updateErr } = await supabase
-              .from("profiles")
-              .update({ id: session.user.id, updated_at: new Date().toISOString() })
-              .eq("email", session.user.email)
-              .select("*")
-              .maybeSingle();
-
-            if (!updateErr && updatedProfile) {
-              profile = updatedProfile;
-            } else {
-              profile = { ...profileByEmail, id: session.user.id };
-            }
-          } catch (e) {
-            console.warn("⚠️ Exception updating profile ID:", e);
-            profile = { ...profileByEmail, id: session.user.id };
-          }
-        }
-      }
-
-      // 3. If profile is still missing, create or upsert profile
-      if (!profile) {
-        console.warn("⚠️ Profile not found for session user, auto-creating profile row:", session.user.id);
-        const roleId = profileRoleToUserRole(session.user.user_metadata?.role || localUser?.roleId || "OWNER");
-        const dbRole = userRoleToProfileRole(roleId);
-        const fullName = session.user.user_metadata?.full_name || localUser?.fullName || session.user.email?.split("@")[0] || "مستخدم";
-
-        const newProfileData = {
-          id: session.user.id,
-          email: session.user.email || "",
-          full_name: fullName,
-          role: dbRole,
-          is_active: true
-        };
-
-        try {
-          const { data: upsertedProfile } = await supabase
-            .from("profiles")
-            .upsert(newProfileData, { onConflict: "id" })
-            .select("*")
-            .maybeSingle();
-
-          profile = upsertedProfile || newProfileData;
-        } catch (e) {
-          console.warn("⚠️ Fallback profile upsert error:", e);
-          profile = newProfileData;
-        }
-      }
-
-      if (profile && profile.is_active === false) {
-        console.warn("⚠️ Account is disabled:", session.user.id);
-        await supabase.auth.signOut().catch(() => {});
+      if (profileError) {
         this.clearSession();
-        return { user: null, error: "حساب المستخدم معطل حالياً. يرجى التواصل مع مسؤول النظام." };
+        return { user: null, error: "تعذر قراءة ملف المستخدم المعتمد." };
       }
 
-      // Map profile to AuthUser
-      const roleId = profileRoleToUserRole(profile?.role || session.user.user_metadata?.role || localUser?.roleId || "OWNER");
+      if (!profile) {
+        // Missing profiles are created with the minimum role only. Never infer roles
+        // from user_metadata or localStorage.
+        const { data: inserted, error: insertError } = await supabase
+          .from("profiles")
+          .insert({
+            id: session.user.id,
+            email: session.user.email || "",
+            username: session.user.user_metadata?.username || (session.user.email || "user").split("@")[0],
+            full_name: session.user.user_metadata?.full_name || (session.user.email || "user").split("@")[0],
+            role: "RECEPTION",
+            is_active: true
+          })
+          .select("*")
+          .single();
+        if (insertError || !inserted) {
+          this.clearSession();
+          return { user: null, error: "لا يوجد ملف صلاحيات صالح لهذا الحساب." };
+        }
+        profile = inserted;
+      }
 
-      const activeUser: AuthUser = {
-        id: session.user.id,
-        fullName: profile?.full_name || session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "مستخدم",
-        name: profile?.full_name || session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "مستخدم",
-        username: (session.user.email || "user").split("@")[0],
-        email: session.user.email || profile?.email || "",
-        phone: profile?.phone || "",
-        roleId: roleId,
-        role: roleId.toLowerCase(),
-        permissions: Array.isArray(profile?.custom_permissions) ? profile.custom_permissions : (DEFAULT_ROLE_PERMISSIONS[roleId] || []),
-        isActive: true,
-        createdAt: profile?.created_at || new Date().toISOString(),
-        updatedAt: profile?.updated_at || new Date().toISOString(),
-        avatarUrl: profile?.avatar_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80"
-      };
+      if (profile.is_active === false) {
+        await supabase.auth.signOut();
+        this.clearSession();
+        return { user: null, error: "حساب المستخدم معطل حالياً." };
+      }
 
+      const activeUser = mapProfileToAuthUser(profile, session.user.email);
       this.setActiveUser(activeUser);
 
-      // Keep local users list updated
       const users = this.getUsers();
-      const idx = users.findIndex(u => u.id === activeUser.id || (u.email && activeUser.email && u.email.toLowerCase() === activeUser.email.toLowerCase()));
-      if (idx !== -1) {
-        users[idx] = activeUser;
-      } else {
-        users.push(activeUser);
-      }
+      const idx = users.findIndex(u => u.id === activeUser.id);
+      if (idx >= 0) users[idx] = activeUser;
+      else users.push(activeUser);
       this.saveUsers(users);
-
       return { user: activeUser };
     } catch (err: any) {
-      console.warn("⚠️ Exception during validateAndSyncSession:", err);
       this.clearSession();
-      return { user: null, error: err?.message || "حدث خطأ غير متوقع أثناء الاتصال بالخادم." };
+      return { user: null, error: err?.message || "حدث خطأ أثناء التحقق من الجلسة." };
     }
   },
 
   async login(
     usernameOrEmail: string,
     password: string,
-    rememberMe: boolean = true
+    _rememberMe: boolean = true
   ): Promise<{ success: boolean; error?: string; user?: AuthUser; mustChangePassword?: boolean }> {
     const cleanIdentifier = usernameOrEmail.trim().toLowerCase();
-
-    // Resolve usernames centrally so login works from every browser/device.
     let targetEmail = cleanIdentifier;
+
     if (!targetEmail.includes("@")) {
-      const { data: remoteEmail, error: lookupError } = await supabase.rpc("lookup_login_email", {
-        p_username: cleanIdentifier
-      });
-      if (lookupError) console.warn("⚠️ Username lookup failed:", lookupError.message);
-      targetEmail = typeof remoteEmail === "string" && remoteEmail ? remoteEmail : `${cleanIdentifier}@atari.com`;
+      const { data, error } = await supabase.rpc("lookup_login_email", { p_username: cleanIdentifier });
+      if (error || typeof data !== "string" || !data) {
+        this.logLoginAttempt(usernameOrEmail, false, "username lookup failed");
+        return { success: false, error: "اسم المستخدم أو كلمة المرور غير صحيحة" };
+      }
+      targetEmail = data;
     }
 
-    try {
-      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-        email: targetEmail,
-        password: password
-      });
-
-      if (authError) {
-        console.warn("⚠️ Supabase login error:", authError.message);
-        this.logLoginAttempt(usernameOrEmail, false, authError.message);
-        let msg = "اسم المستخدم أو كلمة المرور غير صحيحة";
-        if (authError.message.includes("Email not confirmed")) {
-          msg = "البريد الإلكتروني لم يتم تأكيده في Supabase Auth (Email not confirmed). يرجى تأكيد البريد أولاً.";
-        }
-        return { success: false, error: msg };
-      }
-
-      if (!authData || !authData.session || !authData.user) {
-        return { success: false, error: "فشل إنشاء الجلسة في Supabase." };
-      }
-
-      // Sync and validate profile
-      const syncRes = await this.validateAndSyncSession();
-      if (syncRes.error || !syncRes.user) {
-        return { success: false, error: syncRes.error || "تعذر قراءة ملف المستخدم المعتمد." };
-      }
-
-      this.logLoginAttempt(usernameOrEmail, true, "تسجيل دخول ناجح مع Supabase Auth");
-
-      return {
-        success: true,
-        user: syncRes.user,
-        mustChangePassword: syncRes.user.mustChangePassword
-      };
-    } catch (err: any) {
-      console.warn("⚠️ Supabase Auth login exception:", err);
-      return { success: false, error: err?.message || "حدث خطأ أثناء الاتصال بمصادقة Supabase." };
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+      email: targetEmail,
+      password
+    });
+    if (authError || !authData.session) {
+      this.logLoginAttempt(usernameOrEmail, false, authError?.message || "login failed");
+      return { success: false, error: "اسم المستخدم أو كلمة المرور غير صحيحة" };
     }
+
+    const sync = await this.validateAndSyncSession();
+    if (!sync.user) {
+      await supabase.auth.signOut();
+      return { success: false, error: sync.error || "تعذر قراءة ملف المستخدم المعتمد." };
+    }
+
+    this.logLoginAttempt(usernameOrEmail, true, "تسجيل دخول ناجح مع Supabase Auth");
+    return { success: true, user: sync.user, mustChangePassword: sync.user.mustChangePassword };
   },
 
   async logout() {
-    if (typeof window === "undefined") return;
     try {
       await supabase.auth.signOut();
-    } catch (err) {
-      console.warn("⚠️ Error signing out from Supabase:", err);
+    } finally {
+      this.clearSession();
     }
-    this.clearSession();
   },
 
   logoutAllSessions(userId: string) {
-    const sessions = this.getSessions().filter(s => s.userId !== userId);
-    this.saveSessions(sessions);
-
-    const currentSession = this.getCurrentSession();
-    if (currentSession && currentSession.userId === userId) {
-      this.logout();
-    }
+    this.saveSessions(this.getSessions().filter(s => s.userId !== userId));
+    if (this.getCurrentSession()?.userId === userId) void this.logout();
   },
 
+  // Legacy synchronous password methods now fail closed. They intentionally do not
+  // read/write password hashes or accept any master password.
   changePassword(
-    userId: string,
-    oldPassword: string,
-    newPassword: string
+    _userId: string,
+    _oldPassword: string,
+    _newPassword: string
   ): { success: boolean; error?: string } {
-    const users = this.getUsers();
-    const user = users.find(u => u.id === userId);
+    return {
+      success: false,
+      error: "تغيير كلمة المرور المحلي تم إيقافه لأسباب أمنية. استخدم changePasswordSecure."
+    };
+  },
 
-    if (!user) return { success: false, error: "المستخدم غير موجود" };
+  async changePasswordSecure(oldPassword: string, newPassword: string): Promise<{ success: boolean; error?: string }> {
+    const { data: { session } } = await supabase.auth.getSession();
+    const email = session?.user?.email;
+    if (!email) return { success: false, error: "لا توجد جلسة مصادقة صالحة." };
 
-    const hashedOld = hashPassword(oldPassword);
-    if (
-      user.passwordHash &&
-      user.passwordHash !== hashedOld &&
-      user.passwordHash !== oldPassword &&
-      oldPassword !== "123456"
-    ) {
-      return { success: false, error: "كلمة المرور الحالية غير صحيحة" };
-    }
+    const { error: verifyError } = await supabase.auth.signInWithPassword({ email, password: oldPassword });
+    if (verifyError) return { success: false, error: "كلمة المرور الحالية غير صحيحة" };
 
-    user.passwordHash = hashPassword(newPassword);
-    user.mustChangePassword = false;
-    user.updatedAt = new Date().toISOString();
+    const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
+    if (updateError) return { success: false, error: updateError.message };
 
-    this.saveUsers(users);
-
-    // Also update Supabase password if possible
-    supabase.auth.updateUser({ password: newPassword }).catch(() => {});
-
+    await supabase.from("profiles").update({ must_change_password: false }).eq("id", session.user.id);
     return { success: true };
   },
 
   resetPasswordByAdmin(
-    targetUserId: string,
-    newTempPassword: string
+    _targetUserId: string,
+    _newTempPassword: string
   ): { success: boolean; error?: string } {
-    const users = this.getUsers();
-    const user = users.find(u => u.id === targetUserId);
-
-    if (!user) return { success: false, error: "المستخدم غير موجود" };
-
-    user.passwordHash = hashPassword(newTempPassword);
-    user.mustChangePassword = true;
-    user.updatedAt = new Date().toISOString();
-
-    this.saveUsers(users);
-    return { success: true };
+    return {
+      success: false,
+      error: "إعادة تعيين كلمة مرور مستخدم آخر من المتصفح غير مسموحة. يلزم مسار خادم إداري آمن."
+    };
   },
 
   logLoginAttempt(usernameOrEmail: string, success: boolean, reason: string) {
     if (typeof window === "undefined") return;
     try {
-      const attemptsStr = localStorage.getItem(LOGIN_ATTEMPTS_STORAGE_KEY) || "[]";
-      const attempts: LoginAttempt[] = JSON.parse(attemptsStr);
+      const attempts: LoginAttempt[] = JSON.parse(localStorage.getItem(LOGIN_ATTEMPTS_STORAGE_KEY) || "[]");
       attempts.unshift({
         id: `ATT-${Date.now()}`,
         usernameOrEmail,
         success,
         timestamp: new Date().toISOString(),
-        reason,
-        ipAddress: "127.0.0.1"
+        reason
       });
-      // Keep last 100 attempts
       localStorage.setItem(LOGIN_ATTEMPTS_STORAGE_KEY, JSON.stringify(attempts.slice(0, 100)));
     } catch {
-      // Ignore storage errors
+      // Non-critical local audit cache only.
     }
   }
 };
 
-// Listen to Supabase Auth state changes automatically for real-time session verification
 if (typeof window !== "undefined") {
   supabase.auth.onAuthStateChange(async (event, session) => {
     if (event === "SIGNED_OUT" || !session) {
       authStore.clearSession();
-    } else if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || session?.user) {
+      return;
+    }
+    if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
       await authStore.validateAndSyncSession();
     }
   });
