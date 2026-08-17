@@ -3,9 +3,10 @@ import { createClient } from '@supabase/supabase-js';
 const metaEnv = ((typeof import.meta !== 'undefined' && (import.meta as any).env) || {}) as Record<string, string | undefined>;
 const procEnv = (typeof process !== 'undefined' && process.env) ? process.env : {};
 
-// Browser-safe public endpoint and publishable key for the active project.
-const supabaseUrl = 'https://snwizwgmgwxiotrfmkzm.supabase.co';
-const supabaseKey = 'sb_publishable_XltOYCOplUoZI3RiHlWB9w_H9YF-S5q';
+// Prefer deployment environment variables. The fallback keeps existing deployments connected
+// to the single active Atari Store Pro X project until Vercel env vars are configured.
+const supabaseUrl = metaEnv.VITE_SUPABASE_URL || procEnv.VITE_SUPABASE_URL || 'https://nywfsxkqvwgvmriwhtow.supabase.co';
+const supabaseKey = metaEnv.VITE_SUPABASE_PUBLISHABLE_KEY || procEnv.VITE_SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_7D4_kTCJ7zN91IGwd3Holg_ZO5Vl8m4';
 
 export const isSupabaseConfigured = Boolean(
   supabaseUrl && supabaseKey && /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(supabaseUrl) && !supabaseUrl.includes('placeholder')
@@ -95,8 +96,6 @@ export const supabase = createClient(
   }
 );
 
-// Egress guard: the old wildcard subscription caused every DB change to fan out into
-// multiple React hooks and repeat large reads. Keep it disabled unless explicitly enabled.
 const enableGlobalRealtime = String(metaEnv.VITE_ENABLE_GLOBAL_REALTIME || procEnv.VITE_ENABLE_GLOBAL_REALTIME || 'false').toLowerCase() === 'true';
 if (!enableGlobalRealtime) {
   const originalChannel = supabase.channel.bind(supabase);
@@ -121,7 +120,7 @@ if (!enableGlobalRealtime) {
 
 export async function testSupabaseConnection(): Promise<{ success: boolean; message: string; data?: any }> {
   try {
-    if (!isSupabaseConfigured) return { success: false, message: 'Supabase credentials not configured in environment variables.' };
+    if (!isSupabaseConfigured) return { success: false, message: 'Supabase credentials not configured.' };
     const { data, error } = await supabase.from('store_settings').select('company_name').limit(1);
     if (error) return { success: false, message: `Connection failed: ${error.message}` };
     return { success: true, message: 'Supabase Connected Successfully', data };
