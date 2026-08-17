@@ -5,16 +5,11 @@
  */
 
 export function generateSecureTrackingToken(): string {
-  try {
-    if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-      const bytes = new Uint8Array(16);
-      crypto.getRandomValues(bytes);
-      return Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
-    }
-  } catch {}
+  if (typeof crypto === "undefined" || typeof crypto.getRandomValues !== "function") {
+    throw new Error("Secure random number generation is unavailable; tracking token was not created.");
+  }
 
-  const randomStr1 = Math.random().toString(36).substring(2, 12);
-  const randomStr2 = Math.random().toString(36).substring(2, 12);
-  const timestampStr = Date.now().toString(36);
-  return `${timestampStr}${randomStr1}${randomStr2}`.padEnd(32, "0").substring(0, 32);
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
 }
