@@ -3,9 +3,20 @@ import { createClient } from '@supabase/supabase-js';
 const metaEnv = ((typeof import.meta !== 'undefined' && (import.meta as any).env) || {}) as Record<string, string | undefined>;
 const procEnv = (typeof process !== 'undefined' && process.env) ? process.env : {};
 
-// Browser-safe public endpoint and publishable key for the active project.
-const supabaseUrl = 'https://snwizwgmgwxiotrfmkzm.supabase.co';
-const supabaseKey = 'sb_publishable_XltOYCOplUoZI3RiHlWB9w_H9YF-S5q';
+// This is the existing Atari Store database that contains the live products, inventory,
+// repair orders and store settings. Keep Preview and production pointed at the same
+// authoritative project until a separate test branch is intentionally provisioned.
+const ACTIVE_SUPABASE_URL = 'https://snwizwgmgwxiotrfmkzm.supabase.co';
+const ACTIVE_SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_XltOYCOplUoZI3RiHlWB9w_H9YF-S5q';
+
+const configuredUrl = metaEnv.VITE_SUPABASE_URL || procEnv.VITE_SUPABASE_URL || '';
+const configuredKey = metaEnv.VITE_SUPABASE_PUBLISHABLE_KEY || procEnv.VITE_SUPABASE_PUBLISHABLE_KEY || '';
+const deploymentMatchesActiveProject = configuredUrl === ACTIVE_SUPABASE_URL;
+
+// Only accept deployment credentials when they explicitly target the authoritative project.
+// Otherwise use its public browser credentials so stale Vercel variables cannot redirect data.
+const supabaseUrl = deploymentMatchesActiveProject ? configuredUrl : ACTIVE_SUPABASE_URL;
+const supabaseKey = deploymentMatchesActiveProject && configuredKey ? configuredKey : ACTIVE_SUPABASE_PUBLISHABLE_KEY;
 
 export const isSupabaseConfigured = Boolean(
   supabaseUrl && supabaseKey && /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(supabaseUrl) && !supabaseUrl.includes('placeholder')
@@ -95,8 +106,6 @@ export const supabase = createClient(
   }
 );
 
-// Egress guard: the old wildcard subscription caused every DB change to fan out into
-// multiple React hooks and repeat large reads. Keep it disabled unless explicitly enabled.
 const enableGlobalRealtime = String(metaEnv.VITE_ENABLE_GLOBAL_REALTIME || procEnv.VITE_ENABLE_GLOBAL_REALTIME || 'false').toLowerCase() === 'true';
 if (!enableGlobalRealtime) {
   const originalChannel = supabase.channel.bind(supabase);
@@ -121,7 +130,7 @@ if (!enableGlobalRealtime) {
 
 export async function testSupabaseConnection(): Promise<{ success: boolean; message: string; data?: any }> {
   try {
-    if (!isSupabaseConfigured) return { success: false, message: 'Supabase credentials not configured in environment variables.' };
+    if (!isSupabaseConfigured) return { success: false, message: 'Supabase credentials not configured.' };
     const { data, error } = await supabase.from('store_settings').select('company_name').limit(1);
     if (error) return { success: false, message: `Connection failed: ${error.message}` };
     return { success: true, message: 'Supabase Connected Successfully', data };

@@ -7,7 +7,7 @@ const BOOTSTRAP_SYNC_KEY = 'atari_repair_orders_authoritative_sync_at';
 
 function mapProfileToAuthUser(p: any): AuthUser {
   const rawRole = String(p.role || 'RECEPTION').toUpperCase();
-  const roleId: UserRole = rawRole === 'OWNER' ? 'OWNER' : rawRole === 'ADMIN' ? 'ADMIN' : rawRole === 'ENGINEER' || rawRole === 'TECHNICIAN' ? 'TECHNICIAN' : 'RECEPTION';
+  const roleId: UserRole = rawRole === 'OWNER' ? 'OWNER' : rawRole === 'ADMIN' ? 'ADMIN' : rawRole === 'ENGINEER' || rawRole === 'TECHNICIAN' ? 'TECHNICIAN' : 'RECEPTIONIST';
   const now = new Date().toISOString();
   return {
     id: p.id,

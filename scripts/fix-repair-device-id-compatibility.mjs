@@ -71,5 +71,35 @@ source = source.replace(
   '                const baseListToSearch = compatibleInventory;'
 );
 
+// Multi-device repair orders: keep an independent active device inside the workshop.
+const workspaceStateNeedle = '  const [workspaceTab, setWorkspaceTab] = useState<"workshop" | "timeline" | "audit">("workshop");';
+if (source.includes(workspaceStateNeedle) && !source.includes('const [activeDeviceIdx, setActiveDeviceIdx]')) {
+  source = source.replace(
+    workspaceStateNeedle,
+    `${workspaceStateNeedle}\n  const [activeDeviceIdx, setActiveDeviceIdx] = useState<number>(0);\n\n  useEffect(() => {\n    setActiveDeviceIdx(prev => {\n      const count = selectedOrder?.devices?.length || 0;\n      return count > 0 && prev < count ? prev : 0;\n    });\n  }, [selectedOrder?.id, selectedOrder?.devices?.length]);`
+  );
+}
+
+// Always open a newly selected order on its first device.
+source = source.replace(
+  '                    setSelectedOrder(order);\n                    setWorkspaceTab("workshop");',
+  '                    setSelectedOrder(order);\n                    setActiveDeviceIdx(0);\n                    setWorkspaceTab("workshop");'
+);
+
+// Replace the old hard-coded first-device workshop binding.
+source = source.replace(
+  `                const currentDevice = selectedOrder.devices[0] || { type: 'PlayStation', model: 'PS5', issue: '' };\n                const devIdx = 0;`,
+  `                const safeDeviceIdx = Math.min(activeDeviceIdx, Math.max(0, selectedOrder.devices.length - 1));\n                const currentDevice = selectedOrder.devices[safeDeviceIdx] || { type: 'PlayStation', model: 'PS5', issue: '' };\n                const devIdx = safeDeviceIdx;`
+);
+
+// Show one tab/button for every received device/controller inside the order.
+const workshopReturnNeedle = `                  <div className="space-y-4 font-sans text-right">\n                    {/* -----------------------------------------\n                        SECTION 1: COMPACT HEADER CARD`;
+if (source.includes(workshopReturnNeedle) && !source.includes('اختيار الجهاز داخل أمر الصيانة')) {
+  source = source.replace(
+    workshopReturnNeedle,
+    `                  <div className="space-y-4 font-sans text-right">\n                    {selectedOrder.devices.length > 1 && (\n                      <div className="bg-[#11131e] border border-[#2a2d42] rounded-xl p-2.5">\n                        <div className="flex items-center gap-2 mb-2 text-xs font-bold text-gray-300">\n                          <Gamepad2 className="w-4 h-4 text-indigo-400" />\n                          <span>اختيار الجهاز داخل أمر الصيانة ({selectedOrder.devices.length})</span>\n                        </div>\n                        <div className="flex flex-wrap gap-2">\n                          {selectedOrder.devices.map((device, index) => (\n                            <button\n                              key={device.id || index}\n                              type="button"\n                              onClick={() => {\n                                setActiveDeviceIdx(index);\n                                setAddPartDevIdx(index);\n                                setPartSearch("");\n                              }}\n                              className={\`px-3 py-2 rounded-lg border text-xs font-bold transition-all cursor-pointer \${\n                                index === safeDeviceIdx\n                                  ? "bg-indigo-600 border-indigo-400 text-white shadow-md shadow-indigo-950/40"\n                                  : "bg-gray-950 border-[#2a2d42] text-gray-300 hover:border-indigo-500/50 hover:text-white"\n                              }\`}\n                            >\n                              <span className="text-indigo-300 ml-1">#{index + 1}</span>\n                              {getDeviceDisplayName(device)}\n                            </button>\n                          ))}\n                        </div>\n                      </div>\n                    )}\n\n                    {/* -----------------------------------------\n                        SECTION 1: COMPACT HEADER CARD`
+  );
+}
+
 fs.writeFileSync(filePath, source, 'utf8');
-console.log('Repair compatibility patched: DT/DM IDs resolve to inventory names and no all-stock fallback is allowed.');
+console.log('Repair workshop patched: compatibility fixed and multi-device orders can switch between every received device.');
