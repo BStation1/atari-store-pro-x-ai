@@ -121,9 +121,9 @@ export function buildWhatsAppUrl(phone: string, text: string): string | null {
 }
 
 /**
- * Reliably hand off a prepared message to WhatsApp.
- * Browsers may block a new tab when this is called after an async database save,
- * so we fall back to same-tab navigation instead of silently doing nothing.
+ * Open a prepared WhatsApp message in a separate tab only.
+ * Never replace the Atari Store tab. If the browser blocks popups, return false
+ * so the UI can tell the user to allow popups for this site.
  */
 export function openWhatsAppMessage(phone: string, text: string): boolean {
   const url = buildWhatsAppUrl(phone, text);
@@ -135,21 +135,19 @@ export function openWhatsAppMessage(phone: string, text: string): boolean {
   if (typeof window === "undefined") return true;
 
   try {
-    const win = window.open(url, "_blank", "noopener,noreferrer");
-    if (win) return true;
+    const win = window.open(url, "_blank");
+    if (win) {
+      try {
+        win.opener = null;
+      } catch {}
+      return true;
+    }
   } catch (err) {
     console.warn("WhatsApp popup was blocked:", err);
   }
 
-  // A blocked popup must never make the WhatsApp button appear dead.
-  // Same-tab navigation is allowed even after asynchronous work.
-  try {
-    window.location.assign(url);
-    return true;
-  } catch (err) {
-    console.error("Failed to navigate to WhatsApp:", err);
-    return false;
-  }
+  console.warn("تعذر فتح واتساب في تبويب جديد. يرجى السماح بالنوافذ المنبثقة لهذا الموقع.");
+  return false;
 }
 
 export async function sendRepairNotificationWorkflow(params: {
@@ -236,12 +234,11 @@ export async function sendRepairNotificationWorkflow(params: {
 
   try {
     if (wasPreviouslyOpened) {
-      // Do not make the manual workshop button dead just because the same state was opened before.
       console.info(`[WhatsApp Workflow] Re-opening previously prepared notification ${dedupStateKey}.`);
     }
 
     if (autoOpenWindow && !openWhatsAppMessage(phone, sanitizedMessage)) {
-      throw new Error("تعذر فتح الواتس آب على هذا الجهاز");
+      throw new Error("تعذر فتح واتساب في تبويب جديد. اسمح بالنوافذ المنبثقة لهذا الموقع ثم حاول مرة أخرى");
     }
 
     markNotificationAsSent(dedupStateKey);
@@ -255,6 +252,6 @@ export async function sendRepairNotificationWorkflow(params: {
   } catch (err: any) {
     const errorMsg = err?.message || "فشل فتح رسالة الواتس آب";
     const log = addWhatsAppLog({ orderId, customer: name, phone, template, status: "FAILED", error: errorMsg });
-    return { success: false, message: "تم حفظ العملية ولكن تعذر فتح رسالة واتساب.", log };
+    return { success: false, message: errorMsg, log };
   }
 }
