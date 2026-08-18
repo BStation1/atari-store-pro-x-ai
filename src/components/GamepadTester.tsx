@@ -1,13 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Gamepad2, RotateCcw, Vibrate, Activity, CircleDot, Gauge, Usb, CheckCircle2, AlertTriangle } from "lucide-react";
-
-const BUTTON_NAMES = [
-  "A / Cross", "B / Circle", "X / Square", "Y / Triangle",
-  "L1 / LB", "R1 / RB", "L2 / LT", "R2 / RT",
-  "Select / Share", "Start / Options", "L3", "R3",
-  "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right",
-  "Home / PS", "Touchpad"
-];
+import { Gamepad2, RotateCcw, Vibrate, Usb, CheckCircle2, AlertTriangle, CircleDot, Gauge } from "lucide-react";
 
 interface GamepadSnapshot {
   index: number;
@@ -19,227 +11,58 @@ interface GamepadSnapshot {
   timestamp: number;
 }
 
-function cloneGamepad(gamepad: Gamepad): GamepadSnapshot {
-  return {
-    index: gamepad.index,
-    id: gamepad.id,
-    mapping: gamepad.mapping,
-    connected: gamepad.connected,
-    buttons: Array.from(gamepad.buttons).map(b => ({ pressed: b.pressed, touched: b.touched, value: b.value })),
-    axes: Array.from(gamepad.axes),
-    timestamp: gamepad.timestamp
-  };
+const BTN = { A: 0, B: 1, X: 2, Y: 3, LB: 4, RB: 5, LT: 6, RT: 7, BACK: 8, START: 9, LS: 10, RS: 11, UP: 12, DOWN: 13, LEFT: 14, RIGHT: 15, HOME: 16 };
+
+function cloneGamepad(g: Gamepad): GamepadSnapshot {
+  return { index: g.index, id: g.id, mapping: g.mapping, connected: g.connected, buttons: Array.from(g.buttons).map(b => ({ pressed: b.pressed, touched: b.touched, value: b.value })), axes: Array.from(g.axes), timestamp: g.timestamp };
+}
+function value(pad: GamepadSnapshot | undefined, index: number) { return pad?.buttons[index]?.value ?? 0; }
+function active(pad: GamepadSnapshot | undefined, index: number) { const b = pad?.buttons[index]; return Boolean(b && (b.pressed || b.value > 0.08)); }
+function driftLevel(radius: number) {
+  if (radius <= 0.08) return { label: "ممتاز", text: "text-emerald-400", ring: "border-emerald-500/50" };
+  if (radius <= 0.15) return { label: "مقبول", text: "text-amber-400", ring: "border-amber-500/50" };
+  return { label: "Drift مرتفع", text: "text-red-400", ring: "border-red-500/50" };
 }
 
-function pct(v: number): string {
-  return `${Math.round(Math.min(1, Math.max(0, Math.abs(v))) * 100)}%`;
+function FaceButton({ label, on, className = "" }: { label: string; on: boolean; className?: string }) {
+  return <div className={`absolute w-11 h-11 rounded-full border-2 flex items-center justify-center font-black text-sm transition-all duration-75 ${on ? "bg-indigo-500 border-white text-white shadow-[0_0_22px_rgba(99,102,241,.9)] scale-110" : "bg-[#111522] border-[#4b526a] text-gray-400"} ${className}`}>{label}</div>;
+}
+function SmallButton({ label, on, className = "" }: { label: string; on: boolean; className?: string }) {
+  return <div className={`absolute px-2.5 py-1 rounded-full border text-[10px] font-black transition-all ${on ? "bg-indigo-500 border-indigo-300 text-white shadow-[0_0_14px_rgba(99,102,241,.7)]" : "bg-[#111522] border-[#40465b] text-gray-500"} ${className}`}>{label}</div>;
+}
+function Stick({ x, y, on, className = "" }: { x: number; y: number; on: boolean; className?: string }) {
+  const tx = Math.max(-1, Math.min(1, x)) * 13, ty = Math.max(-1, Math.min(1, y)) * 13;
+  return <div className={`absolute w-20 h-20 rounded-full bg-[#090c14] border-[5px] border-[#343a50] shadow-inner ${className}`}><div className="absolute inset-2 rounded-full border border-[#444b63]"/><div className={`absolute w-12 h-12 rounded-full left-1/2 top-1/2 -ml-6 -mt-6 border-2 transition-transform duration-75 ${on ? "bg-indigo-500 border-white shadow-[0_0_22px_rgba(99,102,241,.8)]" : "bg-[#1b2030] border-[#565e78]"}`} style={{ transform: `translate(${tx}px, ${ty}px)` }}/></div>;
+}
+function Trigger({ label, amount, side }: { label: string; amount: number; side: "left" | "right" }) {
+  return <div className={`absolute top-3 ${side === "left" ? "left-14" : "right-14"} w-24`}><div className="text-[10px] text-gray-400 font-bold mb-1 text-center">{label} {(amount * 100).toFixed(0)}%</div><div className="h-4 rounded-full bg-[#090c14] border border-[#3b4257] overflow-hidden"><div className="h-full bg-indigo-500 transition-all duration-75" style={{ width: `${Math.round(amount * 100)}%` }}/></div></div>;
 }
 
-function driftLevel(radius: number): { label: string; className: string } {
-  if (radius <= 0.08) return { label: "ممتاز", className: "text-emerald-400" };
-  if (radius <= 0.15) return { label: "مقبول", className: "text-amber-400" };
-  return { label: "Drift مرتفع", className: "text-red-400" };
-}
-
-function StickVisualizer({ x, y, label }: { x: number; y: number; label: string }) {
-  const radius = Math.sqrt(x * x + y * y);
-  const drift = driftLevel(radius);
-  const px = Math.max(-1, Math.min(1, x)) * 41;
-  const py = Math.max(-1, Math.min(1, y)) * 41;
-
-  return (
-    <div className="bg-[#0b0e18] border border-[#24283b] rounded-2xl p-4">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="font-bold text-sm text-white">{label}</h3>
-        <span className={`text-xs font-bold ${drift.className}`}>{drift.label}</span>
-      </div>
-      <div className="flex flex-col sm:flex-row items-center gap-5">
-        <div className="relative w-32 h-32 rounded-full border-2 border-[#343950] bg-[#070913] shadow-inner">
-          <div className="absolute inset-[10%] rounded-full border border-dashed border-[#343950]" />
-          <div className="absolute left-1/2 top-0 bottom-0 w-px bg-[#252a3c]" />
-          <div className="absolute top-1/2 left-0 right-0 h-px bg-[#252a3c]" />
-          <div
-            className="absolute w-7 h-7 -ml-3.5 -mt-3.5 rounded-full bg-indigo-500 border-2 border-white/70 shadow-lg transition-transform duration-75"
-            style={{ left: "50%", top: "50%", transform: `translate(${px}px, ${py}px)` }}
-          />
-        </div>
-        <div className="grid grid-cols-2 gap-2 text-xs min-w-[155px]">
-          <div className="bg-[#111522] rounded-xl p-2"><span className="text-gray-500">X</span><div className="font-mono text-white font-bold">{x.toFixed(4)}</div></div>
-          <div className="bg-[#111522] rounded-xl p-2"><span className="text-gray-500">Y</span><div className="font-mono text-white font-bold">{y.toFixed(4)}</div></div>
-          <div className="bg-[#111522] rounded-xl p-2 col-span-2"><span className="text-gray-500">Center drift</span><div className={`font-mono font-bold ${drift.className}`}>{(radius * 100).toFixed(2)}%</div></div>
-        </div>
-      </div>
+function ControllerVisual({ pad, leftX, leftY, rightX, rightY }: { pad: GamepadSnapshot; leftX: number; leftY: number; rightX: number; rightY: number }) {
+  return <div className="relative mx-auto w-full max-w-[720px] aspect-[1.45/1] min-h-[430px]">
+    <Trigger label="LT / L2" amount={value(pad, BTN.LT)} side="left"/><Trigger label="RT / R2" amount={value(pad, BTN.RT)} side="right"/>
+    <div className={`absolute top-14 left-[14%] w-28 h-8 rounded-t-2xl border-2 ${active(pad, BTN.LB) ? "bg-indigo-500 border-white shadow-[0_0_16px_rgba(99,102,241,.8)]" : "bg-[#171b28] border-[#464d65]"}`}/>
+    <div className={`absolute top-14 right-[14%] w-28 h-8 rounded-t-2xl border-2 ${active(pad, BTN.RB) ? "bg-indigo-500 border-white shadow-[0_0_16px_rgba(99,102,241,.8)]" : "bg-[#171b28] border-[#464d65]"}`}/>
+    <div className="absolute left-1/2 top-20 -translate-x-1/2 w-[78%] h-[64%] bg-gradient-to-b from-[#1a1f2e] to-[#0e111b] border-[3px] border-[#42495f] rounded-[34%_34%_42%_42%/26%_26%_70%_70%] shadow-[0_35px_70px_rgba(0,0,0,.45)]">
+      <div className="absolute -left-[6%] bottom-[-31%] w-[31%] h-[70%] bg-[#111522] border-[3px] border-[#42495f] rounded-[58%_26%_60%_70%] rotate-[14deg]"/><div className="absolute -right-[6%] bottom-[-31%] w-[31%] h-[70%] bg-[#111522] border-[3px] border-[#42495f] rounded-[26%_58%_70%_60%] -rotate-[14deg]"/>
+      <Stick x={leftX} y={leftY} on={active(pad, BTN.LS)} className="left-[23%] top-[35%]"/><Stick x={rightX} y={rightY} on={active(pad, BTN.RS)} className="right-[29%] top-[58%]"/>
+      <div className="absolute left-[21%] top-[58%] w-24 h-24"><FaceButton label="▲" on={active(pad, BTN.UP)} className="left-7 top-0 !w-9 !h-9 !rounded-lg"/><FaceButton label="▼" on={active(pad, BTN.DOWN)} className="left-7 top-14 !w-9 !h-9 !rounded-lg"/><FaceButton label="◀" on={active(pad, BTN.LEFT)} className="left-0 top-7 !w-9 !h-9 !rounded-lg"/><FaceButton label="▶" on={active(pad, BTN.RIGHT)} className="left-14 top-7 !w-9 !h-9 !rounded-lg"/></div>
+      <div className="absolute right-[19%] top-[31%] w-32 h-32"><FaceButton label="Y" on={active(pad, BTN.Y)} className="left-10 top-0"/><FaceButton label="A" on={active(pad, BTN.A)} className="left-10 top-[82px]"/><FaceButton label="X" on={active(pad, BTN.X)} className="left-0 top-10"/><FaceButton label="B" on={active(pad, BTN.B)} className="left-[82px] top-10"/></div>
+      <SmallButton label="VIEW" on={active(pad, BTN.BACK)} className="left-[43%] top-[38%]"/><SmallButton label="MENU" on={active(pad, BTN.START)} className="right-[39%] top-[38%]"/><FaceButton label="●" on={active(pad, BTN.HOME)} className="left-1/2 -translate-x-1/2 top-[48%] !w-12 !h-12"/>
     </div>
-  );
+  </div>;
 }
 
-export default function GamepadTester() {
-  const [pads, setPads] = useState<GamepadSnapshot[]>([]);
-  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
-  const [deadzone, setDeadzone] = useState(0.08);
-  const [maxLeftRadius, setMaxLeftRadius] = useState(0);
-  const [maxRightRadius, setMaxRightRadius] = useState(0);
-  const rafRef = useRef<number | null>(null);
+function StickGauge({ title, x, y, deadzone }: { title: string; x: number; y: number; deadzone: number }) {
+  const radius = Math.sqrt(x*x + y*y), level = driftLevel(radius), px = Math.max(-1,Math.min(1,x))*45, py = Math.max(-1,Math.min(1,y))*45;
+  return <div className={`rounded-2xl border ${level.ring} bg-[#0b0e18] p-4`}><div className="flex items-center justify-between mb-3"><span className="font-black text-white text-xs">{title}</span><span className={`text-xs font-black ${level.text}`}>{level.label}</span></div><div className="flex items-center gap-4"><div className="relative w-28 h-28 rounded-full border-2 border-[#3d445a] bg-[#070913] shrink-0"><div className="absolute rounded-full border border-dashed border-indigo-500/40" style={{ inset: `${50-deadzone*50}%` }}/><div className="absolute left-1/2 top-0 bottom-0 w-px bg-[#2a2f40]"/><div className="absolute top-1/2 left-0 right-0 h-px bg-[#2a2f40]"/><div className="absolute w-4 h-4 rounded-full bg-indigo-400 border-2 border-white left-1/2 top-1/2 -ml-2 -mt-2 shadow-[0_0_14px_rgba(129,140,248,.9)]" style={{ transform:`translate(${px}px,${py}px)` }}/></div><div className="space-y-1 text-[11px] font-mono"><div className="text-gray-400">X <span className="text-white">{x.toFixed(4)}</span></div><div className="text-gray-400">Y <span className="text-white">{y.toFixed(4)}</span></div><div className="text-gray-400">Drift <span className={level.text}>{(radius*100).toFixed(2)}%</span></div></div></div></div>;
+}
 
-  useEffect(() => {
-    const update = () => {
-      const live = Array.from(navigator.getGamepads?.() || [])
-        .filter((g): g is Gamepad => Boolean(g))
-        .map(cloneGamepad);
-      setPads(live);
-      if (live.length && (selectedIndex === null || !live.some(p => p.index === selectedIndex))) {
-        setSelectedIndex(live[0].index);
-      }
-      rafRef.current = requestAnimationFrame(update);
-    };
-
-    const onConnected = (e: GamepadEvent) => setSelectedIndex(e.gamepad.index);
-    window.addEventListener("gamepadconnected", onConnected);
-    update();
-    return () => {
-      window.removeEventListener("gamepadconnected", onConnected);
-      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-    };
-  }, [selectedIndex]);
-
-  const pad = pads.find(p => p.index === selectedIndex) || pads[0];
-  const axes = pad?.axes || [];
-  const leftX = axes[0] || 0;
-  const leftY = axes[1] || 0;
-  const rightX = axes[2] || 0;
-  const rightY = axes[3] || 0;
-  const leftRadius = Math.sqrt(leftX * leftX + leftY * leftY);
-  const rightRadius = Math.sqrt(rightX * rightX + rightY * rightY);
-
-  useEffect(() => {
-    if (!pad) return;
-    setMaxLeftRadius(v => Math.max(v, leftRadius));
-    setMaxRightRadius(v => Math.max(v, rightRadius));
-  }, [pad?.timestamp, leftRadius, rightRadius]);
-
-  const pressedCount = useMemo(() => pad?.buttons.filter(b => b.pressed || b.value > 0.5).length || 0, [pad]);
-  const vibrationSupported = Boolean((navigator.getGamepads?.()[pad?.index ?? -1] as any)?.vibrationActuator);
-
-  const vibrate = async () => {
-    if (!pad) return;
-    const live = navigator.getGamepads?.()[pad.index] as any;
-    const actuator = live?.vibrationActuator;
-    if (!actuator?.playEffect) return;
-    try {
-      await actuator.playEffect("dual-rumble", {
-        startDelay: 0,
-        duration: 700,
-        weakMagnitude: 0.7,
-        strongMagnitude: 0.9
-      });
-    } catch (err) {
-      console.warn("Gamepad vibration test failed:", err);
-    }
-  };
-
-  const resetCalibration = () => {
-    setMaxLeftRadius(0);
-    setMaxRightRadius(0);
-  };
-
-  const centerHealthy = leftRadius <= deadzone && rightRadius <= deadzone;
-
-  return (
-    <div className="space-y-5 dir-rtl pb-8">
-      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-black text-white flex items-center gap-2"><Gamepad2 className="w-6 h-6 text-indigo-400" /> فحص الدراعات</h2>
-          <p className="text-xs text-gray-400 mt-1">اختبار مباشر للأزرار، الأنالوج، التريجرز، الـStick Drift والاهتزاز بدون أي موقع خارجي.</p>
-        </div>
-        <div className="flex gap-2 flex-wrap">
-          <button onClick={resetCalibration} className="px-3 py-2 rounded-xl bg-[#121626] border border-[#2b3045] text-gray-200 text-xs font-bold flex items-center gap-2"><RotateCcw className="w-4 h-4" /> تصفير القياسات</button>
-          <button onClick={vibrate} disabled={!vibrationSupported} className="px-3 py-2 rounded-xl bg-indigo-600 disabled:bg-gray-800 disabled:text-gray-500 text-white text-xs font-bold flex items-center gap-2"><Vibrate className="w-4 h-4" /> اختبار الاهتزاز</button>
-        </div>
-      </div>
-
-      {!pad ? (
-        <div className="min-h-[420px] flex items-center justify-center bg-[#0c0f19] border border-dashed border-[#30354b] rounded-3xl">
-          <div className="text-center max-w-md px-6">
-            <Usb className="w-12 h-12 text-indigo-400 mx-auto mb-4" />
-            <h3 className="text-white font-black text-lg">وصل الدراع وابدأ الاختبار</h3>
-            <p className="text-sm text-gray-400 mt-2 leading-7">وصل الدراع USB أو Bluetooth، وبعدها اضغط أي زر عليه. Chrome هيكتشفه تلقائيًا من خلال Gamepad API.</p>
-          </div>
-        </div>
-      ) : (
-        <>
-          <div className="grid grid-cols-1 xl:grid-cols-4 gap-3">
-            <div className="xl:col-span-2 bg-[#0d101b] border border-[#24283b] rounded-2xl p-4">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-xl bg-indigo-500/10"><Gamepad2 className="w-5 h-5 text-indigo-400" /></div>
-                <div className="min-w-0">
-                  <div className="text-sm text-white font-bold truncate">{pad.id}</div>
-                  <div className="text-[11px] text-gray-500">Gamepad #{pad.index + 1} • {pad.mapping || "generic mapping"} • {pad.buttons.length} زر • {pad.axes.length} محور</div>
-                </div>
-              </div>
-            </div>
-            <div className="bg-[#0d101b] border border-[#24283b] rounded-2xl p-4 flex items-center gap-3">
-              <Activity className="w-5 h-5 text-cyan-400" />
-              <div><div className="text-[11px] text-gray-500">أزرار مضغوطة الآن</div><div className="text-xl font-black text-white">{pressedCount}</div></div>
-            </div>
-            <div className="bg-[#0d101b] border border-[#24283b] rounded-2xl p-4 flex items-center gap-3">
-              {centerHealthy ? <CheckCircle2 className="w-5 h-5 text-emerald-400" /> : <AlertTriangle className="w-5 h-5 text-amber-400" />}
-              <div><div className="text-[11px] text-gray-500">حالة مركز الأنالوج</div><div className={`text-sm font-black ${centerHealthy ? "text-emerald-400" : "text-amber-400"}`}>{centerHealthy ? "داخل Deadzone" : "يوجد انحراف"}</div></div>
-            </div>
-          </div>
-
-          {pads.length > 1 && (
-            <div className="flex gap-2 flex-wrap">
-              {pads.map(p => <button key={p.index} onClick={() => setSelectedIndex(p.index)} className={`px-3 py-2 rounded-xl border text-xs font-bold ${p.index === pad.index ? "bg-indigo-600 border-indigo-500 text-white" : "bg-[#0d101b] border-[#2b3045] text-gray-300"}`}>دراع #{p.index + 1}</button>)}
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <StickVisualizer x={leftX} y={leftY} label="Left Stick / الأنالوج الشمال" />
-            <StickVisualizer x={rightX} y={rightY} label="Right Stick / الأنالوج اليمين" />
-          </div>
-
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-            <div className="xl:col-span-2 bg-[#0d101b] border border-[#24283b] rounded-2xl p-4">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-black text-white text-sm flex items-center gap-2"><CircleDot className="w-4 h-4 text-indigo-400" /> اختبار الأزرار</h3>
-                <span className="text-[11px] text-gray-500">القيمة من 0.00 إلى 1.00</span>
-              </div>
-              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2">
-                {pad.buttons.map((b, i) => {
-                  const active = b.pressed || b.value > 0.02;
-                  return <div key={i} className={`rounded-xl border p-3 transition ${active ? "bg-indigo-500/15 border-indigo-500/60" : "bg-[#090c15] border-[#22263a]"}`}>
-                    <div className="flex items-center justify-between gap-2"><span className={`text-xs font-bold truncate ${active ? "text-white" : "text-gray-400"}`}>{BUTTON_NAMES[i] || `Button ${i}`}</span><span className={`w-2.5 h-2.5 rounded-full ${active ? "bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,.75)]" : "bg-gray-700"}`} /></div>
-                    <div className="mt-2 h-1.5 bg-gray-800 rounded-full overflow-hidden"><div className="h-full bg-indigo-500" style={{ width: `${Math.round(b.value * 100)}%` }} /></div>
-                    <div className="font-mono text-[10px] text-gray-500 mt-1">{b.value.toFixed(3)}</div>
-                  </div>;
-                })}
-              </div>
-            </div>
-
-            <div className="bg-[#0d101b] border border-[#24283b] rounded-2xl p-4 space-y-4">
-              <h3 className="font-black text-white text-sm flex items-center gap-2"><Gauge className="w-4 h-4 text-indigo-400" /> Drift & Calibration</h3>
-              <label className="block">
-                <div className="flex justify-between text-xs mb-2"><span className="text-gray-400">Deadzone المرجعية</span><span className="font-mono text-white">{Math.round(deadzone * 100)}%</span></div>
-                <input type="range" min="0.02" max="0.25" step="0.01" value={deadzone} onChange={e => setDeadzone(Number(e.target.value))} className="w-full accent-indigo-500" />
-              </label>
-              <div className="space-y-2 text-xs">
-                <div className="flex justify-between bg-[#090c15] rounded-xl p-3"><span className="text-gray-400">Left center drift</span><span className={`font-mono font-bold ${driftLevel(leftRadius).className}`}>{(leftRadius * 100).toFixed(2)}%</span></div>
-                <div className="flex justify-between bg-[#090c15] rounded-xl p-3"><span className="text-gray-400">Right center drift</span><span className={`font-mono font-bold ${driftLevel(rightRadius).className}`}>{(rightRadius * 100).toFixed(2)}%</span></div>
-                <div className="flex justify-between bg-[#090c15] rounded-xl p-3"><span className="text-gray-400">أقصى Left Stick وصل له</span><span className="font-mono text-cyan-400 font-bold">{pct(maxLeftRadius)}</span></div>
-                <div className="flex justify-between bg-[#090c15] rounded-xl p-3"><span className="text-gray-400">أقصى Right Stick وصل له</span><span className="font-mono text-cyan-400 font-bold">{pct(maxRightRadius)}</span></div>
-              </div>
-              <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-[11px] leading-6 text-amber-100/80">لأفضل قياس Drift: سيب الأنالوج بدون لمس لمدة ثانيتين. لو النسبة أعلى من الـDeadzone المختارة بشكل ثابت، فده مؤشر واضح على الانحراف.</div>
-            </div>
-          </div>
-
-          {pad.axes.length > 4 && (
-            <div className="bg-[#0d101b] border border-[#24283b] rounded-2xl p-4">
-              <h3 className="font-black text-white text-sm mb-3">كل الـAxes الخام</h3>
-              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2">{pad.axes.map((a, i) => <div key={i} className="bg-[#090c15] rounded-xl p-2 text-center"><div className="text-[10px] text-gray-500">Axis {i}</div><div className="font-mono text-xs text-white">{a.toFixed(4)}</div></div>)}</div>
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
+export default function GamepadTester(){
+  const [pads,setPads]=useState<GamepadSnapshot[]>([]),[selectedIndex,setSelectedIndex]=useState<number|null>(null),[deadzone,setDeadzone]=useState(.08); const rafRef=useRef<number|null>(null);
+  useEffect(()=>{ const tick=()=>{const live=Array.from(navigator.getGamepads?.()||[]).filter((g):g is Gamepad=>Boolean(g)).map(cloneGamepad);setPads(live);if(live.length&&(selectedIndex===null||!live.some(p=>p.index===selectedIndex)))setSelectedIndex(live[0].index);rafRef.current=requestAnimationFrame(tick)};const onConnected=(e:GamepadEvent)=>setSelectedIndex(e.gamepad.index);window.addEventListener("gamepadconnected",onConnected);tick();return()=>{window.removeEventListener("gamepadconnected",onConnected);if(rafRef.current!==null)cancelAnimationFrame(rafRef.current)}},[selectedIndex]);
+  const pad=pads.find(p=>p.index===selectedIndex)||pads[0],axes=pad?.axes||[],leftX=axes[0]||0,leftY=axes[1]||0,rightX=axes[2]||0,rightY=axes[3]||0,leftRadius=Math.sqrt(leftX*leftX+leftY*leftY),rightRadius=Math.sqrt(rightX*rightX+rightY*rightY),centerHealthy=leftRadius<=deadzone&&rightRadius<=deadzone; const pressedCount=useMemo(()=>pad?.buttons.filter(b=>b.pressed||b.value>.08).length||0,[pad]); const vibrationSupported=Boolean((navigator.getGamepads?.()[pad?.index??-1] as any)?.vibrationActuator);
+  const vibrate=async()=>{if(!pad)return;const actuator=(navigator.getGamepads?.()[pad.index] as any)?.vibrationActuator;try{await actuator?.playEffect?.("dual-rumble",{startDelay:0,duration:700,weakMagnitude:.7,strongMagnitude:.9})}catch{}};
+  return <div className="dir-rtl pb-10 space-y-5"><div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4"><div><h2 className="text-xl font-black text-white flex items-center gap-2"><Gamepad2 className="w-6 h-6 text-indigo-400"/> فحص الدراعات</h2><p className="text-xs text-gray-400 mt-1">اضغط أي زر أو حرّك الأنالوج وشوف الاستجابة على شكل الدراع فورًا.</p></div><div className="flex gap-2 flex-wrap"><button onClick={()=>setDeadzone(.08)} className="px-3 py-2 rounded-xl bg-[#121626] border border-[#2b3045] text-gray-200 text-xs font-bold flex items-center gap-2"><RotateCcw className="w-4 h-4"/> إعادة الضبط</button><button onClick={vibrate} disabled={!vibrationSupported} className="px-3 py-2 rounded-xl bg-indigo-600 disabled:bg-gray-800 disabled:text-gray-500 text-white text-xs font-bold flex items-center gap-2"><Vibrate className="w-4 h-4"/> اختبار الاهتزاز</button></div></div>
+  {!pad?<div className="min-h-[520px] flex items-center justify-center bg-[#0b0e17] border border-dashed border-[#34394e] rounded-3xl"><div className="text-center max-w-lg px-6"><div className="w-24 h-24 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mx-auto mb-5"><Usb className="w-11 h-11 text-indigo-400"/></div><h3 className="text-white font-black text-xl">وصل الدراع واضغط أي زر</h3><p className="text-sm text-gray-400 mt-3 leading-7">USB أو Bluetooth. Chrome هيكتشف الدراع تلقائيًا.</p></div></div>:<><div className="bg-[#0b0e17] border border-[#272c3d] rounded-3xl overflow-hidden shadow-2xl"><div className="px-5 py-4 border-b border-[#24293a] flex flex-col md:flex-row md:items-center justify-between gap-3 bg-[#10131e]"><div className="min-w-0"><div className="text-white font-black text-sm truncate">{pad.id}</div><div className="text-[11px] text-gray-500 mt-1">PLAYER {pad.index+1} • {pad.mapping||"generic"} • {pad.buttons.length} buttons • {pad.axes.length} axes</div></div><div className="flex gap-2 items-center flex-wrap">{pads.map(p=><button key={p.index} onClick={()=>setSelectedIndex(p.index)} className={`px-3 py-1.5 rounded-lg text-[11px] font-black border ${p.index===pad.index?"bg-indigo-600 border-indigo-400 text-white":"bg-[#090c14] border-[#33394d] text-gray-400"}`}>P{p.index+1}</button>)}<div className={`px-3 py-1.5 rounded-lg text-[11px] font-black border flex items-center gap-1.5 ${centerHealthy?"border-emerald-500/40 bg-emerald-500/10 text-emerald-400":"border-amber-500/40 bg-amber-500/10 text-amber-400"}`}>{centerHealthy?<CheckCircle2 className="w-3.5 h-3.5"/>:<AlertTriangle className="w-3.5 h-3.5"/>}{centerHealthy?"الأنالوج في المنتصف":"يوجد انحراف"}</div></div></div><div className="grid grid-cols-1 xl:grid-cols-[1.55fr_.75fr]"><div className="p-5 md:p-7 border-b xl:border-b-0 xl:border-l border-[#24293a]"><ControllerVisual pad={pad} leftX={leftX} leftY={leftY} rightX={rightX} rightY={rightY}/></div><div className="p-5 space-y-4 bg-[#0d101a]"><div className="flex items-center justify-between"><h3 className="text-sm font-black text-white flex items-center gap-2"><Gauge className="w-4 h-4 text-indigo-400"/> Analog Sticks</h3><span className="text-[10px] text-gray-500">LIVE</span></div><StickGauge title="LEFT STICK" x={leftX} y={leftY} deadzone={deadzone}/><StickGauge title="RIGHT STICK" x={rightX} y={rightY} deadzone={deadzone}/><div className="rounded-2xl border border-[#2b3042] bg-[#090c14] p-4"><div className="flex justify-between text-xs mb-2"><span className="text-gray-400">Deadzone</span><span className="font-mono text-white">{Math.round(deadzone*100)}%</span></div><input type="range" min="0.02" max="0.25" step="0.01" value={deadzone} onChange={e=>setDeadzone(Number(e.target.value))} className="w-full accent-indigo-500"/></div></div></div></div><div className="grid grid-cols-1 lg:grid-cols-[1.5fr_.5fr] gap-4"><div className="bg-[#0b0e17] border border-[#272c3d] rounded-3xl p-5"><div className="flex items-center justify-between mb-4"><h3 className="text-sm font-black text-white flex items-center gap-2"><CircleDot className="w-4 h-4 text-indigo-400"/> Buttons / Raw Input</h3><span className="text-[11px] text-gray-500">مضغوط الآن: <b className="text-white">{pressedCount}</b></span></div><div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-9 gap-2">{pad.buttons.map((b,i)=>{const on=b.pressed||b.value>.08;return <div key={i} className={`rounded-xl border p-2 text-center transition-all ${on?"bg-indigo-500/20 border-indigo-400":"bg-[#090c14] border-[#262b3d]"}`}><div className={`text-[10px] font-black ${on?"text-white":"text-gray-500"}`}>B{i}</div><div className={`font-mono text-[11px] mt-1 ${on?"text-indigo-300":"text-gray-600"}`}>{b.value.toFixed(2)}</div></div>})}</div></div><div className="bg-[#0b0e17] border border-[#272c3d] rounded-3xl p-5"><h3 className="text-sm font-black text-white mb-4">Axes</h3><div className="space-y-2">{axes.map((a,i)=><div key={i} className="flex items-center justify-between bg-[#090c14] border border-[#252a3b] rounded-xl px-3 py-2 text-xs"><span className="text-gray-500">AXIS {i}</span><span className="font-mono text-white">{a.toFixed(5)}</span></div>)}</div></div></div></>}</div>;
 }
