@@ -10,15 +10,9 @@ import { generateSecureTrackingToken } from "./trackingToken";
 export function formatEgyptianPhoneForWhatsApp(phone: string): string {
   if (!phone || typeof phone !== "string") return "";
   const cleaned = phone.replace(/\D/g, "");
-  if (cleaned.startsWith("20")) {
-    return cleaned;
-  }
-  if (cleaned.startsWith("01")) {
-    return "20" + cleaned.substring(1);
-  }
-  if (cleaned.startsWith("1") && cleaned.length === 10) {
-    return "20" + cleaned;
-  }
+  if (cleaned.startsWith("20")) return cleaned;
+  if (cleaned.startsWith("01")) return "20" + cleaned.substring(1);
+  if (cleaned.startsWith("1") && cleaned.length === 10) return "20" + cleaned;
   return cleaned;
 }
 
@@ -41,7 +35,6 @@ export interface WhatsAppLogEntry {
 
 const WHATSAPP_LOGS_KEY = "atari_whatsapp_logs_v1";
 const WHATSAPP_SENT_KEYS = "atari_whatsapp_sent_keys_v1";
-
 const inMemoryStore: Record<string, string> = {};
 
 function storageGetItem(key: string): string | null {
@@ -57,18 +50,14 @@ function storageGetItem(key: string): string | null {
 function storageSetItem(key: string, value: string): void {
   inMemoryStore[key] = value;
   try {
-    if (typeof localStorage !== "undefined" && localStorage) {
-      localStorage.setItem(key, value);
-    }
+    if (typeof localStorage !== "undefined" && localStorage) localStorage.setItem(key, value);
   } catch {}
 }
 
 function storageRemoveItem(key: string): void {
   delete inMemoryStore[key];
   try {
-    if (typeof localStorage !== "undefined" && localStorage) {
-      localStorage.removeItem(key);
-    }
+    if (typeof localStorage !== "undefined" && localStorage) localStorage.removeItem(key);
   } catch {}
 }
 
@@ -89,8 +78,7 @@ export function addWhatsAppLog(entry: Omit<WhatsAppLogEntry, "id" | "timestamp">
     timestamp: new Date().toISOString()
   };
   const current = getWhatsAppLogs();
-  const updated = [newEntry, ...current].slice(0, 1000);
-  storageSetItem(WHATSAPP_LOGS_KEY, JSON.stringify(updated));
+  storageSetItem(WHATSAPP_LOGS_KEY, JSON.stringify([newEntry, ...current].slice(0, 1000)));
   return newEntry;
 }
 
@@ -122,28 +110,46 @@ export function markNotificationAsSent(dedupKey: string): void {
   }
 }
 
-/**
- * Clean multi-byte variation selectors and zero-width characters that cause replacement chars (\uFFFD) in WhatsApp Web/App
- */
 export function sanitizeWhatsAppMessage(text: string): string {
-  return text
-    .replace(/[\uFE0F\uFE0E\u200B\u200D\uFFFD]/g, "")
-    .trim();
+  return text.replace(/[\uFE0F\uFE0E\u200B\u200D\uFFFD]/g, "").trim();
 }
 
-export function openWhatsAppMessage(phone: string, text: string): boolean {
+export function buildWhatsAppUrl(phone: string, text: string): string | null {
   const formatted = formatEgyptianPhoneForWhatsApp(phone);
-  if (!formatted) {
+  if (!formatted) return null;
+  return `https://wa.me/${formatted}?text=${encodeURIComponent(sanitizeWhatsAppMessage(text))}`;
+}
+
+/**
+ * Reliably hand off a prepared message to WhatsApp.
+ * Browsers may block a new tab when this is called after an async database save,
+ * so we fall back to same-tab navigation instead of silently doing nothing.
+ */
+export function openWhatsAppMessage(phone: string, text: string): boolean {
+  const url = buildWhatsAppUrl(phone, text);
+  if (!url) {
     console.warn("رقم الهاتف غير صالح لإرسال رسالة WhatsApp");
     return false;
   }
-  const cleanText = sanitizeWhatsAppMessage(text);
-  const url = `https://wa.me/${formatted}?text=${encodeURIComponent(cleanText)}`;
-  if (typeof window !== "undefined" && window.open) {
-    const win = window.open(url, "_blank");
-    return Boolean(win);
+
+  if (typeof window === "undefined") return true;
+
+  try {
+    const win = window.open(url, "_blank", "noopener,noreferrer");
+    if (win) return true;
+  } catch (err) {
+    console.warn("WhatsApp popup was blocked:", err);
   }
-  return true;
+
+  // A blocked popup must never make the WhatsApp button appear dead.
+  // Same-tab navigation is allowed even after asynchronous work.
+  try {
+    window.location.assign(url);
+    return true;
+  } catch (err) {
+    console.error("Failed to navigate to WhatsApp:", err);
+    return false;
+  }
 }
 
 export async function sendRepairNotificationWorkflow(params: {
@@ -161,210 +167,94 @@ export async function sendRepairNotificationWorkflow(params: {
   autoOpenWindow?: boolean;
 }): Promise<{ success: boolean; isDuplicate?: boolean; message: string; log?: WhatsAppLogEntry }> {
   const { template, order, customerName, customerPhone, extra, autoOpenWindow = true } = params;
-
   const name = customerName || order.customerName || "عميلنا العزيز";
   const rawPhone = customerPhone || order.customerPhone || "";
   const phone = formatEgyptianPhoneForWhatsApp(rawPhone);
-
   const orderId = order.id || "N/A";
 
-  // Build clean device names without leaking raw internal IDs
-  const deviceList = (order.devices && order.devices.length > 0)
+  const deviceList = order.devices?.length
     ? order.devices.map(d => getDeviceDisplayName(d))
     : ["جهاز صيانة"];
-
   const devicesHeader = deviceList.length > 1
     ? `🎮 الأجهزة:\n• ${deviceList.join("\n• ")}`
     : `🎮 الجهاز:\n${deviceList[0]}`;
 
-  // Fault description
-  const faultsList = (order.devices && order.devices.length > 0)
+  const faultsList = order.devices?.length
     ? order.devices.map(d => d.issue || "فحص ومعاينة فنية").filter(Boolean)
     : ["فحص ومعاينة فنية"];
   const faultsText = faultsList.join(" + ");
 
-  // Tracking token URL (BUG-006)
   const token = order.trackingToken || generateSecureTrackingToken();
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const trackingUrl = `${origin}/track?token=${token}`;
 
-  // Deduplication Key Construction
   let dedupStateKey = `${orderId}_${template}`;
   if (template === "APPROVAL_REQUIRED") {
     dedupStateKey += `_${extra?.additionalCost || 0}_${extra?.newTotal || order.totalEstimatedCost}`;
   } else if (template === "READY_FOR_PICKUP" || template === "DELIVERED") {
     dedupStateKey += `_${order.status}_${order.finalRepairPrice || order.totalEstimatedCost}`;
   }
+  const wasPreviouslyOpened = isNotificationAlreadySent(dedupStateKey);
 
-  // Prevent sending duplicate message if already sent for this exact state
-  if (isNotificationAlreadySent(dedupStateKey)) {
-    console.warn(`[WhatsApp Workflow] Notification ${dedupStateKey} already sent. Skipping duplicate.`);
-    return {
-      success: true,
-      isDuplicate: true,
-      message: "تم إرسال الإشعار سابقاً (منع التكرار)"
-    };
-  }
-
-  // Validate Phone
   if (!phone) {
     const errorMsg = "رقم الهاتف غير مسجل أو غير صالح لإرسال الواتس آب";
-    const log = addWhatsAppLog({
-      orderId,
-      customer: name,
-      phone: rawPhone || "N/A",
-      template,
-      status: "FAILED",
-      error: errorMsg
-    });
-    return {
-      success: false,
-      message: "تم حفظ العملية ولكن تعذر إرسال رسالة واتساب.",
-      log
-    };
+    const log = addWhatsAppLog({ orderId, customer: name, phone: rawPhone || "N/A", template, status: "FAILED", error: errorMsg });
+    return { success: false, message: "تم حفظ العملية ولكن تعذر تجهيز رسالة واتساب.", log };
   }
 
-  // Cost handling (Only show estimated cost if > 0)
   const estCost = extra?.newTotal ?? order.totalEstimatedCost ?? 0;
   const costSection = estCost > 0 ? `💰 التكلفة المتوقعة:\n${estCost} ج.م\n\n` : "";
-
-  // Generate Message Body according to Template (BUG-007)
   let messageText = "";
 
   switch (template) {
-    case "REPAIR_ORDER_CREATED": {
-      messageText = `🎉 مرحبًا ${name}
-
-تم استلام جهازك بنجاح في Atari Store.
-
-📋 رقم الطلب:
-${orderId}
-
-${devicesHeader}
-
-🔧 العطل:
-${faultsText}
-
-${costSection}🔗 متابعة حالة الصيانة:
-${trackingUrl}
-
-شكراً لثقتك بنا ❤️`;
+    case "REPAIR_ORDER_CREATED":
+      messageText = `🎉 مرحبًا ${name}\n\nتم استلام جهازك بنجاح في Atari Store.\n\n📋 رقم الطلب:\n${orderId}\n\n${devicesHeader}\n\n🔧 العطل:\n${faultsText}\n\n${costSection}🔗 متابعة حالة الصيانة:\n${trackingUrl}\n\nشكراً لثقتك بنا ❤️`;
       break;
-    }
-
     case "APPROVAL_REQUIRED": {
       const reason = extra?.reason || "تغيير في قطع الغيار أو تكلفة الصيانة";
       const addCost = extra?.additionalCost ?? 0;
       const newTot = extra?.newTotal ?? order.totalEstimatedCost;
-
-      messageText = `مرحبًا ${name} 👋
-
-بخصوص طلب الصيانة رقم [${orderId}]:
-${devicesHeader}
-
-يلزم موافقتك على المستجدات التالية:
-📌 السبب: ${reason}
-💰 التكلفة الإضافية: ${addCost} ج.م
-💵 الإجمالي الجديد: ${newTot} ج.م
-
-🔗 رابط المتابعة والموافقة:
-${trackingUrl}
-
-شكراً لتعاملك معنا ❤️`;
+      messageText = `مرحبًا ${name} 👋\n\nبخصوص طلب الصيانة رقم [${orderId}]:\n${devicesHeader}\n\nيلزم موافقتك على المستجدات التالية:\n📌 السبب: ${reason}\n💰 التكلفة الإضافية: ${addCost} ج.م\n💵 الإجمالي الجديد: ${newTot} ج.م\n\n🔗 رابط المتابعة والموافقة:\n${trackingUrl}\n\nشكراً لتعاملك معنا ❤️`;
       break;
     }
-
     case "READY_FOR_PICKUP": {
-      const repaired =
-        extra?.repairedItems ||
-        faultsText ||
-        "تمت الصيانة بنجاح";
+      const repaired = extra?.repairedItems || faultsText || "تمت الصيانة بنجاح";
       const finalPrice = extra?.newTotal ?? order.finalRepairPrice ?? order.totalEstimatedCost ?? 0;
       const paid = order.advancePayment || 0;
       const remaining = Math.max(0, finalPrice - paid);
-
-      messageText = `🎉 مرحبًا ${name}
-
-طلب الصيانة رقم [${orderId}] أصبح **جاهزاً للتسليم** الآن!
-
-${devicesHeader}
-
-🛠️ ما تم إصلاحه:
-${repaired}
-
-💰 السعر النهائي: ${finalPrice} ج.م
-💳 المدفوع: ${paid} ج.م
-💵 المتبقي للتحصيل: ${remaining} ج.م
-
-🔗 متابعة حالة الصيانة:
-${trackingUrl}
-
-شكراً لثقتك بنا ❤️`;
+      messageText = `🎉 مرحبًا ${name}\n\nطلب الصيانة رقم [${orderId}] أصبح جاهزاً للتسليم الآن!\n\n${devicesHeader}\n\n🛠️ ما تم إصلاحه:\n${repaired}\n\n💰 السعر النهائي: ${finalPrice} ج.م\n💳 المدفوع: ${paid} ج.م\n💵 المتبقي للتحصيل: ${remaining} ج.م\n\n🔗 متابعة حالة الصيانة:\n${trackingUrl}\n\nشكراً لثقتك بنا ❤️`;
       break;
     }
-
     case "DELIVERED": {
-      const warranty =
-        extra?.warrantyInfo ||
-        (order.warrantyDays
-          ? `ضمان لمدة ${order.warrantyDays} يوم`
-          : "الضمان حسب الشروط المدونة بالإيصال");
-
-      messageText = `✨ مرحبًا ${name}
-
-شكراً لتعاملك معنا! تم تسليم طلب الصيانة رقم [${orderId}] بنجاح.
-
-${devicesHeader}
-
-🛡️ معلومات الضمان:
-${warranty}
-
-نتمنى لك تجربة استخدام ممتازة ❤️`;
+      const warranty = extra?.warrantyInfo || (order.warrantyDays ? `ضمان لمدة ${order.warrantyDays} يوم` : "الضمان حسب الشروط المدونة بالإيصال");
+      messageText = `✨ مرحبًا ${name}\n\nشكراً لتعاملك معنا! تم تسليم طلب الصيانة رقم [${orderId}] بنجاح.\n\n${devicesHeader}\n\n🛡️ معلومات الضمان:\n${warranty}\n\nنتمنى لك تجربة استخدام ممتازة ❤️`;
       break;
     }
   }
 
   const sanitizedMessage = sanitizeWhatsAppMessage(messageText);
 
-  // Attempt to send (open WhatsApp window)
   try {
-    if (autoOpenWindow) {
-      const opened = openWhatsAppMessage(phone, sanitizedMessage);
-      if (!opened) {
-        throw new Error("تعذر فتح النافذة المباشرة للواتس آب");
-      }
+    if (wasPreviouslyOpened) {
+      // Do not make the manual workshop button dead just because the same state was opened before.
+      console.info(`[WhatsApp Workflow] Re-opening previously prepared notification ${dedupStateKey}.`);
+    }
+
+    if (autoOpenWindow && !openWhatsAppMessage(phone, sanitizedMessage)) {
+      throw new Error("تعذر فتح الواتس آب على هذا الجهاز");
     }
 
     markNotificationAsSent(dedupStateKey);
-
-    const log = addWhatsAppLog({
-      orderId,
-      customer: name,
-      phone,
-      template,
-      status: "SENT"
-    });
-
+    const log = addWhatsAppLog({ orderId, customer: name, phone, template, status: "SENT" });
     return {
       success: true,
-      message: "تم تجهيز وإرسال رسالة الواتس آب بنجاح",
+      isDuplicate: wasPreviouslyOpened || undefined,
+      message: "تم فتح رسالة الواتس آب وتجهيزها للإرسال",
       log
     };
   } catch (err: any) {
-    const errorMsg = err?.message || "فشل إرسال رسالة الواتس آب";
-    const log = addWhatsAppLog({
-      orderId,
-      customer: name,
-      phone,
-      template,
-      status: "FAILED",
-      error: errorMsg
-    });
-
-    return {
-      success: false,
-      message: "تم حفظ العملية ولكن تعذر إرسال رسالة واتساب.",
-      log
-    };
+    const errorMsg = err?.message || "فشل فتح رسالة الواتس آب";
+    const log = addWhatsAppLog({ orderId, customer: name, phone, template, status: "FAILED", error: errorMsg });
+    return { success: false, message: "تم حفظ العملية ولكن تعذر فتح رسالة واتساب.", log };
   }
 }
