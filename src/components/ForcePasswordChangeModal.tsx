@@ -4,8 +4,8 @@
  */
 
 import React, { useState } from "react";
-import { KeyRound, Lock, Eye, EyeOff, AlertCircle, CheckCircle2 } from "lucide-react";
-import { authStore } from "../lib/authStore";
+import { KeyRound, Eye, EyeOff, AlertCircle, CheckCircle2 } from "lucide-react";
+import { authSupabase as supabase } from "../lib/authSupabaseClient";
 
 interface ForcePasswordChangeModalProps {
   userId: string;
@@ -21,7 +21,7 @@ export default function ForcePasswordChangeModal({ userId, onSuccess }: ForcePas
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
 
@@ -40,18 +40,70 @@ export default function ForcePasswordChangeModal({ userId, onSuccess }: ForcePas
       return;
     }
 
+    if (oldPassword === newPassword) {
+      setErrorMsg("كلمة المرور الجديدة يجب أن تكون مختلفة عن كلمة المرور الحالية.");
+      return;
+    }
+
     setIsLoading(true);
 
-    setTimeout(() => {
-      const res = authStore.changePassword(userId, oldPassword, newPassword);
-      setIsLoading(false);
+    try {
+      const { data: userData, error: userError } = await supabase.auth.getUser();
+      const currentUser = userData.user;
 
-      if (res.success) {
-        onSuccess();
-      } else {
-        setErrorMsg(res.error || "فشل تغيير كلمة المرور. يرجى التأكد من كلمة المرور مؤقتة.");
+      if (userError || !currentUser || !currentUser.email) {
+        setErrorMsg("انتهت جلسة تسجيل الدخول. سجل الدخول مرة أخرى ثم أعد المحاولة.");
+        return;
       }
-    }, 400);
+
+      if (currentUser.id !== userId) {
+        setErrorMsg("تعذر التحقق من المستخدم الحالي. سجل الدخول مرة أخرى.");
+        return;
+      }
+
+      // Re-authenticate the currently signed-in user with the temporary/current
+      // password before allowing a password change.
+      const { error: reauthError } = await supabase.auth.signInWithPassword({
+        email: currentUser.email,
+        password: oldPassword
+      });
+
+      if (reauthError) {
+        setErrorMsg("كلمة المرور المؤقتة الحالية غير صحيحة.");
+        return;
+      }
+
+      // Changing your own password is safe from the browser because Supabase Auth
+      // only updates the currently authenticated user.
+      const { error: updateError } = await supabase.auth.updateUser({
+        password: newPassword
+      });
+
+      if (updateError) {
+        setErrorMsg(updateError.message || "تعذر تغيير كلمة المرور.");
+        return;
+      }
+
+      // Clear the forced-change flag only after Auth confirms the new password.
+      const { error: profileError } = await supabase
+        .from("profiles")
+        .update({
+          must_change_password: false,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", currentUser.id);
+
+      if (profileError) {
+        setErrorMsg("تم تغيير كلمة المرور، لكن تعذر تحديث حالة الحساب. أعد تحميل الصفحة.");
+        return;
+      }
+
+      onSuccess();
+    } catch (error) {
+      setErrorMsg(error instanceof Error ? error.message : "فشل تغيير كلمة المرور.");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -121,10 +173,10 @@ export default function ForcePasswordChangeModal({ userId, onSuccess }: ForcePas
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 px-4 rounded-xl text-xs transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-indigo-950/50"
+            className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold py-3.5 px-4 rounded-xl text-xs transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-indigo-950/50"
           >
             <CheckCircle2 className="w-4 h-4" />
-            <span>حفظ كلمة المرور الجديدة ومتابعة</span>
+            <span>{isLoading ? "جاري تغيير كلمة المرور..." : "حفظ كلمة المرور الجديدة ومتابعة"}</span>
           </button>
         </form>
       </div>
