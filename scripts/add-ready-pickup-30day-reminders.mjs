@@ -11,9 +11,10 @@ function replaceOnce(src, from, to, label) {
   const path = 'src/lib/whatsapp.ts';
   let src = fs.readFileSync(path, 'utf8');
   if (!src.includes('READY_PICKUP_30_DAY_POLICY')) {
-    const old = `      messageText = \`🎉 مرحبًا \${name}\\n\\nطلب الصيانة رقم [\${orderId}] أصبح جاهزاً للتسليم الآن!\\n\\n\${devicesHeader}\\n\\n🛠️ ما تم إصلاحه:\\n\${repaired}\\n\\n💰 السعر النهائي: \${finalPrice} ج.م\\n💳 المدفوع: \${paid} ج.م\\n💵 المتبقي للتحصيل: \${remaining} ج.م\\n\\n🔗 متابعة حالة الصيانة:\\n\${trackingUrl}\\n\\nشكراً لثقتك بنا ❤️\`;`;
-    const replacement = `      // READY_PICKUP_30_DAY_POLICY\n      messageText = \`🎉 مرحبًا \${name}\\n\\nطلب الصيانة رقم [\${orderId}] أصبح جاهزاً للتسليم الآن!\\n\\n\${devicesHeader}\\n\\n🛠️ ما تم إصلاحه:\\n\${repaired}\\n\\n💰 السعر النهائي: \${finalPrice} ج.م\\n💳 المدفوع: \${paid} ج.م\\n💵 المتبقي للتحصيل: \${remaining} ج.م\\n\\n⚠️ *تنبيه مهم بخصوص الاستلام*\\nيرجى استلام الجهاز خلال 30 يومًا من تاريخ الجاهزية. بعد انتهاء هذه المدة لا يتحمل المحل مسؤولية التلف أو الفقد الناتج عن تأخر الاستلام، وذلك وفق سياسة المحل وشروط الاستلام.\\n\\n🔗 متابعة حالة الصيانة:\\n\${trackingUrl}\\n\\nشكراً لثقتك بنا ❤️\`;`;
-    src = replaceOnce(src, old, replacement, 'ready WhatsApp policy');
+    const anchor = `💵 المتبقي للتحصيل: \${remaining} ج.م\\n\\n🔗 متابعة حالة الصيانة:`;
+    const replacement = `💵 المتبقي للتحصيل: \${remaining} ج.م\\n\\n⚠️ *تنبيه مهم بخصوص الاستلام*\\nيرجى استلام الجهاز خلال 30 يومًا من تاريخ الجاهزية. بعد انتهاء هذه المدة لا يتحمل المحل مسؤولية التلف أو الفقد الناتج عن تأخر الاستلام، وذلك وفق سياسة المحل وشروط الاستلام.\\n\\n🔗 متابعة حالة الصيانة:`;
+    src = replaceOnce(src, anchor, replacement, 'ready WhatsApp policy');
+    src = src.replace('    case "READY_FOR_PICKUP": {', '    case "READY_FOR_PICKUP": {\n      // READY_PICKUP_30_DAY_POLICY');
   }
   fs.writeFileSync(path, src);
 }
