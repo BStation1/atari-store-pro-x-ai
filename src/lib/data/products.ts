@@ -10,16 +10,19 @@ import {
   updateProductInSupabase,
   deleteProductFromSupabase,
   getLocalProductsBackup,
+  setLocalProductsBackup,
   runProductsTestSuite,
   withdrawProductForPartner,
   returnProductFromPartner,
   getInventoryMovements
 } from '../supabaseProducts';
+import { supabase } from '../supabaseClient';
 import { db } from '../db';
 import { IDataProvider } from './types';
 import { syncQueue } from '../sync/syncQueue';
 
 const PRODUCTS_REMOTE_TTL_MS = 5 * 60 * 1000;
+const AUTH_READY_TIMEOUT_MS = 5000;
 let productsFetchInFlight: Promise<any> | null = null;
 let productsLastRemoteFetchAt = 0;
 
@@ -33,14 +36,29 @@ function localProductsResult(products: Product[]) {
   };
 }
 
+async function waitForAuthenticatedSession() {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < AUTH_READY_TIMEOUT_MS) {
+    const { data, error } = await supabase.auth.getSession();
+    if (!error && data.session?.user) return data.session;
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+
+  const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+  if (!refreshError && refreshed.session?.user) return refreshed.session;
+
+  throw new Error('جلسة Supabase لم تجهز بعد. أعد تسجيل الدخول أو حدّث الصفحة.');
+}
+
 /**
  * Runtime product loader optimized for Egress.
  *
- * IMPORTANT: the legacy fetchOrMigrateProducts implementation also scanned
- * inventory_movements once per product to verify opening balances. That is an
- * N+1 database pattern and must not run during ordinary page reads.
- * Runtime refresh now uses one products query only; data migrations belong in
- * an explicit maintenance/migration action, not in the normal UI read path.
+ * IMPORTANT: inventory reads must never race Supabase Auth restoration. If the
+ * first products request goes out as anon while RLS is enabled, PostgREST can
+ * legitimately return an empty array even though the table contains rows.
+ * We therefore wait for an authenticated session before the authoritative read,
+ * and retry once after refreshing the token if an unexpected empty result arrives.
  *
  * - Dashboard reads local cache only.
  * - Other screens dedupe concurrent requests and reuse a recent snapshot for 5 minutes.
@@ -62,11 +80,30 @@ export async function fetchOrMigrateProducts() {
     return productsFetchInFlight;
   }
 
-  productsFetchInFlight = getProductsFromSupabase()
-    .then(products => {
-      productsLastRemoteFetchAt = Date.now();
-      return localProductsResult(products);
-    })
+  productsFetchInFlight = (async () => {
+    await waitForAuthenticatedSession();
+
+    const snapshotBeforeRead = getLocalProductsBackup();
+    let products = await getProductsFromSupabase();
+
+    // A populated production inventory must not be silently treated as empty due
+    // to an auth/RLS timing race. Refresh the JWT once and retry the same read.
+    if (products.length === 0) {
+      const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+      if (!refreshError && refreshed.session?.user) {
+        products = await getProductsFromSupabase();
+      }
+    }
+
+    if (products.length === 0 && snapshotBeforeRead.length > 0) {
+      console.warn('[DataLayer] Remote products returned empty; preserving last non-empty local snapshot.');
+      setLocalProductsBackup(snapshotBeforeRead, false);
+      products = snapshotBeforeRead;
+    }
+
+    productsLastRemoteFetchAt = Date.now();
+    return localProductsResult(products);
+  })()
     .catch(err => {
       console.warn('[DataLayer] Product refresh failed; using local snapshot:', err);
       return localProductsResult(getLocalProductsBackup());
