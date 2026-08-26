@@ -19,10 +19,10 @@ if (fnStart === -1 || fnEnd === -1) {
 const replacementFn = `export function isProductCompatibleWithDevice(product: Product, deviceType?: string, deviceModel?: string): boolean {
   if (!product) return false;
 
-  const compTypes = (product.compatibleDeviceTypes || []).map(v => String(v).trim().toLowerCase()).filter(Boolean);
-  const compModels = (product.compatibleModels || []).map(v => String(v).trim().toLowerCase()).filter(Boolean);
+  const normalize = (value: unknown) => String(value ?? '').trim().toLowerCase();
+  const compTypes = (product.compatibleDeviceTypes || []).map(normalize).filter(Boolean);
+  const compModels = (product.compatibleModels || []).map(normalize).filter(Boolean);
 
-  // Untagged stock must never appear as compatible with every repair device.
   if (compTypes.length === 0 && compModels.length === 0) return false;
 
   const rawType = String(deviceType || '').trim();
@@ -31,18 +31,19 @@ const replacementFn = `export function isProductCompatibleWithDevice(product: Pr
   const deviceModels = getDeviceModelsSync();
 
   const resolvedType = deviceTypes.find(t =>
-    String(t.id) === rawType || t.nameAr === rawType || t.nameEn === rawType
+    normalize(t.id) === normalize(rawType) || normalize(t.nameAr) === normalize(rawType) || normalize(t.nameEn) === normalize(rawType)
   );
   const resolvedModel = deviceModels.find(m =>
-    String(m.id) === rawModel || m.nameAr === rawModel || m.nameEn === rawModel || m.modelCode === rawModel
+    normalize(m.id) === normalize(rawModel) || normalize(m.nameAr) === normalize(rawModel) || normalize(m.nameEn) === normalize(rawModel) || normalize(m.modelCode) === normalize(rawModel)
   );
 
   const typeCandidates = [
     rawType,
     resolvedType?.id || '',
     resolvedType?.nameAr || '',
-    resolvedType?.nameEn || ''
-  ].map(v => String(v).trim().toLowerCase()).filter(Boolean);
+    resolvedType?.nameEn || '',
+    resolvedModel?.deviceTypeId || ''
+  ].map(normalize).filter(Boolean);
 
   const modelCandidates = [
     rawModel,
@@ -50,7 +51,7 @@ const replacementFn = `export function isProductCompatibleWithDevice(product: Pr
     resolvedModel?.nameAr || '',
     resolvedModel?.nameEn || '',
     resolvedModel?.modelCode || ''
-  ].map(v => String(v).trim().toLowerCase()).filter(Boolean);
+  ].map(normalize).filter(Boolean);
 
   const overlaps = (saved: string, candidates: string[]) =>
     candidates.some(candidate => saved === candidate || saved.includes(candidate) || candidate.includes(saved));
@@ -58,17 +59,22 @@ const replacementFn = `export function isProductCompatibleWithDevice(product: Pr
   const typeMatch = compTypes.some(saved => overlaps(saved, typeCandidates));
   const modelMatch = compModels.some(saved => overlaps(saved, modelCandidates));
 
-  // Model-specific compatibility is stricter than device-type compatibility.
-  if (compModels.length > 0) return modelMatch;
-  return typeMatch;
+  // A product selected for either the device family OR its exact model is a valid quick-add item.
+  // This also supports old products that only stored a model and newer products that store both.
+  return typeMatch || modelMatch;
 }`;
 
 source = source.slice(0, fnStart) + replacementFn + source.slice(fnEnd);
 
-// Workshop quick-add/search must never fall back to all inventory.
+// Search behavior: without a query show only compatible quick-add parts; once the user types,
+// search the entire active inventory (name/SKU/barcode/category), not only compatible products.
 source = source.replace(
-  '                const baseListToSearch = (compatibleInventory.length > 0 ? compatibleInventory : availableInventory);',
-  '                const baseListToSearch = compatibleInventory;'
+  '                const baseListToSearch = compatibleInventory;',
+  '                const baseListToSearch = query ? availableInventory : compatibleInventory;'
+);
+source = source.replace(
+  '                              <span>{partSearch.trim() ? `نتائج البحث (${matchedSearchResults.length}):` : `القطع المتوافقة القابلة للإضافة السريعة:`}</span>',
+  '                              <span>{partSearch.trim() ? `نتائج البحث في كل المخزون (${matchedSearchResults.length}):` : `القطع المتوافقة القابلة للإضافة السريعة:`}</span>'
 );
 
 // Multi-device repair orders: keep an independent active device inside the workshop.
@@ -102,4 +108,4 @@ if (source.includes(workshopReturnNeedle) && !source.includes('اختيار ال
 }
 
 fs.writeFileSync(filePath, source, 'utf8');
-console.log('Repair workshop patched: compatibility fixed and multi-device orders can switch between every received device.');
+console.log('Repair workshop patched: compatible quick-add fixed, search covers all active inventory, and multi-device orders remain supported.');
