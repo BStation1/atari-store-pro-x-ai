@@ -1,0 +1,1 @@
+Customer debt helper must remain a function declaration because totalBalance is evaluated earlier in CustomersList component execution. Using const/let here causes a runtime temporal-dead-zone ReferenceError after minification.
